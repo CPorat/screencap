@@ -1,0 +1,41 @@
+# Screencap Configuration Example
+# Copy this file to ~/.screencap/config.toml
+
+[capture]
+idle_interval_secs = 300              # 5 min fallback when idle
+event_settle_ms = 500                 # wait after event before capture
+jpeg_quality = 75
+excluded_apps = ["1Password", "Keychain Access"]
+excluded_window_titles = ["Private Browsing", "Incognito"]
+
+[extraction]
+enabled = true
+interval_secs = 600                   # 10 min between extraction runs
+provider = "openrouter"               # "openrouter", "openai", "anthropic", "google", "lmstudio", "ollama"
+model = "google/gemini-2.0-flash"     # fast + cheap vision model
+api_key_env = "OPENROUTER_API_KEY"
+base_url = ""                         # auto-set per provider; override for custom endpoints
+max_images_per_batch = 8
+
+[synthesis]
+enabled = true
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4-20250514"  # smarter model for reasoning
+api_key_env = "OPENROUTER_API_KEY"
+base_url = ""
+rolling_interval_secs = 1800          # 30 min
+hourly_enabled = true
+daily_summary_time = "18:00"          # when to generate daily summary
+daily_export_markdown = true          # write daily summary to markdown file
+daily_export_path = "~/.screencap/daily/"
+
+[storage]
+path = "~/.screencap"
+max_age_days = 90                     # auto-prune captures older than this
+
+[server]
+port = 7878
+
+[export]
+obsidian_vault = ""                   # path to Obsidian vault for auto-sync
+markdown_template = "default"         # or path to custom template

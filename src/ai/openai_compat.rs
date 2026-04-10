@@ -94,9 +94,14 @@ impl OpenAiCompatClient {
         let content = response
             .first_message_text()
             .ok_or(ProviderError::MissingContent)?;
+        let cost_cents = response.usage.as_ref().and_then(Usage::cost_cents);
         let usage = response.usage.map(TokenUsage::from);
 
-        Ok(LlmResponse { content, usage })
+        Ok(LlmResponse {
+            content,
+            usage,
+            cost_cents,
+        })
     }
 }
 
@@ -213,6 +218,13 @@ struct Usage {
     prompt_tokens: u64,
     completion_tokens: u64,
     total_tokens: u64,
+    cost: Option<f64>,
+}
+
+impl Usage {
+    fn cost_cents(&self) -> Option<f64> {
+        self.cost
+    }
 }
 
 impl From<Usage> for TokenUsage {
@@ -341,6 +353,41 @@ mod tests {
                 total_tokens: 10,
             })
         );
+        assert_eq!(response.cost_cents, None);
+    }
+
+    #[tokio::test]
+    async fn complete_text_preserves_openrouter_cost_metadata() {
+        let server = TestServer::spawn(
+            200,
+            r#"{"choices":[{"message":{"content":"hello from openrouter"}}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15,"cost":0.95}}"#,
+        );
+
+        let env_var = "SCREENCAP_TEST_OPENROUTER_COST_KEY";
+        let _guard = EnvGuard::set(env_var, "token");
+        let client = OpenAiCompatClient::new(LlmProviderConfig::new(
+            AiProvider::Openrouter,
+            "anthropic/claude-sonnet-4-20250514",
+            env_var,
+            server.base_url(),
+        ))
+        .expect("create client");
+
+        let response = client
+            .complete_text("Summarize this")
+            .await
+            .expect("complete");
+
+        assert_eq!(response.content, "hello from openrouter");
+        assert_eq!(
+            response.usage,
+            Some(TokenUsage {
+                prompt_tokens: 11,
+                completion_tokens: 4,
+                total_tokens: 15,
+            })
+        );
+        assert_eq!(response.cost_cents, Some(0.95));
     }
 
     fn test_client() -> OpenAiCompatClient {

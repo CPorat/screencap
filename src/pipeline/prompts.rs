@@ -45,3 +45,30 @@ Return JSON in this exact format:
 Use the exact window_start and window_end values provided in the request metadata below.
 Base the summary only on the extraction batches and frame details from that window.
 Return JSON only; do not wrap it in markdown or add commentary."#;
+
+pub const HOURLY_DIGEST_PROMPT_TEMPLATE: &str = r#"You are synthesizing an hourly digest from structured screenshot extraction batches.
+Your job is to summarize the last completed hour as a durable record for later daily summaries.
+
+Return JSON in this exact format:
+{
+  "type": "hourly",
+  "hour_start": "2026-04-10T14:00:00Z",
+  "hour_end": "2026-04-10T15:00:00Z",
+  "dominant_activity": "coding",
+  "projects": [
+    {"name": "screencap", "minutes": 42, "activities": ["debugging auth", "writing tests"]},
+    {"name": null, "minutes": 18, "activities": ["Slack conversations", "email triage"]}
+  ],
+  "topics": ["JWT", "authentication", "Rust FFI", "team standup"],
+  "people_interacted": ["@alice", "@bob"],
+  "key_moments": [
+    "Found the JWT refresh bug — was using wrong expiry field",
+    "Discussed deployment timeline with Alice in Slack"
+  ],
+  "focus_score": 0.72,
+  "narrative": "Productive coding hour. First 40 minutes deep in the auth module fixing a JWT refresh token bug. Found the issue and wrote a fix plus tests. Last 20 minutes was communication."
+}
+
+Use the exact hour_start and hour_end values provided in the request metadata below.
+Base the digest only on the extraction batches and frame details from that window.
+Return JSON only; do not wrap it in markdown or add commentary."#;

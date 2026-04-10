@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{ensure, Context, Result};
-use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch,
-    time::{self, MissedTickBehavior},
+    time::{self, Instant, MissedTickBehavior},
 };
 use tracing::{error, info};
 
@@ -14,13 +14,21 @@ use crate::{
     config::AppConfig,
     storage::{
         db::StorageDb,
-        models::{ExtractionBatchDetail, Insight, InsightData, InsightType, NewInsight},
+        models::{
+            ExtractionBatchDetail, HourlyProjectSummary, Insight, InsightData, InsightType,
+            NewInsight,
+        },
     },
 };
 
-use super::{json::extract_json_payload, prompts::ROLLING_CONTEXT_PROMPT_TEMPLATE};
+use super::{
+    json::extract_json_payload,
+    prompts::{HOURLY_DIGEST_PROMPT_TEMPLATE, ROLLING_CONTEXT_PROMPT_TEMPLATE},
+};
 
 const ROLLING_CONTEXT_WINDOW_MINUTES: i64 = 30;
+const HOURLY_DIGEST_WINDOW_HOURS: i64 = 1;
+const HOURLY_DIGEST_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 pub struct RollingContextScheduler {
     config: AppConfig,
@@ -30,8 +38,7 @@ pub struct RollingContextScheduler {
 
 impl RollingContextScheduler {
     pub fn open(config: AppConfig, home: impl AsRef<Path>) -> Result<Self> {
-        let provider_config = LlmProviderConfig::from(&config.synthesis);
-        let provider: Arc<dyn LlmProvider> = create_provider(&provider_config)?.into();
+        let provider = open_synthesis_provider(&config)?;
         Self::with_provider(config, home, provider)
     }
 
@@ -46,10 +53,7 @@ impl RollingContextScheduler {
             "synthesis rolling_interval_secs must be greater than 0"
         );
 
-        let db_path = config.storage_root(home.as_ref()).join("screencap.db");
-        let db = StorageDb::open_at_path(&db_path).with_context(|| {
-            format!("failed to open synthesis database at {}", db_path.display())
-        })?;
+        let db = open_synthesis_db(&config, home.as_ref())?;
 
         Ok(Self {
             config,
@@ -113,37 +117,120 @@ impl RollingContextScheduler {
             .await
             .context("rolling context request failed")?;
         let data = parse_rolling_context_response(&response.content)?;
-        validate_requested_window(&data, window_start, window_end)?;
-        let insight = self.build_new_insight(window_start, window_end, data, &response)?;
+        validate_rolling_context_window(&data, window_start, window_end)?;
+        let insight = build_new_synthesis_insight(
+            &self.config,
+            InsightType::Rolling,
+            window_start,
+            window_end,
+            data,
+            &response,
+        )?;
         let persisted = self.db.insert_insight(&insight)?;
 
         Ok(Some(persisted))
     }
+}
 
-    fn build_new_insight(
-        &self,
-        window_start: DateTime<Utc>,
-        window_end: DateTime<Utc>,
-        data: InsightData,
-        response: &LlmResponse,
-    ) -> Result<NewInsight> {
-        let tokens_used = response
-            .usage
-            .map(|usage| {
-                i64::try_from(usage.total_tokens)
-                    .context("synthesis token usage exceeds sqlite integer range")
-            })
-            .transpose()?;
+pub struct HourlyDigestScheduler {
+    config: AppConfig,
+    db: StorageDb,
+    provider: Arc<dyn LlmProvider>,
+}
 
-        Ok(NewInsight {
-            insight_type: InsightType::Rolling,
-            window_start,
-            window_end,
-            data,
-            model_used: Some(self.config.synthesis.model.clone()),
-            tokens_used,
-            cost_cents: None,
+impl HourlyDigestScheduler {
+    pub fn open(config: AppConfig, home: impl AsRef<Path>) -> Result<Self> {
+        let provider = open_synthesis_provider(&config)?;
+        Self::with_provider(config, home, provider)
+    }
+
+    pub fn with_provider(
+        config: AppConfig,
+        home: impl AsRef<Path>,
+        provider: Arc<dyn LlmProvider>,
+    ) -> Result<Self> {
+        ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
+        ensure!(
+            config.synthesis.hourly_enabled,
+            "hourly digests are disabled"
+        );
+
+        let db = open_synthesis_db(&config, home.as_ref())?;
+
+        Ok(Self {
+            config,
+            db,
+            provider,
         })
+    }
+
+    pub async fn run_until_shutdown(&mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let first_tick = next_hour_boundary(Utc::now());
+        let mut interval = time::interval_at(interval_start(first_tick), HOURLY_DIGEST_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    match self.run_once().await {
+                        Ok(Some(insight)) => {
+                            info!(
+                                insight_id = insight.id,
+                                hour_start = %insight.window_start,
+                                hour_end = %insight.window_end,
+                                "hourly digest updated"
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            error!(error = %error, "hourly digest synthesis failed");
+                        }
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn run_once(&mut self) -> Result<Option<Insight>> {
+        self.run_once_at(truncate_to_hour(Utc::now())).await
+    }
+
+    async fn run_once_at(&mut self, hour_end: DateTime<Utc>) -> Result<Option<Insight>> {
+        let hour_end = truncate_to_hour(hour_end);
+        let hour_start = hour_end - ChronoDuration::hours(HOURLY_DIGEST_WINDOW_HOURS);
+        let batches = self
+            .db
+            .list_extraction_batch_details_in_range(hour_start, hour_end)?;
+        if batches.is_empty() {
+            return Ok(None);
+        }
+
+        let prompt = build_hourly_digest_prompt(hour_start, hour_end, &batches);
+        let response = self
+            .provider
+            .complete_text(&prompt)
+            .await
+            .context("hourly digest request failed")?;
+        let data = parse_hourly_digest_response(&response.content)?;
+        validate_hourly_digest_window(&data, hour_start, hour_end)?;
+        let insight = build_new_synthesis_insight(
+            &self.config,
+            InsightType::Hourly,
+            hour_start,
+            hour_end,
+            data,
+            &response,
+        )?;
+        let persisted = self.db.insert_insight(&insight)?;
+
+        Ok(Some(persisted))
     }
 }
 
@@ -156,6 +243,15 @@ pub async fn run_rolling_context_scheduler(
     scheduler.run_until_shutdown(shutdown).await
 }
 
+pub async fn run_hourly_digest_scheduler(
+    config: AppConfig,
+    home: impl AsRef<Path>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let mut scheduler = HourlyDigestScheduler::open(config, home)?;
+    scheduler.run_until_shutdown(shutdown).await
+}
+
 pub fn build_rolling_context_prompt(
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
@@ -164,12 +260,132 @@ pub fn build_rolling_context_prompt(
     let mut prompt =
         String::with_capacity(ROLLING_CONTEXT_PROMPT_TEMPLATE.len() + batches.len() * 1024);
     prompt.push_str(ROLLING_CONTEXT_PROMPT_TEMPLATE);
+    append_requested_window(
+        &mut prompt,
+        "window_start",
+        window_start,
+        "window_end",
+        window_end,
+    );
+    append_extraction_batches(&mut prompt, batches);
+    append_prompt_footer(&mut prompt);
+    prompt
+}
+
+pub fn build_hourly_digest_prompt(
+    hour_start: DateTime<Utc>,
+    hour_end: DateTime<Utc>,
+    batches: &[ExtractionBatchDetail],
+) -> String {
+    let mut prompt =
+        String::with_capacity(HOURLY_DIGEST_PROMPT_TEMPLATE.len() + batches.len() * 1024);
+    prompt.push_str(HOURLY_DIGEST_PROMPT_TEMPLATE);
+    append_requested_window(&mut prompt, "hour_start", hour_start, "hour_end", hour_end);
+    append_extraction_batches(&mut prompt, batches);
+    append_prompt_footer(&mut prompt);
+    prompt
+}
+
+pub fn parse_rolling_context_response(json_str: &str) -> Result<InsightData> {
+    let payload = extract_json_payload(json_str);
+    let parsed = serde_json::from_str::<RollingContextPayload>(payload)
+        .context("failed to parse rolling context response JSON")?;
+    ensure!(
+        parsed.insight_type == InsightType::Rolling,
+        "expected rolling context response, received insight type `{}`",
+        parsed.insight_type
+    );
+
+    Ok(InsightData::Rolling {
+        window_start: parsed.window_start,
+        window_end: parsed.window_end,
+        current_focus: parsed.current_focus,
+        active_project: parsed.active_project,
+        apps_used: parsed.apps_used,
+        context_switches: parsed.context_switches,
+        mood: parsed.mood,
+        summary: parsed.summary,
+    })
+}
+
+pub fn parse_hourly_digest_response(json_str: &str) -> Result<InsightData> {
+    let payload = extract_json_payload(json_str);
+    let parsed = serde_json::from_str::<HourlyDigestPayload>(payload)
+        .context("failed to parse hourly digest response JSON")?;
+    ensure!(
+        parsed.insight_type == InsightType::Hourly,
+        "expected hourly digest response, received insight type `{}`",
+        parsed.insight_type
+    );
+
+    Ok(InsightData::Hourly {
+        hour_start: parsed.hour_start,
+        hour_end: parsed.hour_end,
+        dominant_activity: parsed.dominant_activity,
+        projects: parsed.projects,
+        topics: parsed.topics,
+        people_interacted: parsed.people_interacted,
+        key_moments: parsed.key_moments,
+        focus_score: parsed.focus_score,
+        narrative: parsed.narrative,
+    })
+}
+
+fn open_synthesis_provider(config: &AppConfig) -> Result<Arc<dyn LlmProvider>> {
+    let provider_config = LlmProviderConfig::from(&config.synthesis);
+    let provider: Arc<dyn LlmProvider> = create_provider(&provider_config)?.into();
+    Ok(provider)
+}
+
+fn open_synthesis_db(config: &AppConfig, home: &Path) -> Result<StorageDb> {
+    let db_path = config.storage_root(home).join("screencap.db");
+    StorageDb::open_at_path(&db_path)
+        .with_context(|| format!("failed to open synthesis database at {}", db_path.display()))
+}
+
+fn build_new_synthesis_insight(
+    config: &AppConfig,
+    insight_type: InsightType,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    data: InsightData,
+    response: &LlmResponse,
+) -> Result<NewInsight> {
+    let tokens_used = response
+        .usage
+        .map(|usage| {
+            i64::try_from(usage.total_tokens)
+                .context("synthesis token usage exceeds sqlite integer range")
+        })
+        .transpose()?;
+
+    Ok(NewInsight {
+        insight_type,
+        window_start,
+        window_end,
+        data,
+        model_used: Some(config.synthesis.model.clone()),
+        tokens_used,
+        cost_cents: response.cost_cents,
+    })
+}
+
+fn append_requested_window(
+    prompt: &mut String,
+    start_label: &str,
+    start: DateTime<Utc>,
+    end_label: &str,
+    end: DateTime<Utc>,
+) {
     prompt.push_str("\n\nRequested window:\n");
     prompt.push_str(&format!(
-        "- window_start: {}\n- window_end: {}\n",
-        format_prompt_timestamp(window_start),
-        format_prompt_timestamp(window_end),
+        "- {start_label}: {}\n- {end_label}: {}\n",
+        format_prompt_timestamp(start),
+        format_prompt_timestamp(end),
     ));
+}
+
+fn append_extraction_batches(prompt: &mut String, batches: &[ExtractionBatchDetail]) {
     prompt.push_str("\nExtraction batches:\n");
 
     if batches.is_empty() {
@@ -242,36 +458,15 @@ pub fn build_rolling_context_prompt(
             ));
         }
     }
+}
 
+fn append_prompt_footer(prompt: &mut String) {
     prompt.push_str(
         "\nUse only the extraction data above. Return JSON only; do not wrap it in markdown or add commentary.",
     );
-    prompt
 }
 
-pub fn parse_rolling_context_response(json_str: &str) -> Result<InsightData> {
-    let payload = extract_json_payload(json_str);
-    let parsed = serde_json::from_str::<RollingContextPayload>(payload)
-        .context("failed to parse rolling context response JSON")?;
-    ensure!(
-        parsed.insight_type == InsightType::Rolling,
-        "expected rolling context response, received insight type `{}`",
-        parsed.insight_type
-    );
-
-    Ok(InsightData::Rolling {
-        window_start: parsed.window_start,
-        window_end: parsed.window_end,
-        current_focus: parsed.current_focus,
-        active_project: parsed.active_project,
-        apps_used: parsed.apps_used,
-        context_switches: parsed.context_switches,
-        mood: parsed.mood,
-        summary: parsed.summary,
-    })
-}
-
-fn validate_requested_window(
+fn validate_rolling_context_window(
     data: &InsightData,
     expected_start: DateTime<Utc>,
     expected_end: DateTime<Utc>,
@@ -285,16 +480,81 @@ fn validate_requested_window(
         unreachable!("rolling context parser only returns rolling insight data");
     };
 
+    validate_requested_window(
+        "rolling context response window",
+        *window_start,
+        *window_end,
+        expected_start,
+        expected_end,
+    )
+}
+
+fn validate_hourly_digest_window(
+    data: &InsightData,
+    expected_start: DateTime<Utc>,
+    expected_end: DateTime<Utc>,
+) -> Result<()> {
+    let InsightData::Hourly {
+        hour_start,
+        hour_end,
+        ..
+    } = data
+    else {
+        unreachable!("hourly digest parser only returns hourly insight data");
+    };
+
+    validate_requested_window(
+        "hourly digest response window",
+        *hour_start,
+        *hour_end,
+        expected_start,
+        expected_end,
+    )
+}
+
+fn validate_requested_window(
+    label: &str,
+    actual_start: DateTime<Utc>,
+    actual_end: DateTime<Utc>,
+    expected_start: DateTime<Utc>,
+    expected_end: DateTime<Utc>,
+) -> Result<()> {
     ensure!(
-        *window_start == expected_start && *window_end == expected_end,
-        "rolling context response window {}..{} did not match requested window {}..{}",
-        format_prompt_timestamp(*window_start),
-        format_prompt_timestamp(*window_end),
+        actual_start == expected_start && actual_end == expected_end,
+        "{label} {}..{} did not match requested window {}..{}",
+        format_prompt_timestamp(actual_start),
+        format_prompt_timestamp(actual_end),
         format_prompt_timestamp(expected_start),
         format_prompt_timestamp(expected_end),
     );
 
     Ok(())
+}
+
+fn truncate_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    timestamp
+        .with_minute(0)
+        .and_then(|value| value.with_second(0))
+        .and_then(|value| value.with_nanosecond(0))
+        .expect("UTC timestamps should always truncate to the hour")
+}
+
+fn next_hour_boundary(after: DateTime<Utc>) -> DateTime<Utc> {
+    let boundary = truncate_to_hour(after);
+    if after == boundary {
+        boundary
+    } else {
+        boundary + ChronoDuration::hours(1)
+    }
+}
+
+fn interval_start(target: DateTime<Utc>) -> Instant {
+    let now = Utc::now();
+    let delay = target
+        .signed_duration_since(now)
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    Instant::now() + delay
 }
 
 fn format_prompt_timestamp(timestamp: DateTime<Utc>) -> String {
@@ -318,6 +578,22 @@ struct RollingContextPayload {
     context_switches: u32,
     mood: String,
     summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HourlyDigestPayload {
+    #[serde(rename = "type")]
+    insight_type: InsightType,
+    hour_start: DateTime<Utc>,
+    hour_end: DateTime<Utc>,
+    dominant_activity: String,
+    projects: Vec<HourlyProjectSummary>,
+    topics: Vec<String>,
+    people_interacted: Vec<String>,
+    key_moments: Vec<String>,
+    focus_score: f64,
+    narrative: String,
 }
 
 #[cfg(test)]
@@ -367,6 +643,21 @@ mod tests {
     }
 
     #[test]
+    fn build_hourly_digest_prompt_includes_batches_and_frames() {
+        let hour_start = Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+        let hour_end = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
+        let prompt = build_hourly_digest_prompt(hour_start, hour_end, &[sample_batch_detail()]);
+
+        assert!(prompt.contains("You are synthesizing an hourly digest"));
+        assert!(prompt.contains("hour_start: 2026-04-10T14:00:00Z"));
+        assert!(prompt.contains("hour_end: 2026-04-10T15:00:00Z"));
+        assert!(prompt.contains("batch_id: 123e4567-e89b-12d3-a456-426614174000"));
+        assert!(prompt.contains("capture_id: 101"));
+        assert!(prompt.contains("app_name: Ghostty"));
+        assert!(prompt.contains("people: [\"@alice\"]"));
+    }
+
+    #[test]
     fn parse_rolling_context_response_accepts_fenced_json() {
         let parsed = parse_rolling_context_response(
             "```json\n{\n  \"type\": \"rolling\",\n  \"window_start\": \"2026-04-10T14:00:00Z\",\n  \"window_end\": \"2026-04-10T14:30:00Z\",\n  \"current_focus\": \"Debugging JWT token refresh in the screencap auth module\",\n  \"active_project\": \"screencap\",\n  \"apps_used\": {\"VS Code\": \"18 min\", \"Chrome\": \"8 min\"},\n  \"context_switches\": 2,\n  \"mood\": \"deep-focus\",\n  \"summary\": \"Focused coding session on auth refresh handling.\"\n}\n```",
@@ -392,6 +683,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_hourly_digest_response_accepts_fenced_json() {
+        let parsed = parse_hourly_digest_response(
+            "```json\n{\n  \"type\": \"hourly\",\n  \"hour_start\": \"2026-04-10T14:00:00Z\",\n  \"hour_end\": \"2026-04-10T15:00:00Z\",\n  \"dominant_activity\": \"coding\",\n  \"projects\": [\n    {\"name\": \"screencap\", \"minutes\": 42, \"activities\": [\"debugging auth\", \"writing tests\"]}\n  ],\n  \"topics\": [\"JWT\", \"authentication\"],\n  \"people_interacted\": [\"@alice\"],\n  \"key_moments\": [\"Found the bug\"],\n  \"focus_score\": 0.72,\n  \"narrative\": \"Productive coding hour.\"\n}\n```",
+        )
+        .expect("parse hourly digest response");
+
+        assert_eq!(
+            parsed,
+            InsightData::Hourly {
+                hour_start: Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap(),
+                hour_end: Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap(),
+                dominant_activity: "coding".into(),
+                projects: vec![HourlyProjectSummary {
+                    name: Some("screencap".into()),
+                    minutes: 42,
+                    activities: vec!["debugging auth".into(), "writing tests".into()],
+                }],
+                topics: vec!["JWT".into(), "authentication".into()],
+                people_interacted: vec!["@alice".into()],
+                key_moments: vec!["Found the bug".into()],
+                focus_score: 0.72,
+                narrative: "Productive coding hour.".into(),
+            }
+        );
+    }
+
+    #[test]
     fn parse_rolling_context_response_rejects_malformed_json() {
         let error = parse_rolling_context_response(
             "```json\n{\"type\":\"rolling\",\"window_start\":}\n```",
@@ -400,6 +718,28 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed to parse rolling context response JSON"));
+    }
+
+    #[test]
+    fn parse_hourly_digest_response_rejects_malformed_json() {
+        let error =
+            parse_hourly_digest_response("```json\n{\"type\":\"hourly\",\"hour_start\":}\n```")
+                .expect_err("malformed json should fail");
+        assert!(error
+            .to_string()
+            .contains("failed to parse hourly digest response JSON"));
+    }
+
+    #[test]
+    fn next_hour_boundary_rounds_up_unless_already_aligned() {
+        let mid_hour = Utc.with_ymd_and_hms(2026, 4, 10, 14, 23, 45).unwrap();
+        let aligned = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
+
+        assert_eq!(
+            next_hour_boundary(mid_hour),
+            Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap()
+        );
+        assert_eq!(next_hour_boundary(aligned), aligned);
     }
 
     #[tokio::test]
@@ -471,6 +811,109 @@ mod tests {
         assert!(calls[0]
             .prompt
             .contains("Investigated the JWT refresh path"));
+        assert!(calls[0].prompt.contains("capture_id: 1"));
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_skips_empty_hourly_windows() -> Result<()> {
+        let home = temp_home_root("hourly-empty");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = HourlyDigestScheduler::with_provider(config, &home, provider.clone())?;
+
+        let hour_end = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
+        let insight = scheduler.run_once_at(hour_end).await?;
+        assert!(insight.is_none());
+        assert!(provider.calls().is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_persists_hourly_digest_insight() -> Result<()> {
+        let home = temp_home_root("hourly-digest");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = HourlyDigestScheduler::with_provider(config, &home, provider.clone())?;
+        let hour_end = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
+        seed_recent_extractions(&mut scheduler.db, hour_end)?;
+
+        provider.push_response(Ok(LlmResponse::with_usage_and_cost(
+            hourly_success_response_json(hour_end - ChronoDuration::hours(1), hour_end),
+            TokenUsage {
+                prompt_tokens: 220,
+                completion_tokens: 80,
+                total_tokens: 300,
+            },
+            0.42,
+        )));
+
+        let insight = scheduler
+            .run_once_at(hour_end)
+            .await?
+            .expect("hourly digest should be created");
+
+        assert_eq!(insight.insight_type, InsightType::Hourly);
+        assert_eq!(insight.window_start, hour_end - ChronoDuration::hours(1));
+        assert_eq!(insight.window_end, hour_end);
+        assert_eq!(insight.model_used.as_deref(), Some("mock-synthesis-model"));
+        assert_eq!(insight.tokens_used, Some(300));
+        assert_eq!(insight.cost_cents, Some(0.42));
+
+        let InsightData::Hourly {
+            dominant_activity,
+            projects,
+            topics,
+            people_interacted,
+            key_moments,
+            focus_score,
+            narrative,
+            ..
+        } = &insight.data
+        else {
+            unreachable!("expected hourly insight payload");
+        };
+        assert_eq!(dominant_activity, "coding");
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name.as_deref(), Some("screencap"));
+        assert_eq!(projects[0].minutes, 42);
+        assert_eq!(projects[1].name, None);
+        assert_eq!(
+            topics,
+            &vec![
+                "JWT".to_owned(),
+                "authentication".to_owned(),
+                "testing".to_owned()
+            ]
+        );
+        assert_eq!(people_interacted, &vec!["@alice".to_owned()]);
+        assert_eq!(key_moments.len(), 2);
+        assert_eq!(*focus_score, 0.72);
+        assert!(narrative.contains("Productive coding hour"));
+
+        let insight_count: i64 = scheduler.db.connection().query_row(
+            "SELECT COUNT(*) FROM insights WHERE type = 'hourly'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(insight_count, 1);
+
+        let fts_narrative: String = scheduler.db.connection().query_row(
+            "SELECT narrative FROM insights_fts WHERE insight_id = ?1",
+            [insight.id],
+            |row| row.get(0),
+        )?;
+        assert!(fts_narrative.contains("Productive coding hour"));
+
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].kind, MockCallKind::Text);
+        assert!(calls[0].images.is_empty());
+        assert!(calls[0].prompt.contains("hour_start: 2026-04-10T14:00:00Z"));
         assert!(calls[0].prompt.contains("capture_id: 1"));
 
         fs::remove_dir_all(&home)?;
@@ -652,11 +1095,39 @@ mod tests {
         )
     }
 
+    fn hourly_success_response_json(hour_start: DateTime<Utc>, hour_end: DateTime<Utc>) -> String {
+        format!(
+            concat!(
+                "{{",
+                "\"type\":\"hourly\",",
+                "\"hour_start\":\"{}\",",
+                "\"hour_end\":\"{}\",",
+                "\"dominant_activity\":\"coding\",",
+                "\"projects\":[",
+                "{{\"name\":\"screencap\",\"minutes\":42,\"activities\":[\"debugging auth\",\"writing tests\"]}},",
+                "{{\"name\":null,\"minutes\":18,\"activities\":[\"Slack conversations\"]}}",
+                "],",
+                "\"topics\":[\"JWT\",\"authentication\",\"testing\"],",
+                "\"people_interacted\":[\"@alice\"],",
+                "\"key_moments\":[",
+                "\"Found the JWT refresh bug and validated the fix\",",
+                "\"Shared the outcome with Alice in Slack\"",
+                "],",
+                "\"focus_score\":0.72,",
+                "\"narrative\":\"Productive coding hour. The user traced the JWT refresh path, checked documentation, ran targeted tests, and shared the result in Slack.\"",
+                "}}"
+            ),
+            format_prompt_timestamp(hour_start),
+            format_prompt_timestamp(hour_end),
+        )
+    }
+
     fn test_config(home: &Path) -> AppConfig {
         let mut config = AppConfig::default();
         config.storage.path = home.to_string_lossy().into_owned();
         config.synthesis.model = "mock-synthesis-model".into();
         config.synthesis.rolling_interval_secs = 60;
+        config.synthesis.hourly_enabled = true;
         config
     }
 

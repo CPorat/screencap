@@ -48,6 +48,7 @@ struct BatchRecordFields<'a> {
     narrative: Option<&'a str>,
     raw_response: Option<&'a str>,
     usage: Option<TokenUsage>,
+    cost_cents: Option<f64>,
 }
 
 pub struct ExtractionScheduler {
@@ -221,6 +222,7 @@ impl ExtractionScheduler {
                 narrative: Some(&parsed.batch_summary.narrative),
                 raw_response: Some(response.content.as_str()),
                 usage: response.usage,
+                cost_cents: response.cost_cents,
             },
         )
     }
@@ -240,6 +242,7 @@ impl ExtractionScheduler {
                 narrative: None,
                 raw_response: Some(response.content.as_str()),
                 usage: response.usage,
+                cost_cents: response.cost_cents,
             },
         )
     }
@@ -279,7 +282,7 @@ fn build_batch_record(
         raw_response: fields.raw_response.map(ToOwned::to_owned),
         model_used: Some(config.extraction.model.clone()),
         tokens_used,
-        cost_cents: None,
+        cost_cents: fields.cost_cents,
     })
 }
 
@@ -401,7 +404,7 @@ mod tests {
         let provider = Arc::new(MockLlmProvider::new());
         let mut scheduler = create_scheduler(config, &home, provider.clone())?;
         let captures = seed_captures(&mut scheduler, 5)?;
-        provider.push_response(Ok(LlmResponse::with_usage(
+        provider.push_response(Ok(LlmResponse::with_usage_and_cost(
             success_response_json(
                 &captures,
                 "JWT batch summary",
@@ -413,6 +416,7 @@ mod tests {
                 completion_tokens: 80,
                 total_tokens: 200,
             },
+            0.45,
         )));
 
         let report = scheduler.run_once().await?;
@@ -467,7 +471,7 @@ mod tests {
         assert_eq!(batch_row.0, 5);
         assert_eq!(
             batch_row.1.as_deref(),
-            Some("Focused on the extraction scheduler and JWT indexing.")
+            Some("Focused on the extraction scheduler and JWT indexing."),
         );
         assert!(batch_row
             .2
@@ -475,7 +479,7 @@ mod tests {
             .is_some_and(|value| value.contains("capture_id")));
         assert_eq!(batch_row.3.as_deref(), Some("mock-vision-model"));
         assert_eq!(batch_row.4, Some(200));
-        assert_eq!(batch_row.5, None);
+        assert_eq!(batch_row.5, Some(0.45));
 
         let hits = scheduler.db.search_extractions("jwt scheduler")?;
         assert_eq!(hits.len(), 5);

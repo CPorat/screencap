@@ -39,10 +39,11 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LlmResponse {
     pub content: String,
     pub usage: Option<TokenUsage>,
+    pub cost_cents: Option<f64>,
 }
 
 impl LlmResponse {
@@ -50,6 +51,7 @@ impl LlmResponse {
         Self {
             content: content.into(),
             usage: None,
+            cost_cents: None,
         }
     }
 
@@ -57,6 +59,19 @@ impl LlmResponse {
         Self {
             content: content.into(),
             usage: Some(usage),
+            cost_cents: None,
+        }
+    }
+
+    pub fn with_usage_and_cost(
+        content: impl Into<String>,
+        usage: TokenUsage,
+        cost_cents: f64,
+    ) -> Self {
+        Self {
+            content: content.into(),
+            usage: Some(usage),
+            cost_cents: Some(cost_cents),
         }
     }
 }

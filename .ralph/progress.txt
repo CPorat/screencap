@@ -14,6 +14,7 @@ Branch: ralph/v1-implementation
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
+- When OpenAI-compatible providers expose usage cost metadata (such as OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that do not report cost should stay `None` rather than fabricating values.
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
 - When synthesis needs both extraction batch summaries and frame-level evidence, add a typed storage helper that groups `extraction_batches` with joined `captures`/`extractions`; keep multi-table SQL in `StorageDb` so prompt builders stay focused on prompt shape.
@@ -132,4 +133,13 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Rolling synthesis should read typed batch/frame detail structs from storage rather than re-implementing multi-table joins in pipeline code.
   - Shared markdown-fence stripping belongs in one pipeline helper so every LLM JSON parser stays consistent as more synthesis stages land.
+---
+
+## 2026-04-10 22:58:53 UTC - US-011
+- Implemented hourly digest synthesis in `src/pipeline/synthesis.rs`: added the hourly prompt builder, fenced-JSON parser, hour-window validation, a top-of-hour scheduler, and integration coverage for persisted hourly insights plus empty-hour skipping.
+- Extended OpenAI-compatible provider responses to carry optional `cost_cents` metadata, persisted that cost through extraction batches and synthesis insights, and covered the OpenRouter-style `usage.cost` path in tests.
+- Files changed: AGENTS.md, src/ai/openai_compat.rs, src/ai/provider.rs, src/pipeline/prompts.rs, src/pipeline/scheduler.rs, src/pipeline/synthesis.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Hourly synthesis should align to completed wall-clock hour boundaries and skip empty windows so downstream daily summaries consume durable, non-empty hourly records.
+  - When providers expose cost metadata alongside usage, thread it through the shared response type once and let extraction and synthesis persistence reuse that field instead of re-deriving costs independently.
 ---

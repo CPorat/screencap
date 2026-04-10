@@ -12,8 +12,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
@@ -22,13 +22,17 @@ use crate::{
         db::StorageDb,
         metrics,
         models::{
-            AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionStatus,
+            AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionSearchHit,
+            ExtractionSearchQuery, ExtractionStatus, Insight, InsightType, ProjectTimeAllocation,
+            TopicFrequency,
         },
     },
 };
 
 const DEFAULT_CAPTURE_LIMIT: usize = 100;
 const MAX_CAPTURE_LIMIT: usize = 500;
+const DEFAULT_SEARCH_LIMIT: usize = 50;
+const MAX_SEARCH_LIMIT: usize = 200;
 
 #[derive(Clone)]
 struct ApiState {
@@ -105,6 +109,35 @@ struct AppsResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct InsightListResponse {
+    insights: Vec<Insight>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectTimeAllocationResponse {
+    projects: Vec<ProjectTimeAllocation>,
+}
+
+#[derive(Debug, Serialize)]
+struct TopicFrequencyResponse {
+    topics: Vec<TopicFrequency>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiSearchHit {
+    capture: ApiCapture,
+    extraction: Extraction,
+    batch_narrative: Option<String>,
+    rank: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResponse {
+    results: Vec<ApiSearchHit>,
+    limit: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
 }
@@ -116,6 +149,34 @@ struct CaptureListParams {
     app: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DateParams {
+    date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DateRangeParams {
+    date: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TimeRangeParams {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SearchParams {
+    q: Option<String>,
+    app: Option<String>,
+    project: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -170,6 +231,12 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/captures/{id}", get(get_capture))
         .route("/api/screenshots/{*path}", get(get_screenshot))
         .route("/api/apps", get(list_apps))
+        .route("/api/insights/current", get(get_current_insight))
+        .route("/api/insights/hourly", get(list_hourly_insights))
+        .route("/api/insights/daily", get(get_daily_insights))
+        .route("/api/insights/projects", get(list_project_time_allocations))
+        .route("/api/insights/topics", get(list_topic_frequencies))
+        .route("/api/search", get(search_extractions))
         .with_state(state)
 }
 
@@ -297,11 +364,207 @@ async fn list_apps(State(state): State<ApiState>) -> Result<Json<AppsResponse>, 
     Ok(Json(AppsResponse { apps }))
 }
 
+async fn get_current_insight(State(state): State<ApiState>) -> Result<Json<Insight>, ApiError> {
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Err(ApiError::not_found("no rolling insight is available"));
+    };
+    let insight = db
+        .get_latest_insight_by_type(InsightType::Rolling)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("no rolling insight is available"))?;
+
+    Ok(Json(insight))
+}
+
+async fn list_hourly_insights(
+    State(state): State<ApiState>,
+    raw_query: RawQuery,
+) -> Result<Json<InsightListResponse>, ApiError> {
+    let params: DateParams = parse_query_params(
+        raw_query.0.as_deref(),
+        "invalid hourly insight query parameters",
+    )?;
+    let date = parse_required_date("date", params.date.as_deref())?;
+    let window_start = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight should be representable")
+        .and_utc();
+    let window_end = date
+        .succ_opt()
+        .expect("successor date should be representable")
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight should be representable")
+        .and_utc();
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Ok(Json(InsightListResponse {
+            insights: Vec::new(),
+        }));
+    };
+    let insights = db
+        .list_hourly_insights_in_range(window_start, window_end)
+        .map_err(ApiError::internal)?;
+
+    Ok(Json(InsightListResponse { insights }))
+}
+
+async fn get_daily_insights(
+    State(state): State<ApiState>,
+    raw_query: RawQuery,
+) -> Result<Response, ApiError> {
+    let params: DateRangeParams = parse_query_params(
+        raw_query.0.as_deref(),
+        "invalid daily insight query parameters",
+    )?;
+    let date = parse_optional_date("date", params.date.as_deref())?;
+    let from = parse_optional_date("from", params.from.as_deref())?;
+    let to = parse_optional_date("to", params.to.as_deref())?;
+
+    match (date, from, to) {
+        (Some(date), None, None) => {
+            let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+                return Err(ApiError::not_found(format!(
+                    "no daily insight exists for {date}"
+                )));
+            };
+            let insight = db
+                .get_latest_daily_insight_for_date(date)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| {
+                    ApiError::not_found(format!("no daily insight exists for {date}"))
+                })?;
+
+            Ok(Json(insight).into_response())
+        }
+        (None, Some(from), Some(to)) => {
+            if from > to {
+                return Err(ApiError::bad_request(
+                    "`from` must be less than or equal to `to`",
+                ));
+            }
+
+            let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+                return Ok(Json(InsightListResponse {
+                    insights: Vec::new(),
+                })
+                .into_response());
+            };
+            let insights = db
+                .list_daily_insights_in_date_range(from, to)
+                .map_err(ApiError::internal)?;
+
+            Ok(Json(InsightListResponse { insights }).into_response())
+        }
+        (None, None, None) => Err(ApiError::bad_request(
+            "either `date` or both `from` and `to` query parameters are required",
+        )),
+        _ => Err(ApiError::bad_request(
+            "use either `date` or `from`/`to`, not both",
+        )),
+    }
+}
+
+async fn list_project_time_allocations(
+    State(state): State<ApiState>,
+    raw_query: RawQuery,
+) -> Result<Json<ProjectTimeAllocationResponse>, ApiError> {
+    let params: TimeRangeParams = parse_query_params(
+        raw_query.0.as_deref(),
+        "invalid project insight query parameters",
+    )?;
+    let from = parse_optional_timestamp("from", params.from.as_deref())?;
+    let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    validate_timestamp_range(from.as_ref(), to.as_ref())?;
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Ok(Json(ProjectTimeAllocationResponse {
+            projects: Vec::new(),
+        }));
+    };
+    let projects = db
+        .list_project_time_allocations(from, to)
+        .map_err(ApiError::internal)?;
+
+    Ok(Json(ProjectTimeAllocationResponse { projects }))
+}
+
+async fn list_topic_frequencies(
+    State(state): State<ApiState>,
+    raw_query: RawQuery,
+) -> Result<Json<TopicFrequencyResponse>, ApiError> {
+    let params: TimeRangeParams = parse_query_params(
+        raw_query.0.as_deref(),
+        "invalid topic insight query parameters",
+    )?;
+    let from = parse_optional_timestamp("from", params.from.as_deref())?;
+    let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    validate_timestamp_range(from.as_ref(), to.as_ref())?;
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Ok(Json(TopicFrequencyResponse { topics: Vec::new() }));
+    };
+    let topics = db
+        .list_topic_frequencies(from, to)
+        .map_err(ApiError::internal)?;
+
+    Ok(Json(TopicFrequencyResponse { topics }))
+}
+
+async fn search_extractions(
+    State(state): State<ApiState>,
+    raw_query: RawQuery,
+) -> Result<Json<SearchResponse>, ApiError> {
+    let params: SearchParams =
+        parse_query_params(raw_query.0.as_deref(), "invalid search query parameters")?;
+    let from = parse_optional_timestamp("from", params.from.as_deref())?;
+    let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    validate_timestamp_range(from.as_ref(), to.as_ref())?;
+
+    let query = trim_to_option(params.q)
+        .ok_or_else(|| ApiError::bad_request("query parameter `q` is required"))?;
+    let search_query = ExtractionSearchQuery {
+        query,
+        app_name: trim_to_option(params.app),
+        project: trim_to_option(params.project),
+        from,
+        to,
+        limit: params
+            .limit
+            .unwrap_or(DEFAULT_SEARCH_LIMIT)
+            .min(MAX_SEARCH_LIMIT),
+    };
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Ok(Json(SearchResponse {
+            results: Vec::new(),
+            limit: search_query.limit,
+        }));
+    };
+    let results = db
+        .search_extractions_filtered(&search_query)
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(|hit| api_search_hit_from_model(&state, hit))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(SearchResponse {
+        results,
+        limit: search_query.limit,
+    }))
+}
 fn parse_capture_list_params(raw: Option<&str>) -> Result<CaptureListParams, ApiError> {
+    parse_query_params(raw, "invalid capture query parameters")
+}
+
+fn parse_query_params<T>(raw: Option<&str>, invalid_message: &'static str) -> Result<T, ApiError>
+where
+    T: DeserializeOwned + Default,
+{
     match raw {
-        None | Some("") => Ok(CaptureListParams::default()),
-        Some(raw) => serde_urlencoded::from_str(raw)
-            .map_err(|_| ApiError::bad_request("invalid capture query parameters")),
+        None | Some("") => Ok(T::default()),
+        Some(raw) => {
+            serde_urlencoded::from_str(raw).map_err(|_| ApiError::bad_request(invalid_message))
+        }
     }
 }
 
@@ -319,6 +582,48 @@ fn parse_optional_timestamp(
             })
     })
     .transpose()
+}
+
+fn parse_optional_date(label: &str, raw: Option<&str>) -> Result<Option<NaiveDate>, ApiError> {
+    raw.map(|value| {
+        NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+            ApiError::bad_request(format!(
+                "query parameter `{label}` must be a valid YYYY-MM-DD date"
+            ))
+        })
+    })
+    .transpose()
+}
+
+fn parse_required_date(label: &str, raw: Option<&str>) -> Result<NaiveDate, ApiError> {
+    parse_optional_date(label, raw)?
+        .ok_or_else(|| ApiError::bad_request(format!("query parameter `{label}` is required")))
+}
+
+fn validate_timestamp_range(
+    from: Option<&DateTime<Utc>>,
+    to: Option<&DateTime<Utc>>,
+) -> Result<(), ApiError> {
+    if let (Some(from), Some(to)) = (from, to) {
+        if from > to {
+            return Err(ApiError::bad_request(
+                "`from` must be less than or equal to `to`",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn trim_to_option(raw: Option<String>) -> Option<String> {
+    raw.and_then(|value| {
+        let value = value.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_owned())
+        }
+    })
 }
 
 fn sanitize_screenshot_path(raw: &str) -> Result<PathBuf, ApiError> {
@@ -363,6 +668,18 @@ fn api_capture_detail_from_model(
     Ok(ApiCaptureDetail {
         capture: api_capture_from_model(state, detail.capture)?,
         extraction: detail.extraction,
+    })
+}
+
+fn api_search_hit_from_model(
+    state: &ApiState,
+    hit: ExtractionSearchHit,
+) -> Result<ApiSearchHit, ApiError> {
+    Ok(ApiSearchHit {
+        capture: api_capture_from_model(state, hit.capture)?,
+        extraction: hit.extraction,
+        batch_narrative: hit.batch_narrative,
+        rank: hit.rank,
     })
 }
 

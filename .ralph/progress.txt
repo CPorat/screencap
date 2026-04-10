@@ -12,6 +12,7 @@ Branch: ralph/v1-implementation
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
+- Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
 - When OpenAI-compatible providers expose usage cost metadata (such as OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that do not report cost should stay `None` rather than fabricating values.
@@ -153,4 +154,14 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Daily synthesis should consume persisted hourly insights rather than re-deriving the day from extraction batches, so each synthesis stage builds on the durable contract of the previous one.
   - On-demand summary commands should check storage before constructing providers, which keeps previously generated insights readable even when API credentials are unavailable.
+---
+
+## 2026-04-10 23:25:10 UTC - US-013
+- Implemented the remaining REST read surface in `src/api/routes.rs`: rolling/hourly/daily insight endpoints, project/topic aggregation endpoints, and filtered full-text extraction search with shared query parsing and read-only empty/404 behavior.
+- Added supporting storage query types/helpers in `src/storage/models.rs` and `src/storage/db.rs`, including typed insight lookups, daily ranges, project/topic aggregations, and search hits that carry joined capture context for screenshot URLs and timestamp/app filters.
+- Expanded `tests/api_server.rs` to seed captures, extractions, batches, and insights, then verify the new insight/search endpoints alongside the existing screenshot and capture routes.
+- Files changed: AGENTS.md, src/api/routes.rs, src/storage/db.rs, src/storage/models.rs, tests/api_server.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Search results are more useful when the storage helper joins back to `captures`, because API/UI consumers immediately need screenshot URLs, timestamps, and app metadata alongside extraction text.
+  - Keep singular read endpoints (`current`, `daily?date=`) on a 404 contract when data is absent, but let range/list endpoints return empty arrays so read-only clients can distinguish “missing record” from “empty window.”
 ---

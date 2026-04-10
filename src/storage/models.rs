@@ -370,8 +370,31 @@ pub struct CaptureQuery {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionSearchQuery {
+    pub query: String,
+    pub app_name: Option<String>,
+    pub project: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTimeAllocation {
+    pub project: Option<String>,
+    pub capture_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicFrequency {
+    pub topic: String,
+    pub capture_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractionSearchHit {
+    pub capture: Capture,
     pub extraction: Extraction,
     pub batch_narrative: Option<String>,
     pub rank: f64,

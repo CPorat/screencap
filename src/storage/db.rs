@@ -19,8 +19,9 @@ use crate::config::AppConfig;
 use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
     AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionBatch,
-    ExtractionBatchDetail, ExtractionFrameDetail, ExtractionSearchHit, ExtractionStatus, Insight,
-    InsightData, InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
+    ExtractionBatchDetail, ExtractionFrameDetail, ExtractionSearchHit, ExtractionSearchQuery,
+    ExtractionStatus, Insight, InsightData, InsightType, NewCapture, NewExtraction,
+    NewExtractionBatch, NewInsight, ProjectTimeAllocation, Sentiment, TopicFrequency,
 };
 
 const SCHEMA: &str = r#"
@@ -812,8 +813,39 @@ impl StorageDb {
         })
     }
 
-    pub fn list_hourly_insights_in_range(
+    pub fn get_latest_insight_by_type(&self, insight_type: InsightType) -> Result<Option<Insight>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    id,
+                    type,
+                    window_start,
+                    window_end,
+                    data,
+                    narrative,
+                    model_used,
+                    tokens_used,
+                    cost_cents,
+                    created_at
+                 FROM insights
+                 WHERE type = ?1
+                 ORDER BY window_end DESC, created_at DESC, id DESC
+                 LIMIT 1",
+            )
+            .with_context(|| format!("failed to prepare latest {insight_type} insight query"))?;
+
+        let insight = stmt
+            .query_row(params![insight_type.as_str()], map_insight_row)
+            .optional()
+            .with_context(|| format!("failed to query latest {insight_type} insight"))?;
+
+        Ok(insight)
+    }
+
+    pub fn list_insights_in_range(
         &self,
+        insight_type: InsightType,
         window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
     ) -> Result<Vec<Insight>> {
@@ -835,12 +867,12 @@ impl StorageDb {
                  WHERE type = ?1 AND window_start >= ?2 AND window_end <= ?3
                  ORDER BY window_start ASC, id ASC",
             )
-            .context("failed to prepare hourly insight range query")?;
+            .with_context(|| format!("failed to prepare {insight_type} insight range query"))?;
 
         let insights = stmt
             .query_map(
                 params![
-                    InsightType::Hourly.as_str(),
+                    insight_type.as_str(),
                     format_db_timestamp(&window_start),
                     format_db_timestamp(&window_end),
                 ],
@@ -848,14 +880,41 @@ impl StorageDb {
             )
             .with_context(|| {
                 format!(
-                    "failed to query hourly insights for {}..{}",
+                    "failed to query {insight_type} insights for {}..{}",
                     window_start, window_end
                 )
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
-            .context("failed to map hourly insight range results")?;
+            .with_context(|| format!("failed to map {insight_type} insight range results"))?;
 
         Ok(insights)
+    }
+
+    pub fn list_hourly_insights_in_range(
+        &self,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+    ) -> Result<Vec<Insight>> {
+        self.list_insights_in_range(InsightType::Hourly, window_start, window_end)
+    }
+
+    pub fn list_daily_insights_in_date_range(
+        &self,
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> Result<Vec<Insight>> {
+        let day_start = from
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+        let next_day_start = to
+            .succ_opt()
+            .expect("successor date should be representable")
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+
+        self.list_insights_in_range(InsightType::Daily, day_start, next_day_start)
     }
 
     pub fn get_latest_daily_insight_for_date(&self, date: NaiveDate) -> Result<Option<Insight>> {
@@ -906,37 +965,210 @@ impl StorageDb {
         Ok(insight)
     }
 
-    pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
+    pub fn list_project_time_allocations(
+        &self,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<ProjectTimeAllocation>> {
+        let mut sql = String::from(
+            "SELECT
+                e.project,
+                COUNT(DISTINCT e.capture_id) AS capture_count
+             FROM extractions e
+             JOIN captures c ON c.id = e.capture_id",
+        );
+        let mut filters = Vec::new();
+        let mut params = Vec::new();
+
+        if let Some(from) = from.as_ref() {
+            filters.push("c.timestamp >= ?");
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = to.as_ref() {
+            filters.push("c.timestamp <= ?");
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        if !filters.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&filters.join(" AND "));
+        }
+
+        sql.push_str(
+            " GROUP BY e.project
+              ORDER BY capture_count DESC, e.project IS NULL ASC, e.project ASC",
+        );
+
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT
-                    e.id,
-                    e.capture_id,
-                    e.batch_id,
-                    e.activity_type,
-                    e.description,
-                    e.app_context,
-                    e.project,
-                    e.topics,
-                    e.people,
-                    e.key_content,
-                    e.sentiment,
-                    e.created_at,
-                    eb.narrative AS batch_narrative,
-                    bm25(search_index) AS rank
-                 FROM search_index
-                 JOIN extractions e ON e.id = search_index.extraction_id
-                 LEFT JOIN extraction_batches eb ON eb.id = e.batch_id
-                 WHERE search_index MATCH ?1
-                 ORDER BY rank ASC, e.id ASC",
-            )
+            .prepare(&sql)
+            .context("failed to prepare project time allocation query")?;
+
+        let projects = stmt
+            .query_map(params_from_iter(params.iter()), |row| {
+                let capture_count: i64 = row.get("capture_count")?;
+                let capture_count = u64::try_from(capture_count)
+                    .context("project capture count overflowed u64")
+                    .map_err(into_row_error)?;
+
+                Ok(ProjectTimeAllocation {
+                    project: row.get("project")?,
+                    capture_count,
+                })
+            })
+            .context("failed to query project time allocations")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map project time allocations")?;
+
+        Ok(projects)
+    }
+
+    pub fn list_topic_frequencies(
+        &self,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<TopicFrequency>> {
+        let mut sql = String::from(
+            "SELECT
+                topic,
+                COUNT(*) AS capture_count
+             FROM (
+                SELECT DISTINCT
+                    e.id AS extraction_id,
+                    LOWER(TRIM(je.value)) AS topic
+                FROM extractions e
+                JOIN captures c ON c.id = e.capture_id
+                JOIN json_each(COALESCE(e.topics, '[]')) AS je
+                WHERE TRIM(je.value) != ''",
+        );
+        let mut params = Vec::new();
+
+        if let Some(from) = from.as_ref() {
+            sql.push_str(" AND c.timestamp >= ?");
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = to.as_ref() {
+            sql.push_str(" AND c.timestamp <= ?");
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        sql.push_str(
+            " ) topic_counts
+              GROUP BY topic
+              ORDER BY capture_count DESC, topic ASC",
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed to prepare topic frequency query")?;
+
+        let topics = stmt
+            .query_map(params_from_iter(params.iter()), |row| {
+                let capture_count: i64 = row.get("capture_count")?;
+                let capture_count = u64::try_from(capture_count)
+                    .context("topic capture count overflowed u64")
+                    .map_err(into_row_error)?;
+
+                Ok(TopicFrequency {
+                    topic: row.get("topic")?,
+                    capture_count,
+                })
+            })
+            .context("failed to query topic frequencies")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map topic frequencies")?;
+
+        Ok(topics)
+    }
+
+    pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
+        self.search_extractions_filtered(&ExtractionSearchQuery {
+            query: query.to_owned(),
+            app_name: None,
+            project: None,
+            from: None,
+            to: None,
+            limit: i64::MAX as usize,
+        })
+    }
+
+    pub fn search_extractions_filtered(
+        &self,
+        query: &ExtractionSearchQuery,
+    ) -> Result<Vec<ExtractionSearchHit>> {
+        let match_query = build_fts_match_query(&query.query)?;
+        let mut sql = String::from(
+            "SELECT
+                c.id AS search_capture_id,
+                c.timestamp AS search_capture_timestamp,
+                c.app_name AS search_capture_app_name,
+                c.window_title AS search_capture_window_title,
+                c.bundle_id AS search_capture_bundle_id,
+                c.display_id AS search_capture_display_id,
+                c.screenshot_path AS search_capture_screenshot_path,
+                c.extraction_status AS search_capture_extraction_status,
+                c.extraction_id AS search_capture_extraction_id,
+                c.created_at AS search_capture_created_at,
+                e.id,
+                e.capture_id,
+                e.batch_id,
+                e.activity_type,
+                e.description,
+                e.app_context,
+                e.project,
+                e.topics,
+                e.people,
+                e.key_content,
+                e.sentiment,
+                e.created_at,
+                eb.narrative AS batch_narrative,
+                bm25(search_index) AS rank
+             FROM search_index
+             JOIN extractions e ON e.id = search_index.extraction_id
+             JOIN captures c ON c.id = e.capture_id
+             LEFT JOIN extraction_batches eb ON eb.id = e.batch_id",
+        );
+        let mut filters = vec!["search_index MATCH ?".to_string()];
+        let mut params = vec![Value::Text(match_query)];
+
+        if let Some(app_name) = query.app_name.as_ref() {
+            filters.push("c.app_name = ?".to_string());
+            params.push(Value::Text(app_name.clone()));
+        }
+
+        if let Some(project) = query.project.as_ref() {
+            filters.push("e.project = ?".to_string());
+            params.push(Value::Text(project.clone()));
+        }
+
+        if let Some(from) = query.from.as_ref() {
+            filters.push("c.timestamp >= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = query.to.as_ref() {
+            filters.push("c.timestamp <= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        sql.push_str(" WHERE ");
+        sql.push_str(&filters.join(" AND "));
+        sql.push_str(" ORDER BY rank ASC, c.timestamp DESC, e.id DESC LIMIT ?");
+        params.push(Value::Integer(
+            i64::try_from(query.limit).context("search query limit exceeds sqlite range")?,
+        ));
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
             .context("failed to prepare extraction search query")?;
 
-        let match_query = build_fts_match_query(query)?;
         let results = stmt
-            .query_map(params![match_query], map_search_hit_row)
-            .with_context(|| format!("failed to search extractions for `{query}`"))?
+            .query_map(params_from_iter(params.iter()), map_search_hit_row)
+            .with_context(|| format!("failed to search extractions for `{}`", query.query))?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("failed to map extraction search results")?;
 
@@ -1395,6 +1627,20 @@ fn map_optional_detail_extraction_row(row: &Row<'_>) -> rusqlite::Result<Option<
 
 fn map_search_hit_row(row: &Row<'_>) -> rusqlite::Result<ExtractionSearchHit> {
     Ok(ExtractionSearchHit {
+        capture: Capture {
+            id: row.get("search_capture_id")?,
+            timestamp: parse_timestamp_column(row.get("search_capture_timestamp")?)?,
+            app_name: row.get("search_capture_app_name")?,
+            window_title: row.get("search_capture_window_title")?,
+            bundle_id: row.get("search_capture_bundle_id")?,
+            display_id: row.get("search_capture_display_id")?,
+            screenshot_path: row.get("search_capture_screenshot_path")?,
+            extraction_status: parse_enum_column::<ExtractionStatus>(
+                row.get("search_capture_extraction_status")?,
+            )?,
+            extraction_id: row.get("search_capture_extraction_id")?,
+            created_at: parse_timestamp_column(row.get("search_capture_created_at")?)?,
+        },
         extraction: map_extraction_row(row)?,
         batch_narrative: row.get("batch_narrative")?,
         rank: row.get("rank")?,

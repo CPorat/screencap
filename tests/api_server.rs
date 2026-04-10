@@ -1,6 +1,7 @@
 mod support;
 
 use std::{
+    collections::BTreeMap,
     fs,
     net::TcpListener,
     os::unix::fs::symlink,
@@ -9,14 +10,18 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use reqwest::{header::CONTENT_TYPE, Client};
 use screencap::{
     api,
     config::AppConfig,
     storage::{
         db::StorageDb,
-        models::{AppCaptureCount, Extraction, NewCapture},
+        models::{
+            ActivityType, AppCaptureCount, DailyProjectSummary, Extraction, FocusBlock,
+            HourlyProjectSummary, Insight, InsightData, InsightType, NewCapture, NewExtraction,
+            NewExtractionBatch, NewInsight, ProjectTimeAllocation, Sentiment, TopicFrequency,
+        },
     },
 };
 use serde::Deserialize;
@@ -24,6 +29,7 @@ use tokio::{
     sync::watch,
     time::{sleep, Duration, Instant},
 };
+use uuid::Uuid;
 
 struct TestHome {
     path: PathBuf,
@@ -88,6 +94,35 @@ struct ApiCaptureDetail {
 #[derive(Debug, Deserialize)]
 struct AppsResponse {
     apps: Vec<AppCaptureCount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsightListResponse {
+    insights: Vec<Insight>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectTimeAllocationResponse {
+    projects: Vec<ProjectTimeAllocation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TopicFrequencyResponse {
+    topics: Vec<TopicFrequency>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiSearchHit {
+    capture: ApiCapture,
+    extraction: Extraction,
+    batch_narrative: Option<String>,
+    rank: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchResponse {
+    results: Vec<ApiSearchHit>,
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,17 +274,130 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     let invalid_query: ErrorResponse = invalid_query.json().await?;
     assert_eq!(invalid_query.error, "invalid capture query parameters");
 
-    let timestamp = Utc::now();
-    let capture = {
+    let timestamp = Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 0).unwrap();
+    let insight_date = timestamp.date_naive();
+    let (capture, extraction) = {
         let mut db = StorageDb::open_at_path(&db_path)?;
-        db.insert_capture(&NewCapture {
+        let capture = db.insert_capture(&NewCapture {
             timestamp,
             app_name: Some("Code".into()),
             window_title: Some("REST API tests".into()),
             bundle_id: Some("com.microsoft.VSCode".into()),
             display_id: Some(1),
             screenshot_path: screenshot_path.to_string_lossy().into_owned(),
-        })?
+        })?;
+
+        let batch_id = Uuid::new_v4();
+        db.insert_extraction_batch(&NewExtractionBatch {
+            id: batch_id,
+            batch_start: timestamp - ChronoDuration::minutes(5),
+            batch_end: timestamp + ChronoDuration::minutes(5),
+            capture_count: 1,
+            primary_activity: Some("coding".into()),
+            project_context: Some("screencap".into()),
+            narrative: Some("Added API search and insight endpoints for the daemon.".into()),
+            raw_response: None,
+            model_used: Some("mock-extractor".into()),
+            tokens_used: Some(144),
+            cost_cents: Some(0.32),
+        })?;
+        let extraction = db.insert_extraction(&NewExtraction {
+            capture_id: capture.id,
+            batch_id,
+            activity_type: Some(ActivityType::Coding),
+            description: Some("Implemented search endpoint filters for the API".into()),
+            app_context: Some("Editing axum routes and integration tests".into()),
+            project: Some("screencap".into()),
+            topics: vec!["api".into(), "search".into()],
+            people: vec![],
+            key_content: Some("GET /api/search?q=filters".into()),
+            sentiment: Some(Sentiment::Focused),
+        })?;
+
+        let rolling_start = timestamp - ChronoDuration::minutes(30);
+        let rolling_end = timestamp;
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Rolling,
+            window_start: rolling_start,
+            window_end: rolling_end,
+            data: InsightData::Rolling {
+                window_start: rolling_start,
+                window_end: rolling_end,
+                current_focus: "Implementing the US-013 insight and search endpoints".into(),
+                active_project: Some("screencap".into()),
+                apps_used: BTreeMap::from([("Code".into(), "30 min".into())]),
+                context_switches: 1,
+                mood: "focused".into(),
+                summary: "Focused API work on insight and search endpoints.".into(),
+            },
+            model_used: Some("mock-synthesis".into()),
+            tokens_used: Some(210),
+            cost_cents: Some(0.21),
+        })?;
+
+        let hour_start = insight_date.and_hms_opt(14, 0, 0).unwrap().and_utc();
+        let hour_end = hour_start + ChronoDuration::hours(1);
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Hourly,
+            window_start: hour_start,
+            window_end: hour_end,
+            data: InsightData::Hourly {
+                hour_start,
+                hour_end,
+                dominant_activity: "coding".into(),
+                projects: vec![HourlyProjectSummary {
+                    name: Some("screencap".into()),
+                    minutes: 55,
+                    activities: vec!["api endpoints".into(), "search filters".into()],
+                }],
+                topics: vec!["api".into(), "search".into()],
+                people_interacted: vec![],
+                key_moments: vec!["Added the insights and search API endpoints".into()],
+                focus_score: 0.83,
+                narrative: "Spent the hour building and verifying API insight endpoints.".into(),
+            },
+            model_used: Some("mock-synthesis".into()),
+            tokens_used: Some(320),
+            cost_cents: Some(0.43),
+        })?;
+
+        let day_start = insight_date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let day_end = insight_date
+            .succ_opt()
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Daily,
+            window_start: day_start,
+            window_end: day_end,
+            data: InsightData::Daily {
+                date: insight_date,
+                total_active_hours: 6.5,
+                projects: vec![DailyProjectSummary {
+                    name: "screencap".into(),
+                    total_minutes: 180,
+                    activities: vec!["REST API work".into()],
+                    key_accomplishments: vec!["Added insights endpoints".into()],
+                }],
+                time_allocation: BTreeMap::from([("coding".into(), "3h 0m".into())]),
+                focus_blocks: vec![FocusBlock {
+                    start: "14:00".into(),
+                    end: "15:00".into(),
+                    duration_min: 60,
+                    project: "screencap".into(),
+                    quality: "deep-focus".into(),
+                }],
+                open_threads: vec!["Wire the UI to the new endpoints".into()],
+                narrative: "Most of the day went into API endpoint work for screencap.".into(),
+            },
+            model_used: Some("mock-synthesis".into()),
+            tokens_used: Some(410),
+            cost_cents: Some(0.58),
+        })?;
+
+        (capture, extraction)
     };
 
     let relative_screenshot_path = screenshot_path
@@ -330,6 +478,131 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         }]
     );
 
+    let insight_date_str = insight_date.to_string();
+
+    let current: Insight = client
+        .get(format!("{base_url}/api/insights/current"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    match current.data {
+        InsightData::Rolling {
+            current_focus,
+            active_project,
+            ..
+        } => {
+            assert_eq!(
+                current_focus,
+                "Implementing the US-013 insight and search endpoints"
+            );
+            assert_eq!(active_project.as_deref(), Some("screencap"));
+        }
+        other => panic!("expected rolling insight, got {other:?}"),
+    }
+
+    let hourly: InsightListResponse = client
+        .get(format!("{base_url}/api/insights/hourly"))
+        .query(&[("date", insight_date_str.as_str())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(hourly.insights.len(), 1);
+    assert_eq!(hourly.insights[0].insight_type, InsightType::Hourly);
+
+    let daily: Insight = client
+        .get(format!("{base_url}/api/insights/daily"))
+        .query(&[("date", insight_date_str.as_str())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(daily.insight_type, InsightType::Daily);
+
+    let daily_range: InsightListResponse = client
+        .get(format!("{base_url}/api/insights/daily"))
+        .query(&[
+            ("from", insight_date_str.as_str()),
+            ("to", insight_date_str.as_str()),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(daily_range.insights.len(), 1);
+    assert_eq!(daily_range.insights[0].insight_type, InsightType::Daily);
+
+    let project_allocations: ProjectTimeAllocationResponse = client
+        .get(format!("{base_url}/api/insights/projects"))
+        .query(&[("from", from.as_str()), ("to", to.as_str())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        project_allocations.projects,
+        vec![ProjectTimeAllocation {
+            project: Some("screencap".into()),
+            capture_count: 1,
+        }]
+    );
+
+    let topic_frequencies: TopicFrequencyResponse = client
+        .get(format!("{base_url}/api/insights/topics"))
+        .query(&[("from", from.as_str()), ("to", to.as_str())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        topic_frequencies.topics,
+        vec![
+            TopicFrequency {
+                topic: "api".into(),
+                capture_count: 1,
+            },
+            TopicFrequency {
+                topic: "search".into(),
+                capture_count: 1,
+            },
+        ]
+    );
+
+    let search_results: SearchResponse = client
+        .get(format!("{base_url}/api/search"))
+        .query(&[
+            ("q", "filters"),
+            ("app", "Code"),
+            ("project", "screencap"),
+            ("from", from.as_str()),
+            ("to", to.as_str()),
+            ("limit", "5"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(search_results.limit, 5);
+    assert_eq!(search_results.results.len(), 1);
+    assert_eq!(search_results.results[0].capture.id, capture.id);
+    assert_eq!(search_results.results[0].extraction.id, extraction.id);
+    assert_eq!(
+        search_results.results[0].capture.screenshot_url.as_deref(),
+        Some(format!("/api/screenshots/{relative_screenshot_path}").as_str())
+    );
+    assert_eq!(
+        search_results.results[0].batch_narrative.as_deref(),
+        Some("Added API search and insight endpoints for the daemon.")
+    );
+    assert!(search_results.results[0].rank.is_finite());
     let screenshot_response = client
         .get(format!(
             "{base_url}/api/screenshots/{relative_screenshot_path}"

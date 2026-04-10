@@ -25,3 +25,23 @@ Return JSON in this exact format:
 
 Return one frame entry for every attached screenshot in the same order.
 Use each provided capture_id exactly as given in the frame metadata below."#;
+
+pub const ROLLING_CONTEXT_PROMPT_TEMPLATE: &str = r#"You are synthesizing a rolling context summary from structured screenshot extractions.
+Your job is to answer: what is the user working on right now?
+
+Return JSON in this exact format:
+{
+  "type": "rolling",
+  "window_start": "2026-04-10T14:00:00Z",
+  "window_end": "2026-04-10T14:30:00Z",
+  "current_focus": "Debugging JWT token refresh in the screencap auth module",
+  "active_project": "screencap",
+  "apps_used": {"VS Code": "18 min", "Chrome": "8 min", "Slack": "4 min"},
+  "context_switches": 3,
+  "mood": "deep-focus",
+  "summary": "Focused coding session on the auth module. Looked up JWT refresh token patterns on Stack Overflow, then implemented the fix in VS Code. Brief Slack check."
+}
+
+Use the exact window_start and window_end values provided in the request metadata below.
+Base the summary only on the extraction batches and frame details from that window.
+Return JSON only; do not wrap it in markdown or add commentary."#;

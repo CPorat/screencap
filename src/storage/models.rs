@@ -377,6 +377,18 @@ pub struct ExtractionSearchHit {
     pub rank: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtractionFrameDetail {
+    pub capture: Capture,
+    pub extraction: Extraction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtractionBatchDetail {
+    pub batch: ExtractionBatch,
+    pub frames: Vec<ExtractionFrameDetail>,
+}
+
 impl InsightData {
     pub fn insight_type(&self) -> InsightType {
         match self {

@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{fs, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -16,7 +11,9 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
-    ai::provider::{create_provider, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, TokenUsage},
+    ai::provider::{
+        create_provider, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, TokenUsage,
+    },
     config::AppConfig,
     storage::{
         db::StorageDb,
@@ -53,7 +50,6 @@ struct BatchRecordFields<'a> {
     usage: Option<TokenUsage>,
 }
 
-
 pub struct ExtractionScheduler {
     config: AppConfig,
     db: StorageDb,
@@ -83,8 +79,12 @@ impl ExtractionScheduler {
         );
 
         let db_path = config.storage_root(home.as_ref()).join("screencap.db");
-        let db = StorageDb::open_at_path(&db_path)
-            .with_context(|| format!("failed to open extraction database at {}", db_path.display()))?;
+        let db = StorageDb::open_at_path(&db_path).with_context(|| {
+            format!(
+                "failed to open extraction database at {}",
+                db_path.display()
+            )
+        })?;
 
         Ok(Self {
             config,
@@ -93,11 +93,9 @@ impl ExtractionScheduler {
         })
     }
 
-    pub async fn run_until_shutdown(
-        &mut self,
-        mut shutdown: watch::Receiver<bool>,
-    ) -> Result<()> {
-        let mut interval = time::interval(Duration::from_secs(self.config.extraction.interval_secs));
+    pub async fn run_until_shutdown(&mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let mut interval =
+            time::interval(Duration::from_secs(self.config.extraction.interval_secs));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
@@ -263,7 +261,8 @@ fn build_batch_record(
     fields: BatchRecordFields<'_>,
 ) -> Result<NewExtractionBatch> {
     let (batch_start, batch_end) = capture_window(captures)?;
-    let capture_count = i64::try_from(captures.len()).context("capture batch size exceeds sqlite range")?;
+    let capture_count =
+        i64::try_from(captures.len()).context("capture batch size exceeds sqlite range")?;
     let tokens_used = fields
         .usage
         .map(|usage| i64::try_from(usage.total_tokens).context("token usage exceeds sqlite range"))
@@ -284,13 +283,19 @@ fn build_batch_record(
     })
 }
 
-fn parse_and_validate_response(captures: &[Capture], raw_response: &str) -> Result<ExtractionResult> {
+fn parse_and_validate_response(
+    captures: &[Capture],
+    raw_response: &str,
+) -> Result<ExtractionResult> {
     let parsed = parse_extraction_response(raw_response)?;
     validate_response_matches_requested(captures, &parsed)?;
     Ok(parsed)
 }
 
-fn validate_response_matches_requested(captures: &[Capture], parsed: &ExtractionResult) -> Result<()> {
+fn validate_response_matches_requested(
+    captures: &[Capture],
+    parsed: &ExtractionResult,
+) -> Result<()> {
     if parsed.frames.len() != captures.len() {
         bail!(
             "extraction response returned {} frame(s) for {} requested capture(s)",
@@ -397,7 +402,12 @@ mod tests {
         let mut scheduler = create_scheduler(config, &home, provider.clone())?;
         let captures = seed_captures(&mut scheduler, 5)?;
         provider.push_response(Ok(LlmResponse::with_usage(
-            success_response_json(&captures, "JWT batch summary", "screencap", "Focused on the extraction scheduler and JWT indexing."),
+            success_response_json(
+                &captures,
+                "JWT batch summary",
+                "screencap",
+                "Focused on the extraction scheduler and JWT indexing.",
+            ),
             TokenUsage {
                 prompt_tokens: 120,
                 completion_tokens: 80,
@@ -429,12 +439,15 @@ mod tests {
         assert!(captures_after
             .iter()
             .all(|capture| capture.extraction_status == ExtractionStatus::Processed));
-        assert!(captures_after.iter().all(|capture| capture.extraction_id.is_some()));
+        assert!(captures_after
+            .iter()
+            .all(|capture| capture.extraction_id.is_some()));
 
-        let extraction_count: i64 = scheduler
-            .db
-            .connection()
-            .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
+        let extraction_count: i64 =
+            scheduler
+                .db
+                .connection()
+                .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
         assert_eq!(extraction_count, 5);
 
         let batch_row = scheduler.db.connection().query_row(
@@ -456,7 +469,10 @@ mod tests {
             batch_row.1.as_deref(),
             Some("Focused on the extraction scheduler and JWT indexing.")
         );
-        assert!(batch_row.2.as_deref().is_some_and(|value| value.contains("capture_id")));
+        assert!(batch_row
+            .2
+            .as_deref()
+            .is_some_and(|value| value.contains("capture_id")));
         assert_eq!(batch_row.3.as_deref(), Some("mock-vision-model"));
         assert_eq!(batch_row.4, Some(200));
         assert_eq!(batch_row.5, None);
@@ -472,7 +488,9 @@ mod tests {
         let calls = provider.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].images.len(), 5);
-        assert!(calls[0].prompt.contains(&format!("capture_id: {}", captures[0].id)));
+        assert!(calls[0]
+            .prompt
+            .contains(&format!("capture_id: {}", captures[0].id)));
 
         fs::remove_dir_all(&home)?;
         Ok(())
@@ -511,7 +529,9 @@ mod tests {
         assert!(captures_after
             .iter()
             .all(|capture| capture.extraction_status == ExtractionStatus::Failed));
-        assert!(captures_after.iter().all(|capture| capture.extraction_id.is_none()));
+        assert!(captures_after
+            .iter()
+            .all(|capture| capture.extraction_id.is_none()));
 
         let batch_row = scheduler.db.connection().query_row(
             "SELECT capture_count, narrative, raw_response FROM extraction_batches",
@@ -531,10 +551,11 @@ mod tests {
             .as_deref()
             .is_some_and(|value| value.contains("Only one frame")));
 
-        let extraction_count: i64 = scheduler
-            .db
-            .connection()
-            .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
+        let extraction_count: i64 =
+            scheduler
+                .db
+                .connection()
+                .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
         assert_eq!(extraction_count, 0);
 
         fs::remove_dir_all(&home)?;
@@ -545,11 +566,11 @@ mod tests {
     async fn run_once_continues_after_provider_failure() -> Result<()> {
         let home = temp_home_root("scheduler-provider-failure");
         let config = test_config(&home, 2);
-        let provider = Arc::new(MockLlmProvider::with_responses([
-            Err(ProviderError::RateLimited {
+        let provider = Arc::new(MockLlmProvider::with_responses([Err(
+            ProviderError::RateLimited {
                 message: "slow down".into(),
-            }),
-        ]));
+            },
+        )]));
         let mut scheduler = create_scheduler(config, &home, provider.clone())?;
         let captures = seed_captures(&mut scheduler, 3)?;
         provider.push_response(Ok(LlmResponse::new(success_response_json_for_ids(
@@ -577,14 +598,24 @@ mod tests {
             limit: 10,
             offset: 0,
         })?;
-        assert_eq!(captures_after[0].extraction_status, ExtractionStatus::Failed);
-        assert_eq!(captures_after[1].extraction_status, ExtractionStatus::Failed);
-        assert_eq!(captures_after[2].extraction_status, ExtractionStatus::Processed);
+        assert_eq!(
+            captures_after[0].extraction_status,
+            ExtractionStatus::Failed
+        );
+        assert_eq!(
+            captures_after[1].extraction_status,
+            ExtractionStatus::Failed
+        );
+        assert_eq!(
+            captures_after[2].extraction_status,
+            ExtractionStatus::Processed
+        );
 
-        let batch_count: i64 = scheduler
-            .db
-            .connection()
-            .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| row.get(0))?;
+        let batch_count: i64 = scheduler.db.connection().query_row(
+            "SELECT COUNT(*) FROM extraction_batches",
+            [],
+            |row| row.get(0),
+        )?;
         assert_eq!(batch_count, 1);
 
         let calls = provider.calls();
@@ -634,7 +665,10 @@ mod tests {
         narrative: &str,
     ) -> String {
         success_response_json_for_ids(
-            &captures.iter().map(|capture| capture.id).collect::<Vec<_>>(),
+            &captures
+                .iter()
+                .map(|capture| capture.id)
+                .collect::<Vec<_>>(),
             primary_activity,
             project_context,
             narrative,

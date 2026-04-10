@@ -9,7 +9,7 @@ use crate::{
     storage::models::{ActivityType, Capture, Sentiment},
 };
 
-use super::prompts::EXTRACTION_PROMPT_TEMPLATE;
+use super::{json::extract_json_payload, prompts::EXTRACTION_PROMPT_TEMPLATE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,24 +108,6 @@ pub fn parse_extraction_response(json_str: &str) -> Result<ExtractionResult> {
         .context("failed to parse extraction response JSON")?;
     parsed.validate()?;
     Ok(parsed)
-}
-
-fn extract_json_payload(raw: &str) -> &str {
-    let trimmed = raw.trim();
-
-    if let Some(inner) = trimmed
-        .strip_prefix("```json")
-        .and_then(|value| value.strip_suffix("```"))
-    {
-        inner.trim()
-    } else if let Some(inner) = trimmed
-        .strip_prefix("```")
-        .and_then(|value| value.strip_suffix("```"))
-    {
-        inner.trim()
-    } else {
-        trimmed
-    }
 }
 
 struct PromptMetadata<'a> {

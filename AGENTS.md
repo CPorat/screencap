@@ -44,6 +44,7 @@ Three-layer pipeline:
 - When serving screenshots over HTTP, accept only sanitized paths relative to the screenshots root and walk them with `openat(..., O_NOFOLLOW)` so traversal or symlink escapes cannot leave the screenshot tree.
 - LLM JSON parsers should accept optional markdown code fences but still validate structural invariants like unique capture IDs before persistence, so downstream schedulers can trust parsed model output.
 - Extraction scheduler writes should persist a whole batch in one SQLite transaction: insert the `extraction_batches` row, insert all frame `extractions`, link each `captures.extraction_id`, then rebuild the shared FTS rows; if parsing fails after the LLM returns, still store `raw_response` in `extraction_batches` before marking those captures failed.
+- When synthesis prompts need both extraction batch summaries and frame-level evidence, expose a typed storage helper that groups `extraction_batches` with their joined `captures`/`extractions`; keep cross-table SQL in `StorageDb`, not in pipeline prompt builders.
 
 
 

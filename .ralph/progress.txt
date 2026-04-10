@@ -16,6 +16,8 @@ Branch: ralph/v1-implementation
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
+- When synthesis needs both extraction batch summaries and frame-level evidence, add a typed storage helper that groups `extraction_batches` with joined `captures`/`extractions`; keep multi-table SQL in `StorageDb` so prompt builders stay focused on prompt shape.
+
 
 
 
@@ -120,4 +122,14 @@ Branch: ralph/v1-implementation
   - Persist each extraction batch in one storage transaction so capture status, extraction rows, and FTS never disagree about what was processed.
   - Treat malformed model output as first-class debug data: store the raw response alongside the failed batch before marking captures failed.
   - Scheduler tests can stay realistic without live permissions by generating tiny JPEG fixtures on disk and feeding them through the same base64 path used in production.
+---
+
+## 2026-04-10 22:47:30 UTC - US-010
+- Implemented rolling context synthesis in `src/pipeline/synthesis.rs`: added the text-only scheduler, rolling prompt builder, fenced-JSON parser, window validation, and insight persistence backed by the synthesis provider.
+- Added grouped extraction batch/frame retrieval helpers in `src/storage/db.rs` and `src/storage/models.rs`, plus a shared `src/pipeline/json.rs` helper so extraction and synthesis parsers strip optional markdown fences the same way.
+- Added focused tests covering rolling prompt construction, fenced JSON parsing, malformed response rejection, and an integration path that seeds extraction batches, runs the rolling synthesizer with `MockLlmProvider`, and verifies the persisted rolling insight plus FTS narrative.
+- Files changed: AGENTS.md, src/pipeline/extraction.rs, src/pipeline/json.rs, src/pipeline/mod.rs, src/pipeline/prompts.rs, src/pipeline/scheduler.rs, src/pipeline/synthesis.rs, src/storage/db.rs, src/storage/models.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Rolling synthesis should read typed batch/frame detail structs from storage rather than re-implementing multi-table joins in pipeline code.
+  - Shared markdown-fence stripping belongs in one pipeline helper so every LLM JSON parser stays consistent as more synthesis stages land.
 ---

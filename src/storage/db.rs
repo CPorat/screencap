@@ -20,8 +20,8 @@ use crate::config::AppConfig;
 use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
     AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionBatch,
-    ExtractionSearchHit, ExtractionStatus, Insight, InsightData, NewCapture, NewExtraction,
-    NewExtractionBatch, NewInsight, Sentiment,
+    ExtractionBatchDetail, ExtractionFrameDetail, ExtractionSearchHit, ExtractionStatus, Insight,
+    InsightData, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
 };
 
 const SCHEMA: &str = r#"
@@ -119,6 +119,21 @@ const CAPTURE_SELECT: &str = "SELECT
     extraction_id,
     created_at
     FROM captures";
+
+const EXTRACTION_BATCH_SELECT: &str = "SELECT
+    id,
+    batch_start,
+    batch_end,
+    capture_count,
+    primary_activity,
+    project_context,
+    narrative,
+    raw_response,
+    model_used,
+    tokens_used,
+    cost_cents,
+    created_at
+    FROM extraction_batches";
 
 #[derive(Debug)]
 pub struct StorageDb {
@@ -466,6 +481,105 @@ impl StorageDb {
         Ok(detail)
     }
 
+    pub fn list_extraction_batch_details_in_range(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<ExtractionBatchDetail>> {
+        let mut batch_stmt = self
+            .conn
+            .prepare(&format!(
+                "{EXTRACTION_BATCH_SELECT}
+                 WHERE batch_end >= ?1 AND batch_start <= ?2
+                 ORDER BY batch_start ASC, id ASC"
+            ))
+            .context("failed to prepare extraction batch detail query")?;
+
+        let batches = batch_stmt
+            .query_map(
+                params![format_db_timestamp(&start), format_db_timestamp(&end)],
+                map_extraction_batch_row,
+            )
+            .context("failed to query extraction batches for synthesis")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map extraction batches for synthesis")?;
+
+        let mut details = Vec::with_capacity(batches.len());
+        for batch in batches {
+            let frames = self
+                .list_extraction_frame_details_for_batch(batch.id, start, end)
+                .with_context(|| {
+                    format!("failed to load extraction frames for batch {}", batch.id)
+                })?;
+            if frames.is_empty() {
+                continue;
+            }
+
+            details.push(ExtractionBatchDetail { batch, frames });
+        }
+
+        Ok(details)
+    }
+
+    fn list_extraction_frame_details_for_batch(
+        &self,
+        batch_id: Uuid,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<ExtractionFrameDetail>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    captures.id,
+                    captures.timestamp,
+                    captures.app_name,
+                    captures.window_title,
+                    captures.bundle_id,
+                    captures.display_id,
+                    captures.screenshot_path,
+                    captures.extraction_status,
+                    captures.extraction_id,
+                    captures.created_at,
+                    extractions.id AS frame_extraction_id,
+                    extractions.capture_id AS frame_extraction_capture_id,
+                    extractions.batch_id AS frame_extraction_batch_id,
+                    extractions.activity_type AS frame_extraction_activity_type,
+                    extractions.description AS frame_extraction_description,
+                    extractions.app_context AS frame_extraction_app_context,
+                    extractions.project AS frame_extraction_project,
+                    extractions.topics AS frame_extraction_topics,
+                    extractions.people AS frame_extraction_people,
+                    extractions.key_content AS frame_extraction_key_content,
+                    extractions.sentiment AS frame_extraction_sentiment,
+                    extractions.created_at AS frame_extraction_created_at
+                 FROM extractions
+                 JOIN captures ON captures.id = extractions.capture_id
+                 WHERE extractions.batch_id = ?1
+                   AND captures.timestamp >= ?2
+                   AND captures.timestamp <= ?3
+                 ORDER BY captures.timestamp ASC, extractions.id ASC",
+            )
+            .with_context(|| {
+                format!("failed to prepare frame detail query for batch {batch_id}")
+            })?;
+
+        let frames = stmt
+            .query_map(
+                params![
+                    batch_id.to_string(),
+                    format_db_timestamp(&start),
+                    format_db_timestamp(&end),
+                ],
+                map_extraction_frame_detail_row,
+            )
+            .with_context(|| format!("failed to query frame details for batch {batch_id}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .with_context(|| format!("failed to map frame details for batch {batch_id}"))?;
+
+        Ok(frames)
+    }
+
     pub fn list_app_capture_counts(&self) -> Result<Vec<AppCaptureCount>> {
         let mut stmt = self
             .conn
@@ -592,10 +706,12 @@ impl StorageDb {
         let mut persisted = Vec::with_capacity(extractions.len());
         for extraction in extractions {
             let extraction_id = insert_extraction_record(&tx, extraction, &created_at)
-                .with_context(|| format!(
-                    "failed to insert extraction for capture {}",
-                    extraction.capture_id
-                ))?;
+                .with_context(|| {
+                    format!(
+                        "failed to insert extraction for capture {}",
+                        extraction.capture_id
+                    )
+                })?;
             update_capture_status_record(
                 &tx,
                 extraction.capture_id,
@@ -608,7 +724,11 @@ impl StorageDb {
                     extraction_id, extraction.capture_id
                 )
             })?;
-            persisted.push(materialize_extraction(extraction_id, extraction, &created_at));
+            persisted.push(materialize_extraction(
+                extraction_id,
+                extraction,
+                &created_at,
+            ));
         }
 
         sync_batch_search_index(&tx, batch.id)?;
@@ -630,7 +750,11 @@ impl StorageDb {
         tx.commit()
             .context("failed to commit extraction transaction")?;
 
-        Ok(materialize_extraction(extraction_id, extraction, &created_at))
+        Ok(materialize_extraction(
+            extraction_id,
+            extraction,
+            &created_at,
+        ))
     }
 
     pub fn insert_insight(&mut self, insight: &NewInsight) -> Result<Insight> {
@@ -1070,7 +1194,8 @@ fn validate_batch_capture_count(expected: i64, actual: usize) -> Result<()> {
     if expected != actual {
         return Err(anyhow!(
             "extraction batch capture_count {} does not match {} frame(s)",
-            expected, actual
+            expected,
+            actual
         ));
     }
 
@@ -1106,6 +1231,47 @@ fn map_extraction_row(row: &Row<'_>) -> rusqlite::Result<Extraction> {
         key_content: row.get("key_content")?,
         sentiment: parse_optional_enum_column::<Sentiment>(row.get("sentiment")?)?,
         created_at: parse_timestamp_column(row.get("created_at")?)?,
+    })
+}
+
+fn map_extraction_batch_row(row: &Row<'_>) -> rusqlite::Result<ExtractionBatch> {
+    Ok(ExtractionBatch {
+        id: parse_uuid_column(row.get("id")?)?,
+        batch_start: parse_timestamp_column(row.get("batch_start")?)?,
+        batch_end: parse_timestamp_column(row.get("batch_end")?)?,
+        capture_count: row.get("capture_count")?,
+        primary_activity: row.get("primary_activity")?,
+        project_context: row.get("project_context")?,
+        narrative: row.get("narrative")?,
+        raw_response: row.get("raw_response")?,
+        model_used: row.get("model_used")?,
+        tokens_used: row.get("tokens_used")?,
+        cost_cents: row.get("cost_cents")?,
+        created_at: parse_timestamp_column(row.get("created_at")?)?,
+    })
+}
+
+fn map_extraction_frame_detail_row(row: &Row<'_>) -> rusqlite::Result<ExtractionFrameDetail> {
+    Ok(ExtractionFrameDetail {
+        capture: map_capture_row(row)?,
+        extraction: Extraction {
+            id: row.get("frame_extraction_id")?,
+            capture_id: row.get("frame_extraction_capture_id")?,
+            batch_id: parse_uuid_column(row.get("frame_extraction_batch_id")?)?,
+            activity_type: parse_optional_enum_column::<ActivityType>(
+                row.get("frame_extraction_activity_type")?,
+            )?,
+            description: row.get("frame_extraction_description")?,
+            app_context: row.get("frame_extraction_app_context")?,
+            project: row.get("frame_extraction_project")?,
+            topics: parse_string_list_column(row.get("frame_extraction_topics")?)?,
+            people: parse_string_list_column(row.get("frame_extraction_people")?)?,
+            key_content: row.get("frame_extraction_key_content")?,
+            sentiment: parse_optional_enum_column::<Sentiment>(
+                row.get("frame_extraction_sentiment")?,
+            )?,
+            created_at: parse_timestamp_column(row.get("frame_extraction_created_at")?)?,
+        },
     })
 }
 

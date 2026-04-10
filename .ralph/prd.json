@@ -1,0 +1,533 @@
+{
+  "project": "screencap",
+  "branchName": "ralph/v1-implementation",
+  "description": "Screencap v1 — Lightweight Screen Memory for macOS. Full implementation from SPEC.md.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Cargo workspace skeleton and config parsing",
+      "description": "Set up the Rust project with Cargo.toml, dependencies, module structure, and TOML config parsing.",
+      "acceptanceCriteria": [
+        "Cargo.toml with dependencies: tokio, axum, clap, rusqlite, serde, serde_json, toml, anyhow, thiserror, chrono, uuid, reqwest, rust-embed, tracing, tracing-subscriber",
+        "src/main.rs with clap CLI skeleton (subcommands: start, stop, status, now, today, search, mcp, config, costs, prune, export)",
+        "src/config.rs parses ~/.screencap/config.toml matching SPEC.md config format with sensible defaults",
+        "Creates ~/.screencap/ directory structure on first run if it doesn't exist",
+        "Module stubs exist for capture/, pipeline/, ai/, storage/, api/, mcp/, export/",
+        "cargo check passes",
+        "cargo clippy passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "This is the foundation. Every other story depends on this."
+    },
+    {
+      "id": "US-002",
+      "title": "SQLite schema, migrations, and typed models",
+      "description": "Implement the storage layer with all tables from SPEC.md, FTS5 indexes, and Rust model structs.",
+      "acceptanceCriteria": [
+        "src/storage/db.rs creates screencap.db with all tables: captures, extractions, extraction_batches, insights",
+        "FTS5 virtual tables: search_index and insights_fts",
+        "All indexes from SPEC.md schema created",
+        "src/storage/models.rs has typed Rust structs for Capture, Extraction, ExtractionBatch, Insight",
+        "CRUD functions: insert_capture, get_captures_by_timerange, get_pending_captures, update_capture_status",
+        "CRUD functions: insert_extraction, insert_extraction_batch, insert_insight",
+        "FTS search function: search_extractions(query) returning ranked results",
+        "Unit tests for insert and query operations using in-memory SQLite",
+        "cargo test passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Reference SPEC.md Storage Layer section for exact schema."
+    },
+    {
+      "id": "US-003",
+      "title": "Swift bridge for ScreenCaptureKit screenshots",
+      "description": "Create the Swift bridge that captures screenshots from all displays using ScreenCaptureKit.",
+      "acceptanceCriteria": [
+        "swift/Sources/ScreenCapture.swift wraps SCShareableContent and SCScreenshotManager",
+        "C-callable function: capture_screenshot(display_id, output_path, quality) -> bool",
+        "C-callable function: get_display_count() -> i32",
+        "swift/Sources/bridge.h with C header declarations",
+        "build.rs or Makefile compiles Swift to a static library linkable from Rust",
+        "src/capture/screenshot.rs calls the Swift functions via FFI",
+        "Saves JPEG to specified path at configurable quality",
+        "cargo check passes (Swift library links correctly)"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "ScreenCaptureKit requires Screen Recording permission. The app must be in an .app bundle or have TCC approval for testing. Consider using the screencapture CLI command as a fallback for development."
+    },
+    {
+      "id": "US-004",
+      "title": "Swift bridge for active window metadata",
+      "description": "Create the Swift bridge that retrieves the current frontmost app name, window title, and bundle ID.",
+      "acceptanceCriteria": [
+        "swift/Sources/WindowInfo.swift uses NSWorkspace to get frontmost application info",
+        "C-callable function: get_active_window(out_app_name, out_window_title, out_bundle_id) -> bool",
+        "src/capture/window.rs calls the Swift function and returns a WindowInfo struct",
+        "WindowInfo struct has: app_name: String, window_title: String, bundle_id: String",
+        "Handles cases where window title is unavailable gracefully",
+        "cargo check passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "NSWorkspace.shared.frontmostApplication for the app, CGWindowListCopyWindowInfo for the window title."
+    },
+    {
+      "id": "US-005",
+      "title": "Timer-based capture loop with persistence",
+      "description": "Implement the core capture daemon loop: take a screenshot on a timer, grab window metadata, save JPEG, insert capture row.",
+      "acceptanceCriteria": [
+        "src/daemon.rs runs a tokio loop that captures on the configured idle_interval_secs",
+        "Each capture: takes screenshot, gets window metadata, saves JPEG to ~/.screencap/screenshots/YYYY/MM/DD/HHMMSS-{display_id}.jpg",
+        "Inserts capture row into SQLite with extraction_status='pending'",
+        "Respects excluded_apps and excluded_window_titles from config (skips capture if frontmost app is excluded)",
+        "Dedup: skips capture if app_name + window_title haven't changed since last capture AND less than idle_interval elapsed",
+        "Creates date-partitioned screenshot directories automatically",
+        "Logs captures via tracing",
+        "cargo check passes",
+        "cargo clippy passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Start with timer-only. Event-driven capture (CGEventTap) is a later enhancement."
+    },
+    {
+      "id": "US-006",
+      "title": "Daemon lifecycle: start, stop, status CLI commands",
+      "description": "Implement daemon process management so screencap can run in the background.",
+      "acceptanceCriteria": [
+        "screencap (no subcommand) starts the daemon in the foreground with capture loop + API server",
+        "screencap start daemonizes the process (or provides instructions for launchd)",
+        "screencap stop sends shutdown signal to running daemon",
+        "screencap status shows: running/stopped, PID, uptime, capture count today, storage usage",
+        "PID file written to ~/.screencap/screencap.pid for process management",
+        "Graceful shutdown on SIGTERM/SIGINT",
+        "cargo check passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "REST API: health, stats, and capture endpoints",
+      "description": "Stand up the axum HTTP server with basic read endpoints for captures and system info.",
+      "acceptanceCriteria": [
+        "Axum server starts on localhost:7878 as part of the daemon",
+        "GET /api/health returns 200 with {status: 'ok', uptime_secs: N}",
+        "GET /api/stats returns capture count, storage bytes, uptime, captures today",
+        "GET /api/captures?from=&to=&app=&limit=&offset= returns paginated captures",
+        "GET /api/captures/:id returns single capture with metadata",
+        "GET /api/screenshots/* serves JPEG files from the screenshots directory",
+        "GET /api/apps returns list of app names with capture counts",
+        "All endpoints return JSON with proper error handling",
+        "cargo check passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "LlmProvider trait and OpenAI-compatible client",
+      "description": "Implement the AI provider abstraction and the openai_compat client that covers OpenRouter, OpenAI, and LM Studio.",
+      "acceptanceCriteria": [
+        "src/ai/provider.rs defines LlmProvider trait with: complete(prompt, images) -> Result<String> and complete_text(prompt) -> Result<String>",
+        "src/ai/openai_compat.rs implements LlmProvider for OpenAI-compatible APIs",
+        "Supports sending images as base64 in the chat completions format",
+        "base_url configurable: defaults to OpenRouter (openrouter.ai/api/v1), OpenAI (api.openai.com/v1), LM Studio (localhost:1234/v1)",
+        "Reads API key from environment variable specified in config",
+        "Returns token usage counts from the API response",
+        "Error handling for rate limits, auth failures, network errors",
+        "Provider factory function: create_provider(config) -> Box<dyn LlmProvider>",
+        "cargo check passes",
+        "Unit test with mock HTTP server or at minimum compilation test"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "OpenRouter uses the same API format as OpenAI. The only difference is the base_url and model ID format (provider/model)."
+    },
+    {
+      "id": "US-009",
+      "title": "Extraction pipeline: batch pending captures and send to vision LLM",
+      "description": "Implement Layer 2: the scheduler that wakes up every N minutes, batches pending captures, sends screenshots to the vision LLM, and persists structured extraction results.",
+      "acceptanceCriteria": [
+        "src/pipeline/scheduler.rs runs extraction on the configured interval_secs",
+        "Queries pending captures from SQLite, batches up to max_images_per_batch",
+        "src/pipeline/prompts.rs contains the extraction prompt template from SPEC.md",
+        "src/pipeline/extraction.rs sends batch of screenshots + window metadata to the vision LLM via LlmProvider",
+        "Parses the JSON response into typed ExtractionResult structs",
+        "Persists: extraction rows per frame, extraction_batch row with narrative and cost",
+        "Updates capture rows to extraction_status='processed'",
+        "On LLM failure: marks captures as 'failed', logs error, continues to next batch",
+        "Updates FTS search_index with extraction content",
+        "Tracks token usage and cost in extraction_batches table",
+        "cargo check passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Reference SPEC.md Layer 2 section for the exact extraction prompt and JSON format."
+    },
+    {
+      "id": "US-010",
+      "title": "Synthesis pipeline: rolling context generation",
+      "description": "Implement the rolling context synthesis that runs every 30 minutes and answers 'what am I doing right now?'",
+      "acceptanceCriteria": [
+        "src/pipeline/synthesis.rs generates rolling context from the last 30 min of extractions",
+        "src/pipeline/prompts.rs contains the rolling context prompt template",
+        "Sends extraction batch summaries + frame data to the synthesis LLM (text-only, no images)",
+        "Parses response into the rolling context JSON format from SPEC.md",
+        "Persists as an insight row with type='rolling'",
+        "Scheduler triggers this on the configured rolling_interval_secs",
+        "Tracks token usage and cost",
+        "cargo check passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Synthesis pipeline: hourly digest generation",
+      "description": "Implement hourly digest synthesis that summarizes each hour of activity.",
+      "acceptanceCriteria": [
+        "Synthesis module generates hourly digest from the last hour of extraction batches",
+        "Prompt template produces the hourly JSON format from SPEC.md (projects, topics, people, key_moments, focus_score, narrative)",
+        "Persists as an insight row with type='hourly'",
+        "Runs at the top of each hour (or close to it)",
+        "Skips hours with no extractions",
+        "Tracks token usage and cost",
+        "cargo check passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Synthesis pipeline: daily summary generation",
+      "description": "Implement end-of-day summary synthesis from hourly digests.",
+      "acceptanceCriteria": [
+        "Synthesis module generates daily summary from all hourly digests for the day",
+        "Prompt template produces the daily JSON format from SPEC.md (projects, time_allocation, focus_blocks, open_threads, narrative)",
+        "Persists as an insight row with type='daily'",
+        "Triggers at the configured daily_summary_time",
+        "Also triggerable on-demand via CLI (screencap today)",
+        "Tracks token usage and cost",
+        "cargo check passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "REST API: insights and search endpoints",
+      "description": "Add the insights and search endpoints to the API server.",
+      "acceptanceCriteria": [
+        "GET /api/insights/current returns the latest rolling context insight",
+        "GET /api/insights/hourly?date= returns all hourly digests for a day",
+        "GET /api/insights/daily?date= returns the daily summary",
+        "GET /api/insights/daily?from=&to= returns a range of daily summaries",
+        "GET /api/insights/projects?from=&to= returns project time allocation aggregated from extractions",
+        "GET /api/insights/topics?from=&to= returns topic frequency from extractions",
+        "GET /api/search?q=&app=&project=&from=&to=&limit= does FTS search across extractions",
+        "All endpoints return proper JSON with pagination where applicable",
+        "cargo check passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "CLI read commands: now, today, yesterday, week, search, projects, costs",
+      "description": "Implement the CLI commands that read from the database and display results.",
+      "acceptanceCriteria": [
+        "screencap now prints the latest rolling context summary to stdout",
+        "screencap today prints today's daily summary (generates on-demand if not yet created)",
+        "screencap yesterday prints yesterday's daily summary",
+        "screencap week prints this week's daily summaries",
+        "screencap search 'query' --project X --app Y --last 24h does FTS search and prints results",
+        "screencap projects [--last 7d] shows project time allocation",
+        "screencap costs shows AI API cost breakdown (total, by day, by pipeline stage)",
+        "Output is formatted nicely for terminal (colors via tracing or similar)",
+        "cargo check passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Svelte web UI: project setup and app shell",
+      "description": "Set up the Svelte project with routing, the app shell layout, and embed it in the Rust binary.",
+      "acceptanceCriteria": [
+        "web/ directory with Svelte project (vite + svelte)",
+        "App shell with navigation: Timeline, Insights, Search, Stats tabs",
+        "Client-side routing between the four views (svelte-spa-router or similar)",
+        "Shared API client module that talks to localhost:7878/api/*",
+        "npm run build produces static files in web/dist/",
+        "Rust binary embeds web/dist/ via rust-embed and serves at GET /",
+        "Fallback to index.html for SPA routing",
+        "Opening localhost:7878 in a browser shows the app shell with navigation",
+        "cargo check passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "Keep the UI clean and minimal. No heavy component libraries."
+    },
+    {
+      "id": "US-016",
+      "title": "Svelte web UI: Timeline view",
+      "description": "Build the timeline view showing captures grouped by hour with screenshots and extraction data.",
+      "acceptanceCriteria": [
+        "Timeline view shows today's captures grouped by hour",
+        "Each capture shows: thumbnail, app name, extraction description, timestamp",
+        "Click a capture to expand: full screenshot, full extraction data, key_content, topics",
+        "Date picker to navigate to different days",
+        "Filter by app name",
+        "Filter by activity type (coding, browsing, communication, etc.)",
+        "Loading states and empty states handled",
+        "Verify in browser at localhost:7878"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Svelte web UI: Insights view",
+      "description": "Build the insights view showing rolling context, hourly digests, and daily summary.",
+      "acceptanceCriteria": [
+        "Current rolling context card at the top with current_focus, active_project, apps_used",
+        "Hourly digest cards for the day, expandable to show projects, topics, key_moments",
+        "Daily summary section with project breakdown and time allocation",
+        "Focus blocks visualization (colored segments showing deep-focus periods)",
+        "Open threads section",
+        "Loading states and empty states handled",
+        "Verify in browser at localhost:7878"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Svelte web UI: Search view",
+      "description": "Build the search view with full-text search across extractions.",
+      "acceptanceCriteria": [
+        "Search bar with query input",
+        "Filter controls: app, project, date range, activity type",
+        "Search results show: screenshot thumbnail, extraction description, project, topics, timestamp",
+        "Click result to expand full details",
+        "Pagination or infinite scroll for results",
+        "Loading and no-results states",
+        "Verify in browser at localhost:7878"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Svelte web UI: Stats view",
+      "description": "Build the stats/analytics view with charts and usage data.",
+      "acceptanceCriteria": [
+        "Time per project bar chart (using Chart.js or similar lightweight library)",
+        "Time per app pie/donut chart",
+        "Activity type breakdown chart",
+        "Daily active hours heatmap (GitHub-contribution style)",
+        "Date range selector for all charts",
+        "Cost tracking section: tokens used, cost per day/month, breakdown by extraction vs synthesis",
+        "Capture count and storage usage stats",
+        "Verify in browser at localhost:7878"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "MCP server with stdio transport",
+      "description": "Implement the MCP server so Claude/Cursor can query screen history.",
+      "acceptanceCriteria": [
+        "screencap mcp starts an MCP server using stdio transport",
+        "Tool: get_current_context returns latest rolling context",
+        "Tool: search_screen_history with params (query, from, to, app, limit)",
+        "Tool: get_recent_activity with param (minutes) returns recent extractions",
+        "Tool: get_screenshot with param (id) returns base64-encoded JPEG",
+        "Tool: get_daily_summary with param (date)",
+        "Tool: get_project_activity with params (project, from, to)",
+        "Tool: get_app_usage with params (from, to)",
+        "Proper JSON-RPC message handling over stdio",
+        "Registrable via: claude mcp add screencap -- screencap mcp",
+        "cargo check passes"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": "Use the rmcp crate or implement the MCP protocol manually over stdio."
+    },
+    {
+      "id": "US-021",
+      "title": "Markdown export and daily log files",
+      "description": "Implement markdown export of daily summaries, optionally syncing to Obsidian.",
+      "acceptanceCriteria": [
+        "src/export/markdown.rs generates markdown from a daily insight matching SPEC.md export format",
+        "screencap export --date YYYY-MM-DD writes markdown to stdout or --output path",
+        "screencap export --last 7d exports a range",
+        "If daily_export_markdown=true in config, auto-exports after daily summary generation",
+        "Writes to daily_export_path from config (default ~/.screencap/daily/YYYY-MM-DD.md)",
+        "If obsidian_vault is configured, copies to that path too",
+        "cargo check passes"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": "Reference SPEC.md Markdown Export Format section for the exact template."
+    },
+    {
+      "id": "US-022",
+      "title": "Pruning, retention, and storage management",
+      "description": "Implement auto-pruning of old captures and the prune CLI command.",
+      "acceptanceCriteria": [
+        "screencap prune --older-than 90d deletes captures, extractions, insights, and screenshot files older than the threshold",
+        "Auto-prune runs on daemon startup if max_age_days is configured",
+        "Deletes both SQLite rows and corresponding JPEG files",
+        "Logs what was deleted and bytes reclaimed",
+        "Does NOT delete insights of type='daily' (they're cheap to keep as historical record)",
+        "cargo check passes"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Swift menu bar app",
+      "description": "Build the lightweight Swift menu bar app that manages the Rust daemon.",
+      "acceptanceCriteria": [
+        "menubar/ contains a Swift package or Xcode project",
+        "Shows a status icon in the macOS menu bar (green dot = running, red = stopped)",
+        "Dropdown menu: Start Capture, Stop Capture, Open Timeline (opens localhost:7878), Open Data Folder, Quit",
+        "Launches the screencap daemon as a child process",
+        "Stops the daemon on quit",
+        "Builds with swift build or xcodebuild"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": "Keep this minimal. ~200 lines of Swift. No storyboards, just programmatic SwiftUI menu bar."
+    },
+    {
+      "id": "US-024",
+      "title": "Semantic search endpoint with LLM",
+      "description": "Implement the AI-powered semantic search that sends queries to an LLM with context.",
+      "acceptanceCriteria": [
+        "GET /api/search/semantic?q=&from=&to=&limit= sends the query + recent extraction summaries to the synthesis LLM",
+        "LLM identifies which extractions are most relevant to the natural language query",
+        "Returns ranked results with relevance explanation",
+        "screencap ask 'what was I doing between 2-4pm?' uses this endpoint",
+        "Tracks token usage and cost",
+        "cargo check passes"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Event-driven capture via CGEventTap",
+      "description": "Add event-driven capture on top of the timer fallback: capture on app switch, keyboard bursts, significant mouse activity.",
+      "acceptanceCriteria": [
+        "src/capture/events.rs sets up a CGEventTap listener",
+        "Triggers capture on: app switch events, keyboard activity bursts (>5 keys in 2 sec after idle), significant mouse movement after idle",
+        "500ms settle time after event before capturing",
+        "Still respects dedup: won't re-capture if context hasn't changed",
+        "Timer fallback continues to run alongside event triggers",
+        "Does not require accessibility permission (uses CGEventTap which needs Screen Recording only)",
+        "cargo check passes"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": "This is an enhancement on top of the timer-based capture. The system must work without it."
+    },
+    {
+      "id": "US-026",
+      "title": "Anthropic native provider",
+      "description": "Add direct Anthropic Messages API support as an alternative to going through OpenRouter.",
+      "acceptanceCriteria": [
+        "src/ai/anthropic.rs implements LlmProvider using the Anthropic Messages API",
+        "Supports sending images in the Anthropic vision format",
+        "Configurable via provider='anthropic' in config",
+        "Returns token usage from response",
+        "cargo check passes"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Google Gemini native provider",
+      "description": "Add direct Gemini API support as an alternative to going through OpenRouter.",
+      "acceptanceCriteria": [
+        "src/ai/google.rs implements LlmProvider using the Gemini generateContent API",
+        "Supports sending images in Gemini's inline_data format",
+        "Configurable via provider='google' in config",
+        "Returns token usage from response",
+        "cargo check passes"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Ollama local provider",
+      "description": "Add Ollama support for fully local, free AI processing.",
+      "acceptanceCriteria": [
+        "src/ai/ollama.rs implements LlmProvider using Ollama's /api/chat endpoint",
+        "Supports sending images for vision models (LLaVA, etc.)",
+        "Configurable via provider='ollama' in config",
+        "Defaults to localhost:11434",
+        "Handles the case where Ollama is not running gracefully",
+        "cargo check passes"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Launchd integration for auto-start",
+      "description": "Generate and manage a launchd plist so screencap starts automatically on login.",
+      "acceptanceCriteria": [
+        "screencap start --install generates ~/Library/LaunchAgents/dev.screencap.daemon.plist",
+        "Plist configured to keep alive and restart on crash",
+        "screencap stop --uninstall removes the plist",
+        "screencap status shows whether launchd agent is installed",
+        "cargo check passes"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-030",
+      "title": "End-to-end integration test and hardening",
+      "description": "Write integration tests that exercise the full pipeline: capture -> extraction -> synthesis -> API -> search.",
+      "acceptanceCriteria": [
+        "Integration test that inserts mock captures, runs extraction with a mock provider, runs synthesis, and queries via API",
+        "Test that FTS search returns expected results",
+        "Test that insights endpoints return correct data shapes",
+        "Test that pruning correctly removes old data",
+        "Test that config defaults work when no config file exists",
+        "Error handling for all edge cases: empty database, no API key, provider unreachable",
+        "All cargo test passes"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": "Use mock LLM providers that return canned responses for testing."
+    }
+  ]
+}

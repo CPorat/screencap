@@ -1,17 +1,27 @@
 use std::{
     env, fs,
-    io::ErrorKind,
-    path::PathBuf,
+    io::{ErrorKind, Write},
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
+    process::{self, Child, Command, Stdio},
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use tokio::time;
+use serde::{Deserialize, Serialize};
+use tokio::{
+    sync::watch,
+    time::{self, MissedTickBehavior},
+};
 use tracing::{debug, error, info};
 
 use crate::{
-    capture::{screenshot, window::{self, WindowInfo}},
+    api,
+    capture::{
+        screenshot,
+        window::{self, WindowInfo},
+    },
     config::AppConfig,
     storage::{
         db::StorageDb,
@@ -19,24 +29,383 @@ use crate::{
     },
 };
 
+const INTERNAL_DAEMON_SUBCOMMAND: &str = "__daemon-child";
+const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonState {
+    Running,
+    Stopped,
+}
+
+impl DaemonState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonStatus {
+    pub state: DaemonState,
+    pub pid: Option<u32>,
+    pub uptime_secs: u64,
+    pub captures_today: u64,
+    pub storage_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PidRecord {
+    pid: u32,
+    started_at: DateTime<Utc>,
+}
+
+#[derive(Debug)]
+struct PidFileGuard {
+    path: PathBuf,
+    record: PidRecord,
+}
+
+impl PidFileGuard {
+    fn acquire(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create daemon pid directory at {}", parent.display())
+            })?;
+        }
+
+        for _ in 0..2 {
+            if let Some(active) = load_live_pid_record(&path)? {
+                bail!("daemon is already running with pid {}", active.pid);
+            }
+
+            let record = PidRecord {
+                pid: process::id(),
+                started_at: Utc::now(),
+            };
+            let serialized = toml::to_string(&record).context("failed to serialize pid record")?;
+
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    file.write_all(serialized.as_bytes())
+                        .with_context(|| format!("failed to write pid file at {}", path.display()))?;
+                    file.sync_all().with_context(|| {
+                        format!("failed to flush pid file at {}", path.display())
+                    })?;
+                    return Ok(Self { path, record });
+                }
+                Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("failed to create pid file at {}", path.display()))
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "failed to acquire daemon pid file at {}",
+            path.display()
+        ))
+    }
+}
+
+impl Drop for PidFileGuard {
+    fn drop(&mut self) {
+        let _ = remove_pid_file_if_matches(&self.path, &self.record);
+    }
+}
+
 pub async fn run_foreground(config: &AppConfig) -> Result<()> {
     let home = runtime_home_dir()?;
-    let mut capture_loop = CaptureLoop::open(config.clone(), home)?;
-    let mut interval = time::interval(Duration::from_secs(config.capture.idle_interval_secs));
+    run_foreground_at_home(config, &home).await
+}
+
+pub async fn start_background(config: &AppConfig) -> Result<u32> {
+    let home = runtime_home_dir()?;
+    start_background_at_home(config, &home).await
+}
+
+pub async fn stop(config: &AppConfig) -> Result<u32> {
+    let home = runtime_home_dir()?;
+    stop_at_home(config, &home).await
+}
+
+pub fn status(config: &AppConfig) -> Result<DaemonStatus> {
+    let home = runtime_home_dir()?;
+    status_at_home(config, &home)
+}
+
+async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
+    let capture_loop = CaptureLoop::open(config.clone(), home.to_path_buf())?;
+    let listener = api::server::bind(config).await?;
+    let _pid_guard = PidFileGuard::acquire(AppConfig::pid_file_path(home))?;
 
     info!(
         idle_interval_secs = config.capture.idle_interval_secs,
         jpeg_quality = config.capture.jpeg_quality,
+        port = config.server.port,
         "capture loop started"
     );
 
-    loop {
-        interval.tick().await;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut capture_task = tokio::spawn(run_capture_loop(
+        capture_loop,
+        config.capture.idle_interval_secs,
+        shutdown_rx.clone(),
+    ));
+    let mut server_task = tokio::spawn(api::server::serve(listener, shutdown_rx));
 
-        if let Err(err) = capture_loop.capture_once() {
-            error!(error = %err, "capture cycle failed");
+    tokio::select! {
+        result = shutdown_signal() => {
+            result?;
+            info!("shutdown signal received");
+            let _ = shutdown_tx.send(true);
+            capture_task.await.context("capture loop task panicked")??;
+            server_task.await.context("api server task panicked")??;
+            Ok(())
+        }
+        result = &mut capture_task => {
+            let _ = shutdown_tx.send(true);
+            let capture_result = result.context("capture loop task panicked")?;
+            server_task.await.context("api server task panicked")??;
+            match capture_result {
+                Ok(()) => Err(anyhow!("capture loop exited before shutdown signal")),
+                Err(err) => Err(err),
+            }
+        }
+        result = &mut server_task => {
+            let _ = shutdown_tx.send(true);
+            let server_result = result.context("api server task panicked")?;
+            capture_task.await.context("capture loop task panicked")??;
+            match server_result {
+                Ok(()) => Err(anyhow!("api server exited before shutdown signal")),
+                Err(err) => Err(err),
+            }
         }
     }
+}
+
+async fn run_capture_loop(
+    mut capture_loop: CaptureLoop,
+    idle_interval_secs: u64,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let mut interval = time::interval(Duration::from_secs(idle_interval_secs));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if let Err(err) = capture_loop.capture_once() {
+                    error!(error = %err, "capture cycle failed");
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+async fn start_background_at_home(_config: &AppConfig, home: &Path) -> Result<u32> {
+    let pid_path = AppConfig::pid_file_path(home);
+    if let Some(active) = load_live_pid_record(&pid_path)? {
+        bail!("daemon is already running with pid {}", active.pid);
+    }
+
+    let executable = env::current_exe().context("failed to resolve current executable")?;
+    let mut child = Command::new(executable);
+    child
+        .arg(INTERNAL_DAEMON_SUBCOMMAND)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    unsafe {
+        child.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            Ok(())
+        });
+    }
+
+    let mut child = child.spawn().context("failed to spawn background daemon")?;
+    wait_for_background_start(&mut child, &pid_path).await
+}
+
+async fn stop_at_home(_config: &AppConfig, home: &Path) -> Result<u32> {
+    let pid_path = AppConfig::pid_file_path(home);
+    let Some(active) = load_live_pid_record(&pid_path)? else {
+        bail!("daemon is not running");
+    };
+
+    send_signal(active.pid, libc::SIGTERM)?;
+    wait_for_process_exit(&active, &pid_path).await?;
+    Ok(active.pid)
+}
+
+fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
+    let pid_path = AppConfig::pid_file_path(home);
+    let active = load_live_pid_record(&pid_path)?;
+    let captures_today = count_captures_today(config, home)?;
+    let storage_bytes = directory_size(&config.storage_root(home))?;
+    let uptime_secs = active
+        .as_ref()
+        .map(|record| {
+            let elapsed = Utc::now().signed_duration_since(record.started_at);
+            u64::try_from(elapsed.num_seconds().max(0)).unwrap_or(0)
+        })
+        .unwrap_or(0);
+
+    Ok(DaemonStatus {
+        state: if active.is_some() {
+            DaemonState::Running
+        } else {
+            DaemonState::Stopped
+        },
+        pid: active.as_ref().map(|record| record.pid),
+        uptime_secs,
+        captures_today,
+        storage_bytes,
+    })
+}
+
+async fn wait_for_background_start(child: &mut Child, pid_path: &Path) -> Result<u32> {
+    let deadline = time::Instant::now() + PID_WAIT_TIMEOUT;
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("failed to poll background daemon child")?
+        {
+            bail!("background daemon exited before startup completed: {status}");
+        }
+
+        if let Some(active) = load_live_pid_record(pid_path)? {
+            return Ok(active.pid);
+        }
+
+        if time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("timed out waiting for background daemon startup");
+        }
+
+        time::sleep(PID_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_process_exit(record: &PidRecord, pid_path: &Path) -> Result<()> {
+    let deadline = time::Instant::now() + STOP_TIMEOUT;
+
+    loop {
+        match read_pid_record(pid_path)? {
+            None => return Ok(()),
+            Some(current) if current != *record => return Ok(()),
+            Some(_) => {}
+        }
+
+        if !process_exists(record.pid)? {
+            remove_pid_file_if_matches(pid_path, record)?;
+            return Ok(());
+        }
+
+        if time::Instant::now() >= deadline {
+            bail!("timed out waiting for daemon process {} to exit", record.pid);
+        }
+
+        time::sleep(PID_POLL_INTERVAL).await;
+    }
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .context("failed to register SIGTERM handler")?;
+
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.context("failed to listen for SIGINT")?;
+            }
+            _ = terminate.recv() => {}
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .context("failed to listen for shutdown signal")
+    }
+}
+
+fn count_captures_today(config: &AppConfig, home: &Path) -> Result<u64> {
+    let db_path = config.storage_root(home).join("screencap.db");
+    if !db_path.exists() {
+        return Ok(0);
+    }
+
+    let db = StorageDb::open_at_path(&db_path)
+        .with_context(|| format!("failed to open capture database at {}", db_path.display()))?;
+    let day_start = Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight should be representable")
+        .and_utc();
+    let day_end = day_start + ChronoDuration::days(1);
+
+    db.count_captures_in_window(day_start, day_end)
+}
+
+fn directory_size(path: &Path) -> Result<u64> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err).with_context(|| format!("failed to stat {}", path.display())),
+    };
+
+    if metadata.file_type().is_symlink() {
+        return Ok(0);
+    }
+
+    if metadata.is_file() {
+        return Ok(metadata.len());
+    }
+
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut total = 0_u64;
+    for entry in fs::read_dir(path)
+        .with_context(|| format!("failed to read directory {}", path.display()))?
+    {
+        let entry = entry
+            .with_context(|| format!("failed to enumerate directory {}", path.display()))?;
+        total = total
+            .checked_add(directory_size(&entry.path())?)
+            .ok_or_else(|| anyhow!("storage usage overflowed u64"))?;
+    }
+
+    Ok(total)
 }
 
 fn runtime_home_dir() -> Result<PathBuf> {
@@ -44,6 +413,73 @@ fn runtime_home_dir() -> Result<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME environment variable is not set"))
+}
+
+fn read_pid_record(path: &Path) -> Result<Option<PidRecord>> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("failed to read pid file at {}", path.display())),
+    };
+
+    toml::from_str(&raw)
+        .with_context(|| format!("failed to parse pid file at {}", path.display()))
+        .map(Some)
+}
+
+fn load_live_pid_record(path: &Path) -> Result<Option<PidRecord>> {
+    let Some(record) = read_pid_record(path)? else {
+        return Ok(None);
+    };
+
+    if process_exists(record.pid)? {
+        return Ok(Some(record));
+    }
+
+    remove_pid_file_if_matches(path, &record)?;
+    Ok(None)
+}
+
+fn remove_pid_file_if_matches(path: &Path, record: &PidRecord) -> Result<()> {
+    let Some(existing) = read_pid_record(path)? else {
+        return Ok(());
+    };
+
+    if existing != *record {
+        return Ok(());
+    }
+
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("failed to remove pid file at {}", path.display())),
+    }
+}
+
+fn process_exists(pid: u32) -> Result<bool> {
+    let pid = i32::try_from(pid).context("pid exceeds supported range")?;
+    let result = unsafe { libc::kill(pid, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(code) if code == libc::ESRCH => Ok(false),
+        Some(code) if code == libc::EPERM => Ok(true),
+        _ => Err(err).with_context(|| format!("failed to probe daemon process {pid}")),
+    }
+}
+
+fn send_signal(pid: u32, signal: i32) -> Result<()> {
+    let pid = i32::try_from(pid).context("pid exceeds supported range")?;
+    let result = unsafe { libc::kill(pid, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    Err(std::io::Error::last_os_error())
+        .with_context(|| format!("failed to signal daemon process {pid}"))
 }
 
 #[derive(Debug)]
@@ -240,7 +676,7 @@ mod tests {
     use anyhow::Result;
     use chrono::TimeZone;
 
-    use super::{CaptureCycleOutcome, CaptureLoop};
+    use super::{status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord};
     use crate::config::AppConfig;
 
     fn temp_home_root(name: &str) -> PathBuf {
@@ -341,6 +777,28 @@ mod tests {
         assert_eq!(captures[0].extraction_status.as_str(), "pending");
 
         drop(capture_loop);
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[test]
+    fn status_removes_stale_pid_file() -> Result<()> {
+        let home = temp_home_root("stale-pid");
+        let config = test_config(&home);
+        let pid_path = AppConfig::pid_file_path(&home);
+        let stale_pid = PidRecord {
+            pid: 999_999,
+            started_at: chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap(),
+        };
+
+        fs::create_dir_all(pid_path.parent().unwrap())?;
+        fs::write(&pid_path, toml::to_string(&stale_pid)?)?;
+
+        let status = status_at_home(&config, &home)?;
+        assert_eq!(status.state, DaemonState::Stopped);
+        assert_eq!(status.pid, None);
+        assert!(!pid_path.exists());
+
         fs::remove_dir_all(&home)?;
         Ok(())
     }

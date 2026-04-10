@@ -10,6 +10,7 @@ Branch: ralph/v1-implementation
 - When the Swift bridge spans multiple source files, build the archive directly with `swiftc -emit-library -static` over all `swift/Sources/*.swift` inputs; `-emit-object -o` only works for a single Swift source.
 - When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
+- Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
 
 
 ---
@@ -63,4 +64,15 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Dedup should read from the latest persisted capture rather than only in-memory loop state so restarts preserve the same skip behavior.
   - Multi-display capture is one logical event; write its JPEGs first, then persist all corresponding capture rows in one transaction, cleaning up the files if persistence fails.
+---
+
+## 2026-04-10 20:53:00 UTC - US-006
+- Implemented daemon lifecycle management: foreground runs now bind the localhost API listener, acquire a managed PID file, respond to SIGTERM/SIGINT, and background starts detach via `setsid` before spawning the internal daemon child.
+- Added `start`, `stop`, and `status` CLI behavior with process liveness checks, stale PID cleanup, uptime/reporting output, and storage/capture metrics backed by SQLite plus filesystem traversal.
+- Added minimal API server bootstrapping on `127.0.0.1:<port>` so the daemon now owns both the capture loop and HTTP listener before declaring startup complete.
+- Added mock-capture coverage for stale PID cleanup and end-to-end CLI lifecycle tests covering both background and foreground daemon shutdown flows with per-test server ports.
+- Files changed: AGENTS.md, Cargo.toml, src/api/routes.rs, src/api/server.rs, src/config.rs, src/daemon.rs, src/main.rs, src/storage/db.rs, tests/daemon_cli.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - PID files are more reliable if they store both `pid` and `started_at`; status/stop can then distinguish live daemons from stale on-disk state and recover automatically after crashes.
+  - For lifecycle tests, foreground daemons are best verified through the real CLI `stop` path instead of ad hoc signals so shutdown behavior and PID-file cleanup stay covered together.
 ---

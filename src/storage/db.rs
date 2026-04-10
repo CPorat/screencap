@@ -225,6 +225,25 @@ impl StorageDb {
         Ok(captures)
     }
 
+    pub fn count_captures_in_window(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM captures
+                 WHERE timestamp >= ?1 AND timestamp < ?2",
+                params![format_db_timestamp(&start), format_db_timestamp(&end)],
+                |row| row.get(0),
+            )
+            .context("failed to count captures in time window")?;
+
+        u64::try_from(count).context("capture count overflowed u64")
+    }
+
     pub fn get_pending_captures(&self) -> Result<Vec<Capture>> {
         let mut stmt = self
             .conn
@@ -925,6 +944,16 @@ mod tests {
             .get_pending_captures()
             .expect("pending query should work");
         assert_eq!(pending.len(), 2);
+
+        let count = db
+            .count_captures_in_window(first_time, second_time)
+            .expect("half-open capture count query should work");
+        assert_eq!(count, 1);
+
+        let count = db
+            .count_captures_in_window(first_time, second_time + chrono::Duration::seconds(1))
+            .expect("inclusive-by-next-second capture count query should work");
+        assert_eq!(count, 2);
 
         let batch = db
             .insert_extraction_batch(&NewExtractionBatch {

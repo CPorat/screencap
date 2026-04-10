@@ -29,6 +29,10 @@ impl AppConfig {
         Ok(default_app_root(&home).join("config.toml"))
     }
 
+    pub fn pid_file_path(home: &Path) -> PathBuf {
+        default_app_root(home).join("screencap.pid")
+    }
+
     pub fn load_from_root_and_home(root: impl AsRef<Path>, home: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref();
         let home = home.as_ref();

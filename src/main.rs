@@ -17,6 +17,8 @@ enum Command {
     Start,
     Stop,
     Status,
+    #[command(name = "__daemon-child", hide = true)]
+    DaemonChild,
     Now,
     Today,
     Search(SearchArgs),
@@ -60,7 +62,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        None => {
+        None | Some(Command::DaemonChild) => {
             let config = AppConfig::load()?;
             daemon::run_foreground(&config).await?;
         }
@@ -71,6 +73,20 @@ async fn main() -> Result<()> {
                 AppConfig::default_config_path()?.display()
             )),
         ),
+        Some(Command::Start) => {
+            let config = AppConfig::load()?;
+            let pid = daemon::start_background(&config).await?;
+            println!("started daemon pid {pid}");
+        }
+        Some(Command::Stop) => {
+            let config = AppConfig::load()?;
+            let pid = daemon::stop(&config).await?;
+            println!("stopped daemon pid {pid}");
+        }
+        Some(Command::Status) => {
+            let config = AppConfig::load()?;
+            print_daemon_status(&daemon::status(&config)?);
+        }
         Some(command) => {
             let _config = AppConfig::load()?;
             handle_scaffolded_command(command);
@@ -89,6 +105,19 @@ fn init_tracing() {
         .try_init();
 }
 
+fn print_daemon_status(status: &daemon::DaemonStatus) {
+    println!("state: {}", status.state.as_str());
+    println!(
+        "pid: {}",
+        status
+            .pid
+            .map_or_else(|| "-".to_string(), |pid| pid.to_string())
+    );
+    println!("uptime_secs: {}", status.uptime_secs);
+    println!("captures_today: {}", status.captures_today);
+    println!("storage_bytes: {}", status.storage_bytes);
+}
+
 fn emit_placeholder(command: &str, details: Option<String>) {
     match details {
         Some(details) => println!("{command} is scaffolded but not implemented yet ({details})"),
@@ -98,9 +127,6 @@ fn emit_placeholder(command: &str, details: Option<String>) {
 
 fn handle_scaffolded_command(command: Command) {
     match command {
-        Command::Start => emit_placeholder("start", Some("background daemon start".into())),
-        Command::Stop => emit_placeholder("stop", None),
-        Command::Status => emit_placeholder("status", None),
         Command::Now => emit_placeholder("now", None),
         Command::Today => emit_placeholder("today", None),
         Command::Search(args) => emit_placeholder(
@@ -111,7 +137,6 @@ fn handle_scaffolded_command(command: Command) {
             )),
         ),
         Command::Mcp => emit_placeholder("mcp", None),
-        Command::Config => unreachable!("config is handled before config loading"),
         Command::Costs => emit_placeholder("costs", None),
         Command::Prune(args) => {
             emit_placeholder("prune", Some(format!("older_than={}", args.older_than)))
@@ -123,5 +148,10 @@ fn handle_scaffolded_command(command: Command) {
                 args.date, args.last, args.format, args.output
             )),
         ),
+        Command::Start
+        | Command::Stop
+        | Command::Status
+        | Command::DaemonChild
+        | Command::Config => unreachable!("handled before scaffolding dispatch"),
     }
 }

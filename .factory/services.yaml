@@ -1,0 +1,22 @@
+commands:
+  install: |
+    sh -c 'set -e; if [ -f Cargo.toml ]; then cargo fetch; else echo "Skipping cargo fetch: no Cargo.toml yet"; fi; if [ -f web/package.json ]; then npm --prefix web install; else echo "Skipping npm install: no web/package.json yet"; fi'
+  typecheck: |
+    sh -c 'set -e; if [ -f Cargo.toml ]; then cargo check --workspace --all-targets; else echo "Skipping cargo check: no Cargo.toml yet"; fi; if [ -f web/package.json ]; then npm --prefix web run check; else echo "Skipping web check: no web/package.json yet"; fi'
+  build: |
+    sh -c 'set -e; if [ -f Cargo.toml ]; then cargo build --workspace; else echo "Skipping cargo build: no Cargo.toml yet"; fi; if [ -f web/package.json ]; then npm --prefix web run build; else echo "Skipping web build: no web/package.json yet"; fi'
+  test: |
+    sh -c 'set -e; if [ -f Cargo.toml ]; then cargo test --workspace -- --test-threads=5; else echo "Skipping cargo test: no Cargo.toml yet"; fi; if [ -f web/package.json ]; then npm --prefix web run test -- --runInBand; else echo "Skipping web tests: no web/package.json yet"; fi'
+  lint: |
+    sh -c 'set -e; if [ -f Cargo.toml ]; then cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings; else echo "Skipping Rust lint: no Cargo.toml yet"; fi; if [ -f web/package.json ]; then npm --prefix web run lint; else echo "Skipping web lint: no web/package.json yet"; fi'
+
+services:
+  daemon:
+    start: |
+      sh -c 'PORT=7878 cargo run --bin screencap --'
+    stop: |
+      sh -c 'pids=$(lsof -ti tcp:7878); if [ -n "$pids" ]; then kill $pids; fi'
+    healthcheck: |
+      sh -c 'curl -sf http://localhost:7878/api/health >/dev/null'
+    port: 7878
+    depends_on: []

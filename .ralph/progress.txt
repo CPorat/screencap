@@ -1,0 +1,5 @@
+# Ralph Progress Log
+Started: 2026-04-10
+Project: Screencap v1
+Branch: ralph/v1-implementation
+---

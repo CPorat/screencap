@@ -13,6 +13,8 @@ Branch: ralph/v1-implementation
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
+- OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
+
 
 
 
@@ -87,4 +89,14 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Read-only API endpoints should open SQLite read-only and return empty/404 responses without creating runtime state on disk.
   - Screenshot file serving should treat stored paths as untrusted input: sanitize them to relative components and walk the tree with no-follow opens so symlinks cannot escape the screenshots root.
+---
+## 2026-04-10 22:20:31 UTC - US-008
+- Implemented the shared AI provider contract in `src/ai/provider.rs`, including provider config normalization, environment-based API key loading, default OpenAI-compatible base URL resolution, and a factory that routes OpenRouter/OpenAI/LM Studio through one client.
+- Added `src/ai/openai_compat.rs` with an OpenAI chat-completions client that sends base64 JPEGs as data URLs, parses assistant text plus token-usage metadata, and classifies auth/rate-limit/network failures without inventing usage for providers that omit it.
+- Added `src/ai/mock.rs` for reusable canned LLM responses and request recording, then covered the new provider stack with unit/integration tests for factory construction, base URL defaults, image payload encoding, usage parsing, and mock responses.
+- Files changed: AGENTS.md, Cargo.toml, src/ai/mod.rs, src/ai/mock.rs, src/ai/openai_compat.rs, src/ai/provider.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Keep token usage optional at the provider boundary; LM Studio-style local backends may not report usage, and coercing that to zero would lie to downstream cost tracking.
+  - Resolve provider defaults such as `base_url` centrally in the provider layer so extraction and synthesis callers only pass config, not duplicated URL selection logic.
+  - A reusable mock provider should record prompts and queued responses, so future pipeline tests can assert both the request shape and the parsed output without live network calls.
 ---

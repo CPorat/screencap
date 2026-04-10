@@ -190,7 +190,7 @@
         "cargo test passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "OpenRouter uses the same API format as OpenAI. The only difference is the base_url and model ID format (provider/model).",
       "tool": "omp",
       "model": "gpt-5.4",

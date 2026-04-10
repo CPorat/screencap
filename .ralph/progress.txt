@@ -7,6 +7,8 @@ Branch: ralph/v1-implementation
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
 - When FTS search text is assembled from multiple tables, use a standalone FTS index keyed by the primary row id and rebuild it from storage writes instead of relying on an external-content FTS table tied to a single base table.
 - For Swift capture bridges, keep enumeration and capture on the same native backend, expose C-callable functions from `swift/Sources/`, and keep `mock-capture` JPEG generation in Rust so permissionless tests exercise real files.
+- When the Swift bridge spans multiple source files, build the archive directly with `swiftc -emit-library -static` over all `swift/Sources/*.swift` inputs; `-emit-object -o` only works for a single Swift source.
+- When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
 
 
 ---
@@ -39,4 +41,15 @@ Branch: ralph/v1-implementation
   - When a Swift bridge exposes display identifiers, return the IDs from the same ScreenCaptureKit snapshot used for capture-related queries so hot-plug races do not create uncapturable IDs.
   - Keep filesystem paths in native bridges as file-system representations/URLs rather than forcing UTF-8 string conversion, because macOS paths are not guaranteed to be valid UTF-8.
   - Pass Cargo’s target architecture through to `swiftc` in `build.rs`; otherwise cross-architecture macOS builds produce a Swift object for the host arch and fail at link time.
+---
+
+## 2026-04-10 20:21:27 UTC - US-004
+- Implemented the active-window metadata bridge: added a Swift C ABI that returns frontmost app name, window title, and bundle ID, plus a Rust `WindowInfo` wrapper that frees bridge-owned strings safely.
+- Added a shared `free_bridge_string` bridge function, a Rust `mock-capture` fallback returning deterministic window metadata, and unit coverage for the mock path.
+- Updated `build.rs` to archive multi-file Swift bridges with `swiftc -emit-library -static`, which keeps the bridge build working now that `swift/Sources/` has more than one Swift file.
+- Files changed: AGENTS.md, build.rs, src/capture/screenshot.rs, src/capture/window.rs, swift/Sources/WindowInfo.swift, swift/Sources/bridge.h, .ralph/prd.json, .ralph/progress.txt, .pi/context/us-004-window-20260410T201731Z.md, .pi/state/pi-ralph.json
+- **Learnings for future iterations:**
+  - For Swift-to-Rust string outputs, allocate bridge-owned C strings in Swift and pair them with an explicit free function so Rust can copy into owned `String`s without allocator assumptions.
+  - Window titles are optional at the OS level; normalize "missing title" to an empty string at the bridge boundary so downstream capture code can stay typed and branch-free.
+  - `CGWindowListCopyWindowInfo` returns windows front-to-back, so the first layer-0 window for the active PID is the only truthful source for the current window title.
 ---

@@ -10,20 +10,34 @@ pub fn get_display_count() -> Result<usize> {
     native::get_display_count()
 }
 
-pub fn capture_screenshot(display_id: u32, output_path: impl AsRef<Path>, quality: u8) -> Result<()> {
+pub fn capture_screenshot(
+    display_id: u32,
+    output_path: impl AsRef<Path>,
+    quality: u8,
+) -> Result<()> {
     validate_quality(quality)?;
 
     let output_path = output_path.as_ref();
-    if let Some(parent) = output_path.parent().filter(|path| !path.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create screenshot directory at {}", parent.display()))?;
+    if let Some(parent) = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create screenshot directory at {}",
+                parent.display()
+            )
+        })?;
     }
 
     native::capture_screenshot(display_id, output_path, quality)
 }
 
 fn validate_quality(quality: u8) -> Result<()> {
-    ensure!(quality <= 100, "jpeg quality must be between 0 and 100, got {quality}");
+    ensure!(
+        quality <= 100,
+        "jpeg quality must be between 0 and 100, got {quality}"
+    );
     Ok(())
 }
 
@@ -39,7 +53,8 @@ mod native {
 
     unsafe extern "C" {
         #[link_name = "capture_screenshot"]
-        fn ffi_capture_screenshot(display_id: i64, output_path: *const c_char, quality: u8) -> bool;
+        fn ffi_capture_screenshot(display_id: i64, output_path: *const c_char, quality: u8)
+            -> bool;
 
         #[link_name = "get_display_count"]
         fn ffi_get_display_count() -> i32;
@@ -71,9 +86,14 @@ mod native {
         Ok(count as usize)
     }
 
-    pub(super) fn capture_screenshot(display_id: u32, output_path: &Path, quality: u8) -> Result<()> {
+    pub(super) fn capture_screenshot(
+        display_id: u32,
+        output_path: &Path,
+        quality: u8,
+    ) -> Result<()> {
         let output_path = CString::new(output_path.as_os_str().as_bytes())?;
-        let ok = unsafe { ffi_capture_screenshot(i64::from(display_id), output_path.as_ptr(), quality) };
+        let ok =
+            unsafe { ffi_capture_screenshot(i64::from(display_id), output_path.as_ptr(), quality) };
         if ok {
             Ok(())
         } else {
@@ -97,14 +117,22 @@ mod native {
         Ok(display_ids()?.len())
     }
 
-    pub(super) fn capture_screenshot(display_id: u32, output_path: &Path, quality: u8) -> Result<()> {
+    pub(super) fn capture_screenshot(
+        display_id: u32,
+        output_path: &Path,
+        quality: u8,
+    ) -> Result<()> {
         if display_id != 0 {
             anyhow::bail!("mock capture only exposes display 0, got {display_id}");
         }
 
         let mut encoder = JpegEncoder::new_with_quality(
-            File::create(output_path)
-                .with_context(|| format!("failed to create mock screenshot at {}", output_path.display()))?,
+            File::create(output_path).with_context(|| {
+                format!(
+                    "failed to create mock screenshot at {}",
+                    output_path.display()
+                )
+            })?,
             quality,
         );
 

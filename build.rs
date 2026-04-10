@@ -1,4 +1,10 @@
-use std::{env, ffi::OsStr, fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    env,
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -20,19 +26,22 @@ fn main() {
 }
 
 fn compile_swift_bridge() -> Result<(), String> {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|error| error.to_string())?);
     let swift_dir = manifest_dir.join("swift/Sources");
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|error| error.to_string())?);
 
     let swift_sources = collect_swift_sources(&swift_dir)?;
     if swift_sources.is_empty() {
-        return Err(format!("no Swift sources found under {}", swift_dir.display()));
+        return Err(format!(
+            "no Swift sources found under {}",
+            swift_dir.display()
+        ));
     }
 
     let sdk_path = run_xcrun(["--sdk", "macosx", "--show-sdk-path"])?;
     let swiftc_path = run_xcrun(["--find", "swiftc"])?;
     let swift_target = swift_target_triple()?;
-    let object_path = out_dir.join("screencap_swift.o");
     let library_path = out_dir.join("libscreencap_swift.a");
 
     let mut swiftc = Command::new(&swiftc_path);
@@ -42,24 +51,15 @@ fn compile_swift_bridge() -> Result<(), String> {
         .arg("ScreencapSwiftBridge")
         .arg("-target")
         .arg(&swift_target)
-        .arg("-emit-object")
+        .arg("-emit-library")
+        .arg("-static")
         .arg("-o")
-        .arg(&object_path)
+        .arg(&library_path)
         .arg("-sdk")
         .arg(sdk_path.trim())
         .args(&swift_sources);
 
     run_command(swiftc, "swiftc")?;
-
-    let mut libtool = Command::new("xcrun");
-    libtool
-        .arg("libtool")
-        .arg("-static")
-        .arg("-o")
-        .arg(&library_path)
-        .arg(&object_path);
-
-    run_command(libtool, "libtool")?;
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=screencap_swift");
@@ -69,7 +69,10 @@ fn compile_swift_bridge() -> Result<(), String> {
     }
 
     if let Some(swift_runtime_dir) = swift_runtime_dir(Path::new(swiftc_path.trim())) {
-        println!("cargo:rustc-link-search=native={}", swift_runtime_dir.display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            swift_runtime_dir.display()
+        );
     }
 
     Ok(())

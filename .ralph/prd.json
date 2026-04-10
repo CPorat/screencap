@@ -88,7 +88,7 @@
         "cargo test passes (using mock-capture feature)"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "NSWorkspace.shared.frontmostApplication for the app, CGWindowListCopyWindowInfo for the window title. The mock feature flag is shared with US-003 — same flag gates both screenshot and window info mocks.",
       "tool": "omp",
       "model": "gpt-5.4",

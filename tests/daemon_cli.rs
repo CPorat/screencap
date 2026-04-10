@@ -11,11 +11,15 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 use screencap::storage::{
     db::StorageDb,
-    models::{HourlyProjectSummary, InsightData, InsightType, NewInsight},
+    models::{
+        ActivityType, HourlyProjectSummary, InsightData, InsightType, NewCapture, NewExtraction,
+        NewExtractionBatch, NewInsight, Sentiment,
+    },
 };
+use uuid::Uuid;
 
 fn binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_screencap")
@@ -198,6 +202,147 @@ fn seed_hourly_insights(db_path: &Path, date: NaiveDate) -> Result<()> {
             cost_cents: Some(0.42),
         })?;
     }
+
+    Ok(())
+}
+
+fn seed_rolling_insight(db_path: &Path) -> Result<()> {
+    let mut db = StorageDb::open_at_path(db_path)?;
+    let window_end = Utc::now();
+    let window_start = window_end - ChronoDuration::minutes(30);
+
+    db.insert_insight(&NewInsight {
+        insight_type: InsightType::Rolling,
+        window_start,
+        window_end,
+        data: InsightData::Rolling {
+            window_start,
+            window_end,
+            current_focus: "Implementing CLI read commands".into(),
+            active_project: Some("screencap".into()),
+            apps_used: std::collections::BTreeMap::from([("Code".into(), "28 min".into())]),
+            context_switches: 1,
+            mood: "focused".into(),
+            summary: "Focused API work on CLI read commands.".into(),
+        },
+        model_used: Some("mock-synthesis-model".into()),
+        tokens_used: Some(180),
+        cost_cents: Some(0.21),
+    })?;
+
+    Ok(())
+}
+
+fn seed_search_data(db_path: &Path, now: chrono::DateTime<Utc>) -> Result<()> {
+    let mut db = StorageDb::open_at_path(db_path)?;
+    let batch = db.insert_extraction_batch(&NewExtractionBatch {
+        id: Uuid::new_v4(),
+        batch_start: now - ChronoDuration::hours(1),
+        batch_end: now - ChronoDuration::minutes(20),
+        capture_count: 2,
+        primary_activity: Some("coding".into()),
+        project_context: Some("screencap".into()),
+        narrative: Some("Debugged a JWT refresh token bug in the CLI read path".into()),
+        raw_response: None,
+        model_used: Some("mock-vision-model".into()),
+        tokens_used: Some(90),
+        cost_cents: Some(0.30),
+    })?;
+
+    let matching_capture = db.insert_capture(&NewCapture {
+        timestamp: now - ChronoDuration::minutes(30),
+        app_name: Some("Code".into()),
+        window_title: Some("auth.rs".into()),
+        bundle_id: Some("com.microsoft.VSCode".into()),
+        display_id: Some(1),
+        screenshot_path: "screenshots/search-match.jpg".into(),
+    })?;
+    let filtered_capture = db.insert_capture(&NewCapture {
+        timestamp: now - ChronoDuration::minutes(25),
+        app_name: Some("Safari".into()),
+        window_title: Some("Docs".into()),
+        bundle_id: Some("com.apple.Safari".into()),
+        display_id: Some(1),
+        screenshot_path: "screenshots/search-filtered.jpg".into(),
+    })?;
+
+    let matching_extraction = db.insert_extraction(&NewExtraction {
+        capture_id: matching_capture.id,
+        batch_id: batch.id,
+        activity_type: Some(ActivityType::Coding),
+        description: Some("JWT refresh token bug hunt".into()),
+        app_context: Some("Editing the CLI read path in Rust".into()),
+        project: Some("screencap".into()),
+        topics: vec!["jwt".into(), "auth".into()],
+        people: vec![],
+        key_content: Some("refresh_token_expires_at".into()),
+        sentiment: Some(Sentiment::Focused),
+    })?;
+    db.update_capture_status(
+        matching_capture.id,
+        screencap::storage::models::ExtractionStatus::Processed,
+        Some(matching_extraction.id),
+    )?;
+
+    let filtered_extraction = db.insert_extraction(&NewExtraction {
+        capture_id: filtered_capture.id,
+        batch_id: batch.id,
+        activity_type: Some(ActivityType::Browsing),
+        description: Some("Read unrelated payroll docs".into()),
+        app_context: Some("Reviewing backoffice docs".into()),
+        project: Some("backoffice".into()),
+        topics: vec!["finance".into()],
+        people: vec![],
+        key_content: Some("benefits renewal".into()),
+        sentiment: Some(Sentiment::Exploring),
+    })?;
+    db.update_capture_status(
+        filtered_capture.id,
+        screencap::storage::models::ExtractionStatus::Processed,
+        Some(filtered_extraction.id),
+    )?;
+
+    Ok(())
+}
+
+fn seed_cost_data(db_path: &Path, now: chrono::DateTime<Utc>) -> Result<()> {
+    let mut db = StorageDb::open_at_path(db_path)?;
+    let batch_end = now - ChronoDuration::minutes(30);
+    let rolling_end = now;
+    let rolling_start = rolling_end - ChronoDuration::minutes(30);
+
+    db.insert_extraction_batch(&NewExtractionBatch {
+        id: Uuid::new_v4(),
+        batch_start: batch_end - ChronoDuration::minutes(10),
+        batch_end,
+        capture_count: 2,
+        primary_activity: Some("coding".into()),
+        project_context: Some("screencap".into()),
+        narrative: Some("CLI read command extraction batch".into()),
+        raw_response: None,
+        model_used: Some("mock-vision-model".into()),
+        tokens_used: Some(90),
+        cost_cents: Some(0.30),
+    })?;
+
+    db.insert_insight(&NewInsight {
+        insight_type: InsightType::Rolling,
+        window_start: rolling_start,
+        window_end: rolling_end,
+        data: InsightData::Rolling {
+            window_start: rolling_start,
+            window_end: rolling_end,
+            current_focus: "Summarizing AI spend".into(),
+            active_project: Some("screencap".into()),
+            apps_used: std::collections::BTreeMap::from([("Code".into(), "30 min".into())]),
+            context_switches: 0,
+            mood: "focused".into(),
+            summary: "Verified reported AI cost totals.".into(),
+        },
+        model_used: Some("mock-synthesis-model".into()),
+        tokens_used: Some(250),
+        cost_cents: Some(1.25),
+    })?;
 
     Ok(())
 }
@@ -389,16 +534,100 @@ fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> 
     let first = run_cli_with_env(home.path(), &["today"], &[(env_var, "token")])?;
     assert_success(&first, "today first run");
     let first_stdout = String::from_utf8_lossy(&first.stdout);
-    assert!(first_stdout.contains("\"type\": \"daily\""));
-    assert!(first_stdout.contains("\"Productive day focused on screencap.\""));
+    assert!(first_stdout.contains(&format!("Today ({today})")));
+    assert!(first_stdout.contains("summary: Productive day focused on screencap."));
+    assert!(first_stdout.contains("active time: 7h 30m"));
 
     drop(server);
 
     let second = run_cli(home.path(), &["today"])?;
     assert_success(&second, "today second run");
     let second_stdout = String::from_utf8_lossy(&second.stdout);
-    assert!(second_stdout.contains("\"type\": \"daily\""));
-    assert!(second_stdout.contains("\"Productive day focused on screencap.\""));
+    assert!(second_stdout.contains(&format!("Today ({today})")));
+    assert!(second_stdout.contains("summary: Productive day focused on screencap."));
+
+    Ok(())
+}
+
+#[test]
+fn now_prints_latest_rolling_context_summary() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("now")?;
+    seed_rolling_insight(&home.db_path())?;
+
+    let output = run_cli(home.path(), &["now"])?;
+    assert_success(&output, "now");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Current context"));
+    assert!(stdout.contains("Focused API work on CLI read commands."));
+    assert!(stdout.contains("project: screencap"));
+
+    Ok(())
+}
+
+#[test]
+fn search_returns_matching_extractions() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("search")?;
+    let now = Utc::now();
+    seed_search_data(&home.db_path(), now)?;
+
+    let output = run_cli(
+        home.path(),
+        &[
+            "search",
+            "JWT",
+            "--project",
+            "screencap",
+            "--app",
+            "Code",
+            "--last",
+            "24h",
+        ],
+    )?;
+    assert_success(&output, "search");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Search results for \"JWT\""));
+    assert!(stdout.contains("JWT refresh token bug hunt"));
+    assert!(stdout.contains("app filter: Code"));
+    assert!(stdout.contains("project filter: screencap"));
+    assert!(!stdout.contains("Read unrelated payroll docs"));
+
+    Ok(())
+}
+
+#[test]
+fn projects_show_capture_based_allocations() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("projects")?;
+    seed_search_data(&home.db_path(), Utc::now())?;
+
+    let output = run_cli(home.path(), &["projects", "--last", "24h"])?;
+    assert_success(&output, "projects");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Project allocation (capture-based)"));
+    assert!(stdout.contains("total captures: 2"));
+    assert!(stdout.contains("backoffice: 1 capture (50.0%)"));
+    assert!(stdout.contains("screencap: 1 capture (50.0%)"));
+
+    Ok(())
+}
+
+#[test]
+fn costs_show_total_and_stage_breakdown() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("costs")?;
+    let now = Utc::now();
+    seed_cost_data(&home.db_path(), now)?;
+
+    let output = run_cli(home.path(), &["costs"])?;
+    assert_success(&output, "costs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Reported AI cost"));
+    assert!(stdout.contains("total: 1.55¢ ($0.0155) across 340 tokens"));
+    assert!(stdout.contains("- extraction: 0.30¢ ($0.0030) across 90 tokens"));
+    assert!(stdout.contains("- synthesis: 1.25¢ ($0.0125) across 250 tokens"));
+    assert!(stdout.contains("by day:"));
 
     Ok(())
 }

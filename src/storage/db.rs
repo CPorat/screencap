@@ -18,10 +18,11 @@ use crate::config::AppConfig;
 
 use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
-    AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionBatch,
-    ExtractionBatchDetail, ExtractionFrameDetail, ExtractionSearchHit, ExtractionSearchQuery,
-    ExtractionStatus, Insight, InsightData, InsightType, NewCapture, NewExtraction,
-    NewExtractionBatch, NewInsight, ProjectTimeAllocation, Sentiment, TopicFrequency,
+    AppCaptureCount, Capture, CaptureDetail, CaptureQuery, CostBreakdown, CostSummary,
+    DailyCostSummary, Extraction, ExtractionBatch, ExtractionBatchDetail, ExtractionFrameDetail,
+    ExtractionSearchHit, ExtractionSearchQuery, ExtractionStatus, Insight, InsightData,
+    InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, ProjectTimeAllocation,
+    Sentiment, TopicFrequency,
 };
 
 const SCHEMA: &str = r#"
@@ -1084,6 +1085,79 @@ impl StorageDb {
         Ok(topics)
     }
 
+    pub fn summarize_reported_costs(&self) -> Result<CostBreakdown> {
+        let extraction = query_reported_cost_summary(
+            &self.conn,
+            "SELECT SUM(tokens_used), SUM(cost_cents)
+             FROM extraction_batches
+             WHERE tokens_used IS NOT NULL OR cost_cents IS NOT NULL",
+        )?;
+        let synthesis = query_reported_cost_summary(
+            &self.conn,
+            "SELECT SUM(tokens_used), SUM(cost_cents)
+             FROM insights
+             WHERE tokens_used IS NOT NULL OR cost_cents IS NOT NULL",
+        )?;
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    cost_date,
+                    SUM(tokens_used) AS tokens_used,
+                    SUM(reported_cost_cents) AS reported_cost_cents
+                 FROM (
+                    SELECT
+                        substr(batch_end, 1, 10) AS cost_date,
+                        COALESCE(tokens_used, 0) AS tokens_used,
+                        COALESCE(cost_cents, 0.0) AS reported_cost_cents
+                    FROM extraction_batches
+                    WHERE tokens_used IS NOT NULL OR cost_cents IS NOT NULL
+                    UNION ALL
+                    SELECT
+                        substr(window_end, 1, 10) AS cost_date,
+                        COALESCE(tokens_used, 0) AS tokens_used,
+                        COALESCE(cost_cents, 0.0) AS reported_cost_cents
+                    FROM insights
+                    WHERE tokens_used IS NOT NULL OR cost_cents IS NOT NULL
+                 ) cost_rows
+                 GROUP BY cost_date
+                 ORDER BY cost_date ASC",
+            )
+            .context("failed to prepare reported cost by-day query")?;
+
+        let by_day = stmt
+            .query_map([], |row| {
+                let raw_date: String = row.get("cost_date")?;
+                let date = NaiveDate::parse_from_str(&raw_date, "%Y-%m-%d")
+                    .context("failed to parse reported cost date")
+                    .map_err(into_row_error)?;
+                let tokens_used: i64 = row.get("tokens_used")?;
+                let tokens_used = u64::try_from(tokens_used)
+                    .context("reported cost tokens overflowed u64")
+                    .map_err(into_row_error)?;
+
+                Ok(DailyCostSummary {
+                    date,
+                    tokens_used,
+                    reported_cost_cents: row.get("reported_cost_cents")?,
+                })
+            })
+            .context("failed to query reported cost by-day rows")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map reported cost by-day rows")?;
+
+        Ok(CostBreakdown {
+            total: CostSummary {
+                tokens_used: extraction.tokens_used.saturating_add(synthesis.tokens_used),
+                reported_cost_cents: extraction.reported_cost_cents + synthesis.reported_cost_cents,
+            },
+            extraction,
+            synthesis,
+            by_day,
+        })
+    }
+
     pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
         self.search_extractions_filtered(&ExtractionSearchQuery {
             query: query.to_owned(),
@@ -1187,6 +1261,19 @@ fn initialize_connection(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
     Ok(())
+}
+
+fn query_reported_cost_summary(conn: &Connection, sql: &str) -> Result<CostSummary> {
+    let (tokens_used, reported_cost_cents): (Option<i64>, Option<f64>) = conn
+        .query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
+        .context("failed to query reported cost summary")?;
+    let tokens_used = u64::try_from(tokens_used.unwrap_or_default())
+        .context("reported cost tokens overflowed u64")?;
+
+    Ok(CostSummary {
+        tokens_used,
+        reported_cost_cents: reported_cost_cents.unwrap_or(0.0),
+    })
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -2194,5 +2281,103 @@ mod tests {
         assert_eq!(insight.insight_type, InsightType::Daily);
         assert_eq!(insight.window_start, window_start);
         assert_eq!(insight.window_end, window_end);
+    }
+
+    #[test]
+    fn summarizes_reported_costs_by_stage_and_day() {
+        let mut db = StorageDb::open_in_memory().expect("database should open");
+        let batch_day = Utc.with_ymd_and_hms(2026, 4, 10, 14, 10, 0).unwrap();
+        let hourly_start = Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+        let hourly_end = hourly_start + chrono::Duration::hours(1);
+        let daily_start = Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap();
+        let daily_end = Utc.with_ymd_and_hms(2026, 4, 11, 23, 59, 59).unwrap();
+
+        db.insert_extraction_batch(&NewExtractionBatch {
+            id: Uuid::new_v4(),
+            batch_start: batch_day - chrono::Duration::minutes(10),
+            batch_end: batch_day,
+            capture_count: 2,
+            primary_activity: Some("coding".into()),
+            project_context: Some("screencap".into()),
+            narrative: Some("Debugged CLI output".into()),
+            raw_response: None,
+            model_used: Some("mock-vision-model".into()),
+            tokens_used: Some(90),
+            cost_cents: Some(0.30),
+        })
+        .expect("extraction batch should insert");
+
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Hourly,
+            window_start: hourly_start,
+            window_end: hourly_end,
+            data: InsightData::Hourly {
+                hour_start: hourly_start,
+                hour_end: hourly_end,
+                dominant_activity: "coding".into(),
+                projects: vec![HourlyProjectSummary {
+                    name: Some("screencap".into()),
+                    minutes: 60,
+                    activities: vec!["cli read commands".into()],
+                }],
+                topics: vec!["cli".into()],
+                people_interacted: vec![],
+                key_moments: vec!["Implemented CLI read outputs".into()],
+                focus_score: 0.91,
+                narrative: "Spent the hour implementing CLI read commands.".into(),
+            },
+            model_used: Some("mock-synthesis-model".into()),
+            tokens_used: Some(250),
+            cost_cents: Some(1.25),
+        })
+        .expect("hourly insight should insert");
+
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Daily,
+            window_start: daily_start,
+            window_end: daily_end,
+            data: InsightData::Daily {
+                date: daily_start.date_naive(),
+                total_active_hours: 7.5,
+                projects: vec![DailyProjectSummary {
+                    name: "screencap".into(),
+                    total_minutes: 195,
+                    activities: vec!["cli read commands".into()],
+                    key_accomplishments: vec!["Shipped CLI summaries".into()],
+                }],
+                time_allocation: BTreeMap::from([("coding".into(), "3h 15m".into())]),
+                focus_blocks: vec![FocusBlock {
+                    start: "09:00".into(),
+                    end: "11:00".into(),
+                    duration_min: 120,
+                    project: "screencap".into(),
+                    quality: "deep-focus".into(),
+                }],
+                open_threads: vec![],
+                narrative: "A productive day focused on CLI UX.".into(),
+            },
+            model_used: Some("mock-synthesis-model".into()),
+            tokens_used: Some(400),
+            cost_cents: Some(2.0),
+        })
+        .expect("daily insight should insert");
+
+        let summary = db
+            .summarize_reported_costs()
+            .expect("reported costs should summarize");
+
+        assert_eq!(summary.extraction.tokens_used, 90);
+        assert!((summary.extraction.reported_cost_cents - 0.30).abs() < f64::EPSILON);
+        assert_eq!(summary.synthesis.tokens_used, 650);
+        assert!((summary.synthesis.reported_cost_cents - 3.25).abs() < f64::EPSILON);
+        assert_eq!(summary.total.tokens_used, 740);
+        assert!((summary.total.reported_cost_cents - 3.55).abs() < f64::EPSILON);
+        assert_eq!(summary.by_day.len(), 2);
+        assert_eq!(summary.by_day[0].date, batch_day.date_naive());
+        assert_eq!(summary.by_day[0].tokens_used, 340);
+        assert!((summary.by_day[0].reported_cost_cents - 1.55).abs() < f64::EPSILON);
+        assert_eq!(summary.by_day[1].date, daily_start.date_naive());
+        assert_eq!(summary.by_day[1].tokens_used, 400);
+        assert!((summary.by_day[1].reported_cost_cents - 2.0).abs() < f64::EPSILON);
     }
 }

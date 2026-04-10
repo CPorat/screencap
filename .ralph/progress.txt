@@ -12,6 +12,7 @@ Branch: ralph/v1-implementation
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
+- CLI read commands should open SQLite read-only when possible, return helpful empty-state output without creating `screencap.db`, and label capture-count-based project breakdowns explicitly so terminal summaries do not overclaim time accuracy.
 - Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
@@ -164,4 +165,14 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Search results are more useful when the storage helper joins back to `captures`, because API/UI consumers immediately need screenshot URLs, timestamps, and app metadata alongside extraction text.
   - Keep singular read endpoints (`current`, `daily?date=`) on a 404 contract when data is absent, but let range/list endpoints return empty arrays so read-only clients can distinguish “missing record” from “empty window.”
+---
+
+## 2026-04-10 23:39:29 UTC - US-014
+- Implemented the CLI read surface in `src/main.rs`: `now`, `today`, `yesterday`, `week`, `search`, `projects`, and `costs` now read from storage, format human-readable terminal output, and keep read-only commands from creating an empty database on untouched homes.
+- Added reported-cost summary models and storage queries in `src/storage/models.rs` and `src/storage/db.rs`, plus a longer daemon stop timeout in `src/daemon.rs` to reduce shutdown flake under full-suite load.
+- Expanded `tests/daemon_cli.rs` with CLI integration coverage for rolling-context output, filtered search output, capture-based project breakdowns, reported cost totals, and the updated formatted `today` output.
+- Files changed: AGENTS.md, src/daemon.rs, src/main.rs, src/storage/db.rs, src/storage/models.rs, tests/daemon_cli.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - CLI read commands should use read-only storage opens and only fall back to write-mode flows for the specific command that may synthesize missing data (`today`).
+  - If project allocation is derived from capture counts rather than persisted minute totals, say so in the terminal output instead of implying false precision.
 ---

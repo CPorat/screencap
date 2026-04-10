@@ -33,7 +33,7 @@ use crate::{
 const INTERNAL_DAEMON_SUBCOMMAND: &str = "__daemon-child";
 const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {

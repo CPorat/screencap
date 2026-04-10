@@ -362,7 +362,7 @@
         "cargo test passes"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": "Test CLI output by capturing stdout. Use assert_cmd crate or invoke the command function directly with a test DB.",
       "tool": "omp",
       "model": "gpt-5.4",

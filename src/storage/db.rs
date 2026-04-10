@@ -285,10 +285,20 @@ impl StorageDb {
     }
 
     pub fn get_pending_captures(&self) -> Result<Vec<Capture>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT
+        self.get_pending_captures_with_limit(None)
+    }
+
+    pub fn get_pending_captures_batch(&self, limit: usize) -> Result<Vec<Capture>> {
+        self.get_pending_captures_with_limit(Some(limit))
+    }
+
+    fn get_pending_captures_with_limit(&self, limit: Option<usize>) -> Result<Vec<Capture>> {
+        if matches!(limit, Some(0)) {
+            return Ok(Vec::new());
+        }
+
+        let mut sql = String::from(
+            "SELECT
                     id,
                     timestamp,
                     app_name,
@@ -302,11 +312,23 @@ impl StorageDb {
                  FROM captures
                  WHERE extraction_status = ?1
                  ORDER BY timestamp ASC, id ASC",
-            )
+        );
+
+        let mut params = vec![Value::Text(ExtractionStatus::Pending.as_str().to_owned())];
+        if let Some(limit) = limit {
+            sql.push_str(" LIMIT ?2");
+            params.push(Value::Integer(
+                i64::try_from(limit).context("pending capture limit exceeds sqlite range")?,
+            ));
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
             .context("failed to prepare pending capture query")?;
 
         let captures = stmt
-            .query_map(params![ExtractionStatus::Pending.as_str()], map_capture_row)
+            .query_map(params_from_iter(params.iter()), map_capture_row)
             .context("failed to query pending captures")?
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("failed to map pending captures")?;
@@ -480,21 +502,56 @@ impl StorageDb {
         status: ExtractionStatus,
         extraction_id: Option<i64>,
     ) -> Result<()> {
-        let rows = self
-            .conn
-            .execute(
-                "UPDATE captures
-                 SET extraction_status = ?1, extraction_id = ?2
-                 WHERE id = ?3",
-                params![status.as_str(), extraction_id, capture_id],
-            )
-            .with_context(|| format!("failed to update capture {capture_id} status"))?;
+        update_capture_status_record(&self.conn, capture_id, status, extraction_id)
+            .with_context(|| format!("failed to update capture {capture_id} status"))
+    }
 
-        if rows == 0 {
-            return Err(anyhow!("capture {capture_id} does not exist"));
+    pub fn mark_captures_failed(&mut self, capture_ids: &[i64]) -> Result<()> {
+        if capture_ids.is_empty() {
+            return Ok(());
         }
 
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start failed-capture transaction")?;
+
+        for capture_id in capture_ids {
+            update_capture_status_record(&tx, *capture_id, ExtractionStatus::Failed, None)
+                .with_context(|| format!("failed to mark capture {capture_id} as failed"))?;
+        }
+
+        tx.commit()
+            .context("failed to commit failed-capture transaction")?;
+
         Ok(())
+    }
+
+    pub fn record_failed_extraction_batch(
+        &mut self,
+        batch: &NewExtractionBatch,
+        capture_ids: &[i64],
+    ) -> Result<ExtractionBatch> {
+        validate_batch_capture_count(batch.capture_count, capture_ids.len())?;
+
+        let created_at = Utc::now();
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start failed extraction batch transaction")?;
+
+        insert_extraction_batch_record(&tx, batch, &created_at)
+            .context("failed to insert failed extraction batch")?;
+
+        for capture_id in capture_ids {
+            update_capture_status_record(&tx, *capture_id, ExtractionStatus::Failed, None)
+                .with_context(|| format!("failed to mark capture {capture_id} as failed"))?;
+        }
+
+        tx.commit()
+            .context("failed to commit failed extraction batch transaction")?;
+
+        Ok(materialize_extraction_batch(batch, &created_at))
     }
 
     pub fn insert_extraction_batch(
@@ -506,114 +563,74 @@ impl StorageDb {
             .conn
             .transaction()
             .context("failed to start extraction batch transaction")?;
-        tx.execute(
-            "INSERT INTO extraction_batches (
-                id,
-                batch_start,
-                batch_end,
-                capture_count,
-                primary_activity,
-                project_context,
-                narrative,
-                raw_response,
-                model_used,
-                tokens_used,
-                cost_cents,
-                created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                batch.id.to_string(),
-                format_db_timestamp(&batch.batch_start),
-                format_db_timestamp(&batch.batch_end),
-                batch.capture_count,
-                batch.primary_activity.as_deref(),
-                batch.project_context.as_deref(),
-                batch.narrative.as_deref(),
-                batch.raw_response.as_deref(),
-                batch.model_used.as_deref(),
-                batch.tokens_used,
-                batch.cost_cents,
-                format_db_timestamp(&created_at),
-            ],
-        )
-        .context("failed to insert extraction batch")?;
+
+        insert_extraction_batch_record(&tx, batch, &created_at)
+            .context("failed to insert extraction batch")?;
         sync_batch_search_index(&tx, batch.id)?;
         tx.commit()
             .context("failed to commit extraction batch transaction")?;
 
-        Ok(ExtractionBatch {
-            id: batch.id,
-            batch_start: batch.batch_start,
-            batch_end: batch.batch_end,
-            capture_count: batch.capture_count,
-            primary_activity: batch.primary_activity.clone(),
-            project_context: batch.project_context.clone(),
-            narrative: batch.narrative.clone(),
-            raw_response: batch.raw_response.clone(),
-            model_used: batch.model_used.clone(),
-            tokens_used: batch.tokens_used,
-            cost_cents: batch.cost_cents,
-            created_at,
-        })
+        Ok(materialize_extraction_batch(batch, &created_at))
+    }
+
+    pub fn persist_extraction_batch(
+        &mut self,
+        batch: &NewExtractionBatch,
+        extractions: &[NewExtraction],
+    ) -> Result<(ExtractionBatch, Vec<Extraction>)> {
+        validate_batch_capture_count(batch.capture_count, extractions.len())?;
+
+        let created_at = Utc::now();
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start extraction persistence transaction")?;
+
+        insert_extraction_batch_record(&tx, batch, &created_at)
+            .context("failed to insert extraction batch")?;
+
+        let mut persisted = Vec::with_capacity(extractions.len());
+        for extraction in extractions {
+            let extraction_id = insert_extraction_record(&tx, extraction, &created_at)
+                .with_context(|| format!(
+                    "failed to insert extraction for capture {}",
+                    extraction.capture_id
+                ))?;
+            update_capture_status_record(
+                &tx,
+                extraction.capture_id,
+                ExtractionStatus::Processed,
+                Some(extraction_id),
+            )
+            .with_context(|| {
+                format!(
+                    "failed to link processed extraction {} to capture {}",
+                    extraction_id, extraction.capture_id
+                )
+            })?;
+            persisted.push(materialize_extraction(extraction_id, extraction, &created_at));
+        }
+
+        sync_batch_search_index(&tx, batch.id)?;
+        tx.commit()
+            .context("failed to commit extraction persistence transaction")?;
+
+        Ok((materialize_extraction_batch(batch, &created_at), persisted))
     }
 
     pub fn insert_extraction(&mut self, extraction: &NewExtraction) -> Result<Extraction> {
         let created_at = Utc::now();
-        let topics = encode_string_list(&extraction.topics)?;
-        let people = encode_string_list(&extraction.people)?;
-
         let tx = self
             .conn
             .transaction()
             .context("failed to start extraction transaction")?;
-        tx.execute(
-            "INSERT INTO extractions (
-                capture_id,
-                batch_id,
-                activity_type,
-                description,
-                app_context,
-                project,
-                topics,
-                people,
-                key_content,
-                sentiment,
-                created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                extraction.capture_id,
-                extraction.batch_id.to_string(),
-                extraction.activity_type.map(ActivityType::as_str),
-                extraction.description.as_deref(),
-                extraction.app_context.as_deref(),
-                extraction.project.as_deref(),
-                topics,
-                people,
-                extraction.key_content.as_deref(),
-                extraction.sentiment.map(Sentiment::as_str),
-                format_db_timestamp(&created_at),
-            ],
-        )
-        .context("failed to insert extraction")?;
-        let extraction_id = tx.last_insert_rowid();
+        let extraction_id = insert_extraction_record(&tx, extraction, &created_at)
+            .context("failed to insert extraction")?;
         sync_search_index_for_extraction(&tx, extraction_id)?;
         tx.commit()
             .context("failed to commit extraction transaction")?;
 
-        Ok(Extraction {
-            id: extraction_id,
-            capture_id: extraction.capture_id,
-            batch_id: extraction.batch_id,
-            activity_type: extraction.activity_type,
-            description: extraction.description.clone(),
-            app_context: extraction.app_context.clone(),
-            project: extraction.project.clone(),
-            topics: extraction.topics.clone(),
-            people: extraction.people.clone(),
-            key_content: extraction.key_content.clone(),
-            sentiment: extraction.sentiment,
-            created_at,
-        })
+        Ok(materialize_extraction(extraction_id, extraction, &created_at))
     }
 
     pub fn insert_insight(&mut self, insight: &NewInsight) -> Result<Insight> {
@@ -893,6 +910,105 @@ fn insert_capture_record(
     Ok(conn.last_insert_rowid())
 }
 
+fn insert_extraction_batch_record(
+    conn: &Connection,
+    batch: &NewExtractionBatch,
+    created_at: &DateTime<Utc>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO extraction_batches (
+            id,
+            batch_start,
+            batch_end,
+            capture_count,
+            primary_activity,
+            project_context,
+            narrative,
+            raw_response,
+            model_used,
+            tokens_used,
+            cost_cents,
+            created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            batch.id.to_string(),
+            format_db_timestamp(&batch.batch_start),
+            format_db_timestamp(&batch.batch_end),
+            batch.capture_count,
+            batch.primary_activity.as_deref(),
+            batch.project_context.as_deref(),
+            batch.narrative.as_deref(),
+            batch.raw_response.as_deref(),
+            batch.model_used.as_deref(),
+            batch.tokens_used,
+            batch.cost_cents,
+            format_db_timestamp(created_at),
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn insert_extraction_record(
+    conn: &Connection,
+    extraction: &NewExtraction,
+    created_at: &DateTime<Utc>,
+) -> Result<i64> {
+    let topics = encode_string_list(&extraction.topics)?;
+    let people = encode_string_list(&extraction.people)?;
+
+    conn.execute(
+        "INSERT INTO extractions (
+            capture_id,
+            batch_id,
+            activity_type,
+            description,
+            app_context,
+            project,
+            topics,
+            people,
+            key_content,
+            sentiment,
+            created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            extraction.capture_id,
+            extraction.batch_id.to_string(),
+            extraction.activity_type.map(ActivityType::as_str),
+            extraction.description.as_deref(),
+            extraction.app_context.as_deref(),
+            extraction.project.as_deref(),
+            topics,
+            people,
+            extraction.key_content.as_deref(),
+            extraction.sentiment.map(Sentiment::as_str),
+            format_db_timestamp(created_at),
+        ],
+    )?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+fn update_capture_status_record(
+    conn: &Connection,
+    capture_id: i64,
+    status: ExtractionStatus,
+    extraction_id: Option<i64>,
+) -> Result<()> {
+    let rows = conn.execute(
+        "UPDATE captures
+         SET extraction_status = ?1, extraction_id = ?2
+         WHERE id = ?3",
+        params![status.as_str(), extraction_id, capture_id],
+    )?;
+
+    if rows == 0 {
+        return Err(anyhow!("capture {capture_id} does not exist"));
+    }
+
+    Ok(())
+}
+
 fn materialize_capture(id: i64, capture: &NewCapture, created_at: &DateTime<Utc>) -> Capture {
     Capture {
         id,
@@ -906,6 +1022,59 @@ fn materialize_capture(id: i64, capture: &NewCapture, created_at: &DateTime<Utc>
         extraction_id: None,
         created_at: *created_at,
     }
+}
+
+fn materialize_extraction_batch(
+    batch: &NewExtractionBatch,
+    created_at: &DateTime<Utc>,
+) -> ExtractionBatch {
+    ExtractionBatch {
+        id: batch.id,
+        batch_start: batch.batch_start,
+        batch_end: batch.batch_end,
+        capture_count: batch.capture_count,
+        primary_activity: batch.primary_activity.clone(),
+        project_context: batch.project_context.clone(),
+        narrative: batch.narrative.clone(),
+        raw_response: batch.raw_response.clone(),
+        model_used: batch.model_used.clone(),
+        tokens_used: batch.tokens_used,
+        cost_cents: batch.cost_cents,
+        created_at: *created_at,
+    }
+}
+
+fn materialize_extraction(
+    id: i64,
+    extraction: &NewExtraction,
+    created_at: &DateTime<Utc>,
+) -> Extraction {
+    Extraction {
+        id,
+        capture_id: extraction.capture_id,
+        batch_id: extraction.batch_id,
+        activity_type: extraction.activity_type,
+        description: extraction.description.clone(),
+        app_context: extraction.app_context.clone(),
+        project: extraction.project.clone(),
+        topics: extraction.topics.clone(),
+        people: extraction.people.clone(),
+        key_content: extraction.key_content.clone(),
+        sentiment: extraction.sentiment,
+        created_at: *created_at,
+    }
+}
+
+fn validate_batch_capture_count(expected: i64, actual: usize) -> Result<()> {
+    let actual = i64::try_from(actual).context("capture batch size exceeds sqlite range")?;
+    if expected != actual {
+        return Err(anyhow!(
+            "extraction batch capture_count {} does not match {} frame(s)",
+            expected, actual
+        ));
+    }
+
+    Ok(())
 }
 
 fn map_capture_row(row: &Row<'_>) -> rusqlite::Result<Capture> {

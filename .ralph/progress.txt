@@ -15,6 +15,7 @@ Branch: ralph/v1-implementation
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
+- Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
 
 
 
@@ -108,4 +109,15 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Reuse storage-layer enums in pipeline parsers so prompt/parse code and persistence share one schema representation.
   - Accept fenced JSON from LLMs at the parser boundary, then validate batch invariants before any scheduler writes to SQLite.
+---
+
+## 2026-04-10 22:36:49 UTC - US-009b
+- Implemented the extraction scheduler: it batches pending captures up to `max_images_per_batch`, base64-encodes screenshot JPEGs, builds the extraction prompt from persisted capture metadata, calls the vision provider, and runs on the configured interval with a shutdown-aware loop.
+- Added transactional extraction persistence helpers so successful batches write the batch row, per-frame extractions, capture status/link updates, and FTS rows together; parse failures now persist `raw_response` for debugging before marking captures failed, while provider/file-read failures mark those captures failed and continue to later batches.
+- Added scheduler tests covering the success path, parse failure handling, and continuing to the next batch after a provider failure using the reusable `MockLlmProvider`.
+- Files changed: Cargo.toml, AGENTS.md, src/storage/db.rs, src/pipeline/scheduler.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Persist each extraction batch in one storage transaction so capture status, extraction rows, and FTS never disagree about what was processed.
+  - Treat malformed model output as first-class debug data: store the raw response alongside the failed batch before marking captures failed.
+  - Scheduler tests can stay realistic without live permissions by generating tiny JPEG fixtures on disk and feeding them through the same base64 path used in production.
 ---

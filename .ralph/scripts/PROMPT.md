@@ -22,6 +22,29 @@ Read these files before starting any work:
 9. Update the PRD to set `passes: true` for the completed story
 10. Append your progress to `.ralph/progress.txt`
 
+## Model Strategy
+
+All stories run via `omp` with `github-copilot` provider. Per-task model overrides are set in each story's `tool`, `model`, `provider`, and `thinking` fields in `prd.json`.
+
+- **Backend/Rust stories**: `gpt-5.4` with `high` thinking
+- **Frontend/Svelte stories (US-015–019, US-033)**: `gemini-3.1-pro-preview` with `high` thinking
+
+The `ralph.sh` script reads these per-task fields automatically — no manual override needed.
+
+## Frontend Design Skill
+
+When implementing any Svelte UI story (US-015 through US-019, US-033), you MUST read and follow the frontend-design skill at `.agents/skills/frontend-design/SKILL.md` before writing any Svelte or CSS code.
+
+Key requirements from the skill:
+- Choose a BOLD, distinctive aesthetic direction — no generic AI slop
+- Use interesting, characterful typography — NOT Inter, Roboto, Arial, or system fonts
+- Commit to a cohesive color palette with CSS variables
+- Add motion and micro-interactions (CSS transitions, scroll effects)
+- Create spatial depth with backgrounds, textures, shadows
+- Every view should feel intentionally designed, not templated
+
+The web UI is a core user-facing surface. It must look like it was designed by a human with taste, not auto-generated.
+
 ## Project-Specific Rules
 
 - This is a macOS-only Rust project with Swift bridges. Do not add cross-platform abstractions.

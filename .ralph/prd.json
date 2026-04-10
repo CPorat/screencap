@@ -20,7 +20,11 @@
       ],
       "priority": 1,
       "passes": false,
-      "notes": "This is the foundation. Every other story depends on this."
+      "notes": "This is the foundation. Every other story depends on this.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-002",
@@ -39,7 +43,11 @@
       ],
       "priority": 2,
       "passes": false,
-      "notes": "Reference SPEC.md Storage Layer section for exact schema."
+      "notes": "Reference SPEC.md Storage Layer section for exact schema.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-003",
@@ -59,7 +67,11 @@
       ],
       "priority": 3,
       "passes": false,
-      "notes": "ScreenCaptureKit requires Screen Recording permission. The agent likely won't have TCC approval, so the mock-capture feature flag is essential for testability. The fallback generates a synthetic JPEG so downstream pipeline code (extraction, API screenshot serving) works identically."
+      "notes": "ScreenCaptureKit requires Screen Recording permission. The agent likely won't have TCC approval, so the mock-capture feature flag is essential for testability. The fallback generates a synthetic JPEG so downstream pipeline code (extraction, API screenshot serving) works identically.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-004",
@@ -77,7 +89,11 @@
       ],
       "priority": 4,
       "passes": false,
-      "notes": "NSWorkspace.shared.frontmostApplication for the app, CGWindowListCopyWindowInfo for the window title. The mock feature flag is shared with US-003 — same flag gates both screenshot and window info mocks."
+      "notes": "NSWorkspace.shared.frontmostApplication for the app, CGWindowListCopyWindowInfo for the window title. The mock feature flag is shared with US-003 — same flag gates both screenshot and window info mocks.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-005",
@@ -100,7 +116,11 @@
       ],
       "priority": 5,
       "passes": false,
-      "notes": "Start with timer-only. Event-driven capture (CGEventTap) is a later enhancement. Use a mock/stub for the Swift screenshot function in tests."
+      "notes": "Start with timer-only. Event-driven capture (CGEventTap) is a later enhancement. Use a mock/stub for the Swift screenshot function in tests.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-006",
@@ -118,7 +138,11 @@
       ],
       "priority": 6,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-007",
@@ -139,7 +163,11 @@
       ],
       "priority": 7,
       "passes": false,
-      "notes": "Use tokio::test with a test helper that spins up the axum server on a random port."
+      "notes": "Use tokio::test with a test helper that spins up the axum server on a random port.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-008",
@@ -163,7 +191,11 @@
       ],
       "priority": 8,
       "passes": false,
-      "notes": "OpenRouter uses the same API format as OpenAI. The only difference is the base_url and model ID format (provider/model)."
+      "notes": "OpenRouter uses the same API format as OpenAI. The only difference is the base_url and model ID format (provider/model).",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-009a",
@@ -182,7 +214,11 @@
       ],
       "priority": 9,
       "passes": false,
-      "notes": "This must be testable with canned fixtures. No LLM calls in this story."
+      "notes": "This must be testable with canned fixtures. No LLM calls in this story.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-009b",
@@ -204,7 +240,11 @@
       ],
       "priority": 10,
       "passes": false,
-      "notes": "Create a MockLlmProvider in tests that returns canned responses. This mock will be reused by synthesis tests."
+      "notes": "Create a MockLlmProvider in tests that returns canned responses. This mock will be reused by synthesis tests.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-010",
@@ -225,7 +265,11 @@
       ],
       "priority": 11,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-011",
@@ -244,7 +288,11 @@
       ],
       "priority": 12,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-012",
@@ -263,7 +311,11 @@
       ],
       "priority": 13,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-013",
@@ -284,7 +336,11 @@
       ],
       "priority": 14,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-014",
@@ -307,7 +363,11 @@
       ],
       "priority": 15,
       "passes": false,
-      "notes": "Test CLI output by capturing stdout. Use assert_cmd crate or invoke the command function directly with a test DB."
+      "notes": "Test CLI output by capturing stdout. Use assert_cmd crate or invoke the command function directly with a test DB.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-015",
@@ -330,7 +390,11 @@
       ],
       "priority": 16,
       "passes": false,
-      "notes": "Keep the UI clean and minimal. No heavy component libraries. The build order matters: Svelte must compile before cargo build embeds the dist/ files. Use expect MCP tools for browser verification."
+      "notes": "Keep the UI clean and minimal. No heavy component libraries. The build order matters: Svelte must compile before cargo build embeds the dist/ files. Use expect MCP tools for browser verification. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-016",
@@ -350,7 +414,11 @@
       ],
       "priority": 17,
       "passes": false,
-      "notes": "The daemon must be running with seeded data for browser verification. Use expect MCP tools (open, playwright, screenshot, console_logs, accessibility_audit, close) — not raw browser tools."
+      "notes": "The daemon must be running with seeded data for browser verification. Use expect MCP tools (open, playwright, screenshot, console_logs, accessibility_audit, close) — not raw browser tools. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-017",
@@ -369,7 +437,11 @@
       ],
       "priority": 18,
       "passes": false,
-      "notes": "Seed realistic insight data before browser verification. Use expect MCP tools."
+      "notes": "Seed realistic insight data before browser verification. Use expect MCP tools. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-018",
@@ -388,7 +460,11 @@
       ],
       "priority": 19,
       "passes": false,
-      "notes": "Use expect MCP tools. Seed data must include different projects and topics so filtering can be tested."
+      "notes": "Use expect MCP tools. Seed data must include different projects and topics so filtering can be tested. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-019",
@@ -408,7 +484,11 @@
       ],
       "priority": 20,
       "passes": false,
-      "notes": "Use expect MCP tools. Charts must have seeded data to render — empty charts are not a valid test."
+      "notes": "Use expect MCP tools. Charts must have seeded data to render — empty charts are not a valid test. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-020",
@@ -431,7 +511,11 @@
       ],
       "priority": 21,
       "passes": false,
-      "notes": "Use the rmcp crate or implement the MCP protocol manually over stdio."
+      "notes": "Use the rmcp crate or implement the MCP protocol manually over stdio.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-021",
@@ -451,7 +535,11 @@
       ],
       "priority": 22,
       "passes": false,
-      "notes": "Reference SPEC.md Markdown Export Format section for the exact template."
+      "notes": "Reference SPEC.md Markdown Export Format section for the exact template.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-022",
@@ -470,7 +558,11 @@
       ],
       "priority": 23,
       "passes": false,
-      "notes": "The JPEG deletion test is critical — it's easy to forget to delete filesystem artifacts when pruning DB rows."
+      "notes": "The JPEG deletion test is critical — it's easy to forget to delete filesystem artifacts when pruning DB rows.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-023",
@@ -486,7 +578,11 @@
       ],
       "priority": 24,
       "passes": false,
-      "notes": "Keep this minimal. ~200 lines of Swift. No storyboards, just programmatic SwiftUI menu bar."
+      "notes": "Keep this minimal. ~200 lines of Swift. No storyboards, just programmatic SwiftUI menu bar.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-024",
@@ -503,7 +599,11 @@
       ],
       "priority": 25,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-025",
@@ -521,7 +621,11 @@
       ],
       "priority": 26,
       "passes": false,
-      "notes": "This is an enhancement on top of the timer-based capture. The system must work without it."
+      "notes": "This is an enhancement on top of the timer-based capture. The system must work without it.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-026",
@@ -537,7 +641,11 @@
       ],
       "priority": 27,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-027",
@@ -553,7 +661,11 @@
       ],
       "priority": 28,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-028",
@@ -570,7 +682,11 @@
       ],
       "priority": 29,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-029",
@@ -586,7 +702,11 @@
       ],
       "priority": 30,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-030",
@@ -606,7 +726,11 @@
       ],
       "priority": 31,
       "passes": false,
-      "notes": "This is the most important story. If this passes, the core loop works. Use the same MockLlmProvider from US-009b tests."
+      "notes": "This is the most important story. If this passes, the core loop works. Use the same MockLlmProvider from US-009b tests.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-031",
@@ -625,7 +749,11 @@
       ],
       "priority": 32,
       "passes": false,
-      "notes": "This test must use a unique port and temp data directory to avoid conflicts. Use the screencap binary built by cargo. Skip actual screen capture (mock the Swift bridge or use a feature flag)."
+      "notes": "This test must use a unique port and temp data directory to avoid conflicts. Use the screencap binary built by cargo. Skip actual screen capture (mock the Swift bridge or use a feature flag).",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-032",
@@ -646,7 +774,11 @@
       ],
       "priority": 33,
       "passes": false,
-      "notes": "Many of these might already be covered by earlier story tests. This story is specifically to audit and fill gaps."
+      "notes": "Many of these might already be covered by earlier story tests. This story is specifically to audit and fill gaps.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-033",
@@ -669,7 +801,11 @@
       ],
       "priority": 34,
       "passes": false,
-      "notes": "This is the UI equivalent of US-030 (pipeline e2e). If this passes, the UI works end-to-end. Must use expect MCP tools exclusively. Delegate to a subagent if available."
+      "notes": "This is the UI equivalent of US-030 (pipeline e2e). If this passes, the UI works end-to-end. Must use expect MCP tools exclusively. Delegate to a subagent if available. The frontend-design skill at .agents/skills/frontend-design/SKILL.md defines the design quality bar the UI must meet.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
     },
     {
       "id": "US-034",
@@ -687,7 +823,11 @@
       ],
       "priority": 35,
       "passes": false,
-      "notes": "This is the final gate. If this passes, the project is shippable."
+      "notes": "This is the final gate. If this passes, the project is shippable.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     }
   ]
 }

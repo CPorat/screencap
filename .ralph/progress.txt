@@ -5,6 +5,8 @@ Branch: ralph/v1-implementation
 
 ## Codebase Patterns
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
+- When FTS search text is assembled from multiple tables, use a standalone FTS index keyed by the primary row id and rebuild it from storage writes instead of relying on an external-content FTS table tied to a single base table.
+
 
 ---
 
@@ -17,4 +19,13 @@ Branch: ralph/v1-implementation
   - Config loaders should accept explicit root/home inputs so tests avoid mutating global HOME state.
   - Create runtime directories from resolved config values after parsing, not from raw TOML strings.
   - Keep the binary thin: export shared modules from `lib.rs` and keep `main.rs` focused on clap parsing and command dispatch.
+---
+## 2026-04-10 19:26:47 UTC - US-002
+- Implemented the SQLite storage layer with schema initialization, typed models for captures/extractions/batches/insights, CRUD helpers, and ranked FTS search over extraction content plus batch narrative.
+- Added tests covering on-disk database creation, capture insert/query/status flows, extraction search ranking and punctuated queries, insight persistence/FTS sync, daily payload parsing, and invalid insight window rejection.
+- Files changed: AGENTS.md, src/storage/db.rs, src/storage/models.rs, .ralph/prd.json, .ralph/progress.txt, .pi/state/pi-ralph.json
+- **Learnings for future iterations:**
+  - Store DB timestamps as fixed-width RFC3339 UTC strings with fractional seconds so lexical ordering and round-tripping stay correct at subsecond precision.
+  - Derive denormalized insight narrative columns from the typed payload instead of accepting a second caller-provided copy that can drift.
+  - Quote free-text FTS input before passing it to SQLite MATCH so punctuation-heavy queries behave like user search, not parser syntax.
 ---

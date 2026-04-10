@@ -42,7 +42,7 @@
         "cargo test passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Reference SPEC.md Storage Layer section for exact schema.",
       "tool": "omp",
       "model": "gpt-5.4",

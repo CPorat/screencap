@@ -33,6 +33,8 @@ Three-layer pipeline:
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
 - All timestamps are ISO 8601 in UTC.
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
+- When full-text search content spans multiple tables, keep a dedicated FTS table keyed by the canonical row id and update it from storage helpers; do not use an external-content FTS table tied to only one source table if some indexed fields come from joins.
+
 
 ## Code Style
 

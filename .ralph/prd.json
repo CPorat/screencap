@@ -19,7 +19,7 @@
         "cargo test passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "This is the foundation. Every other story depends on this.",
       "tool": "omp",
       "model": "gpt-5.4",

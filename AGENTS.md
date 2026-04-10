@@ -29,6 +29,7 @@ Three-layer pipeline:
 - The capture layer must never touch the network. All network calls happen in the extraction and synthesis pipelines.
 - AI provider code uses a trait (`LlmProvider`) with `complete(prompt, images?)` and `complete_text(prompt)`. The `openai_compat` module handles OpenAI, OpenRouter, and LM Studio since they share the same API format.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
+- Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
 - All timestamps are ISO 8601 in UTC.
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).

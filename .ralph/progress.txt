@@ -2,4 +2,19 @@
 Started: 2026-04-10
 Project: Screencap v1
 Branch: ralph/v1-implementation
+
+## Codebase Patterns
+- Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
+
+---
+
+## 2026-04-10 18:58:40 UTC - US-001
+- Implemented the initial Rust package skeleton: Cargo manifest, library/binary roots, clap CLI scaffold, daemon stub, and module directories for capture, pipeline, ai, storage, api, mcp, and export.
+- Added typed TOML config parsing with SPEC defaults, provider enum parsing, home-path expansion, and runtime directory bootstrapping for storage, screenshots, and daily exports.
+- Added unit tests covering missing config defaults, valid config parsing, and invalid TOML failures.
+- Files changed: Cargo.toml, AGENTS.md, src/lib.rs, src/main.rs, src/config.rs, src/daemon.rs, src/capture/*, src/pipeline/*, src/ai/*, src/storage/*, src/api/*, src/mcp/*, src/export/*, .pi/context/us-001-foundation-20260410T000000Z.md, .pi/state/pi-ralph.json
+- **Learnings for future iterations:**
+  - Config loaders should accept explicit root/home inputs so tests avoid mutating global HOME state.
+  - Create runtime directories from resolved config values after parsing, not from raw TOML strings.
+  - Keep the binary thin: export shared modules from `lib.rs` and keep `main.rs` focused on clap parsing and command dispatch.
 ---

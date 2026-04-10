@@ -42,6 +42,8 @@ Three-layer pipeline:
 - Daemon lifecycle should keep its PID file under `~/.screencap/`, store both `pid` and `started_at`, and have `start`/`stop`/`status` heal stale PID files by checking process liveness before trusting on-disk state.
 - REST API read endpoints should open SQLite in read-only mode when possible and return empty/404 results without creating `screencap.db`; GET traffic must not mutate runtime state.
 - When serving screenshots over HTTP, accept only sanitized paths relative to the screenshots root and walk them with `openat(..., O_NOFOLLOW)` so traversal or symlink escapes cannot leave the screenshot tree.
+- LLM JSON parsers should accept optional markdown code fences but still validate structural invariants like unique capture IDs before persistence, so downstream schedulers can trust parsed model output.
+
 
 
 ## Code Style

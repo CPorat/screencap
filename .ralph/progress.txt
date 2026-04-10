@@ -14,6 +14,7 @@ Branch: ralph/v1-implementation
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
+- LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 
 
 
@@ -99,4 +100,12 @@ Branch: ralph/v1-implementation
   - Keep token usage optional at the provider boundary; LM Studio-style local backends may not report usage, and coercing that to zero would lie to downstream cost tracking.
   - Resolve provider defaults such as `base_url` centrally in the provider layer so extraction and synthesis callers only pass config, not duplicated URL selection logic.
   - A reusable mock provider should record prompts and queued responses, so future pipeline tests can assert both the request shape and the parsed output without live network calls.
+---
+## 2026-04-10 22:26:14 UTC - US-009a
+- Implemented the extraction prompt template from SPEC.md plus a typed extraction response parser that reuses the storage-layer `ActivityType` and `Sentiment` enums instead of inventing duplicate schema types.
+- Added prompt construction that emits per-capture frame metadata for attached screenshots, plus parser validation for empty/duplicate frame IDs and unit coverage for prompt contents, golden JSON parsing, and malformed JSON failures.
+- Files changed: AGENTS.md, src/pipeline/extraction.rs, src/pipeline/prompts.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Reuse storage-layer enums in pipeline parsers so prompt/parse code and persistence share one schema representation.
+  - Accept fenced JSON from LLMs at the parser boundary, then validate batch invariants before any scheduler writes to SQLite.
 ---

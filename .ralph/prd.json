@@ -213,7 +213,7 @@
         "cargo test passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "This must be testable with canned fixtures. No LLM calls in this story.",
       "tool": "omp",
       "model": "gpt-5.4",

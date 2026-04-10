@@ -115,7 +115,7 @@
         "cargo test passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Start with timer-only. Event-driven capture (CGEventTap) is a later enhancement. Use a mock/stub for the Swift screenshot function in tests.",
       "tool": "omp",
       "model": "gpt-5.4",

@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, types::Type, Connection, Row, Transaction};
+use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, Transaction};
 #[cfg(test)]
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -158,45 +158,34 @@ impl StorageDb {
 
     pub fn insert_capture(&mut self, capture: &NewCapture) -> Result<Capture> {
         let created_at = Utc::now();
-        self.conn
-            .execute(
-                "INSERT INTO captures (
-                    timestamp,
-                    app_name,
-                    window_title,
-                    bundle_id,
-                    display_id,
-                    screenshot_path,
-                    extraction_status,
-                    extraction_id,
-                    created_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    format_db_timestamp(&capture.timestamp),
-                    capture.app_name.as_deref(),
-                    capture.window_title.as_deref(),
-                    capture.bundle_id.as_deref(),
-                    capture.display_id,
-                    capture.screenshot_path,
-                    ExtractionStatus::Pending.as_str(),
-                    Option::<i64>::None,
-                    format_db_timestamp(&created_at),
-                ],
-            )
+        let id = insert_capture_record(&self.conn, capture, &created_at)
             .context("failed to insert capture")?;
 
-        Ok(Capture {
-            id: self.conn.last_insert_rowid(),
-            timestamp: capture.timestamp,
-            app_name: capture.app_name.clone(),
-            window_title: capture.window_title.clone(),
-            bundle_id: capture.bundle_id.clone(),
-            display_id: capture.display_id,
-            screenshot_path: capture.screenshot_path.clone(),
-            extraction_status: ExtractionStatus::Pending,
-            extraction_id: None,
-            created_at,
-        })
+        Ok(materialize_capture(id, capture, &created_at))
+    }
+
+    pub fn insert_captures(&mut self, captures: &[NewCapture]) -> Result<Vec<Capture>> {
+        let created_at = Utc::now();
+        let tx = self
+            .conn
+            .transaction()
+            .context("failed to start capture transaction")?;
+        let mut inserted = Vec::with_capacity(captures.len());
+
+        for capture in captures {
+            let id = insert_capture_record(&tx, capture, &created_at).with_context(|| {
+                format!(
+                    "failed to insert capture for screenshot {}",
+                    capture.screenshot_path
+                )
+            })?;
+            inserted.push(materialize_capture(id, capture, &created_at));
+        }
+
+        tx.commit()
+            .context("failed to commit capture transaction")?;
+
+        Ok(inserted)
     }
 
     pub fn get_captures_by_timerange(
@@ -264,6 +253,35 @@ impl StorageDb {
             .context("failed to map pending captures")?;
 
         Ok(captures)
+    }
+
+    pub fn get_latest_capture(&self) -> Result<Option<Capture>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    id,
+                    timestamp,
+                    app_name,
+                    window_title,
+                    bundle_id,
+                    display_id,
+                    screenshot_path,
+                    extraction_status,
+                    extraction_id,
+                    created_at
+                 FROM captures
+                 ORDER BY timestamp DESC, id DESC
+                 LIMIT 1",
+            )
+            .context("failed to prepare latest capture query")?;
+
+        let capture = stmt
+            .query_row([], map_capture_row)
+            .optional()
+            .context("failed to query latest capture")?;
+
+        Ok(capture)
     }
 
     pub fn update_capture_status(
@@ -643,6 +661,58 @@ fn sync_insight_fts(tx: &Transaction<'_>, insight_id: i64) -> Result<()> {
     .with_context(|| format!("failed to rebuild insight search row for insight {insight_id}"))?;
 
     Ok(())
+}
+
+fn insert_capture_record(
+    conn: &Connection,
+    capture: &NewCapture,
+    created_at: &DateTime<Utc>,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO captures (
+            timestamp,
+            app_name,
+            window_title,
+            bundle_id,
+            display_id,
+            screenshot_path,
+            extraction_status,
+            extraction_id,
+            created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            format_db_timestamp(&capture.timestamp),
+            capture.app_name.as_deref(),
+            capture.window_title.as_deref(),
+            capture.bundle_id.as_deref(),
+            capture.display_id,
+            capture.screenshot_path,
+            ExtractionStatus::Pending.as_str(),
+            Option::<i64>::None,
+            format_db_timestamp(created_at),
+        ],
+    )?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+fn materialize_capture(
+    id: i64,
+    capture: &NewCapture,
+    created_at: &DateTime<Utc>,
+) -> Capture {
+    Capture {
+        id,
+        timestamp: capture.timestamp,
+        app_name: capture.app_name.clone(),
+        window_title: capture.window_title.clone(),
+        bundle_id: capture.bundle_id.clone(),
+        display_id: capture.display_id,
+        screenshot_path: capture.screenshot_path.clone(),
+        extraction_status: ExtractionStatus::Pending,
+        extraction_id: None,
+        created_at: *created_at,
+    }
 }
 
 fn map_capture_row(row: &Row<'_>) -> rusqlite::Result<Capture> {

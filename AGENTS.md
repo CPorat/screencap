@@ -34,6 +34,7 @@ Three-layer pipeline:
 - Swift bridge build integration should compile sources from `swift/Sources/` via `build.rs`, keep the ABI C-callable, and keep `mock-capture` fallbacks in Rust so tests can emit real JPEGs without macOS permissions.
 - When the Swift bridge spans multiple source files, have `build.rs` invoke `swiftc -emit-library -static` over the full `swift/Sources/` set; `-emit-object -o <single-file>` breaks as soon as a second Swift source is added.
 - When deriving the frontmost window title from `CGWindowListCopyWindowInfo`, treat the first layer-0 window for the frontmost app PID as authoritative; if that window has no title, return an empty string instead of scanning later windows from the same app.
+- When one capture cycle spans multiple displays, write all screenshots for that cycle first and persist their `captures` rows in one SQLite transaction; if any display capture or DB write fails, delete that cycle’s new JPEGs so disk state cannot drift from the database.
 - All timestamps are ISO 8601 in UTC.
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
 - When full-text search content spans multiple tables, keep a dedicated FTS table keyed by the canonical row id and update it from storage helpers; do not use an external-content FTS table tied to only one source table if some indexed fields come from joins.

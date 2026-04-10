@@ -9,6 +9,7 @@ Branch: ralph/v1-implementation
 - For Swift capture bridges, keep enumeration and capture on the same native backend, expose C-callable functions from `swift/Sources/`, and keep `mock-capture` JPEG generation in Rust so permissionless tests exercise real files.
 - When the Swift bridge spans multiple source files, build the archive directly with `swiftc -emit-library -static` over all `swift/Sources/*.swift` inputs; `-emit-object -o` only works for a single Swift source.
 - When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
+- When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
 
 
 ---
@@ -52,4 +53,14 @@ Branch: ralph/v1-implementation
   - For Swift-to-Rust string outputs, allocate bridge-owned C strings in Swift and pair them with an explicit free function so Rust can copy into owned `String`s without allocator assumptions.
   - Window titles are optional at the OS level; normalize "missing title" to an empty string at the bridge boundary so downstream capture code can stay typed and branch-free.
   - `CGWindowListCopyWindowInfo` returns windows front-to-back, so the first layer-0 window for the active PID is the only truthful source for the current window title.
+---
+
+## 2026-04-10 20:41:14 UTC - US-005
+- Implemented the timer-based capture loop in `src/daemon.rs`: it polls on `idle_interval_secs`, reads the active window, skips excluded contexts, deduplicates against the latest persisted capture, captures every display, and logs each cycle via tracing.
+- Added transactional multi-display capture persistence in `src/storage/db.rs` with `insert_captures` plus `get_latest_capture`, so a capture cycle can compare against the last stored context and keep disk/database state aligned.
+- Added mock-capture unit coverage for excluded-app skipping, dedup within the idle interval, and the `YYYY/MM/DD/HHMMSS-{display_id}.jpg` screenshot path convention.
+- Files changed: AGENTS.md, src/daemon.rs, src/storage/db.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Dedup should read from the latest persisted capture rather than only in-memory loop state so restarts preserve the same skip behavior.
+  - Multi-display capture is one logical event; write its JPEGs first, then persist all corresponding capture rows in one transaction, cleaning up the files if persistence fails.
 ---

@@ -6,6 +6,7 @@ Branch: ralph/v1-implementation
 ## Codebase Patterns
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
 - When FTS search text is assembled from multiple tables, use a standalone FTS index keyed by the primary row id and rebuild it from storage writes instead of relying on an external-content FTS table tied to a single base table.
+- For Swift capture bridges, keep enumeration and capture on the same native backend, expose C-callable functions from `swift/Sources/`, and keep `mock-capture` JPEG generation in Rust so permissionless tests exercise real files.
 
 
 ---
@@ -28,4 +29,14 @@ Branch: ralph/v1-implementation
   - Store DB timestamps as fixed-width RFC3339 UTC strings with fractional seconds so lexical ordering and round-tripping stay correct at subsecond precision.
   - Derive denormalized insight narrative columns from the typed payload instead of accepting a second caller-provided copy that can drift.
   - Quote free-text FTS input before passing it to SQLite MATCH so punctuation-heavy queries behave like user search, not parser syntax.
+---
+
+## 2026-04-10 20:15:17 UTC - US-003
+- Implemented the ScreenCaptureKit screenshot bridge: Cargo now builds a Swift static library from `swift/Sources/`, the C ABI exposes display enumeration plus screenshot capture, and the Rust wrapper validates JPEG quality, preserves filesystem paths, and surfaces bridge failures.
+- Added a `mock-capture` fallback in Rust that emits real JPEG files and tests covering valid JPEG generation, display ID consistency, invalid display IDs, and invalid quality handling.
+- Files changed: AGENTS.md, Cargo.toml, build.rs, src/capture/screenshot.rs, swift/Sources/ScreenCapture.swift, swift/Sources/bridge.h, .ralph/prd.json, .ralph/progress.txt, .pi/context/us-003-screenshot-20260410T192929Z.md, .pi/state/pi-ralph.json
+- **Learnings for future iterations:**
+  - When a Swift bridge exposes display identifiers, return the IDs from the same ScreenCaptureKit snapshot used for capture-related queries so hot-plug races do not create uncapturable IDs.
+  - Keep filesystem paths in native bridges as file-system representations/URLs rather than forcing UTF-8 string conversion, because macOS paths are not guaranteed to be valid UTF-8.
+  - Pass Cargo’s target architecture through to `swiftc` in `build.rs`; otherwise cross-architecture macOS builds produce a Swift object for the host arch and fail at link time.
 ---

@@ -31,6 +31,7 @@ Three-layer pipeline:
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
 - Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
+- Swift bridge build integration should compile sources from `swift/Sources/` via `build.rs`, keep the ABI C-callable, and keep `mock-capture` fallbacks in Rust so tests can emit real JPEGs without macOS permissions.
 - All timestamps are ISO 8601 in UTC.
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
 - When full-text search content spans multiple tables, keep a dedicated FTS table keyed by the canonical row id and update it from storage helpers; do not use an external-content FTS table tied to only one source table if some indexed fields come from joins.

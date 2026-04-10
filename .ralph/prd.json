@@ -66,7 +66,7 @@
         "cargo test passes (using mock-capture feature)"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "ScreenCaptureKit requires Screen Recording permission. The agent likely won't have TCC approval, so the mock-capture feature flag is essential for testability. The fallback generates a synthetic JPEG so downstream pipeline code (extraction, API screenshot serving) works identically.",
       "tool": "omp",
       "model": "gpt-5.4",

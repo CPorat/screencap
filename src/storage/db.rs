@@ -5,13 +5,12 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{
     params, params_from_iter,
     types::{Type, Value},
     Connection, OpenFlags, OptionalExtension, Row, Transaction,
 };
-#[cfg(test)]
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
@@ -21,7 +20,7 @@ use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
     AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionBatch,
     ExtractionBatchDetail, ExtractionFrameDetail, ExtractionSearchHit, ExtractionStatus, Insight,
-    InsightData, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
+    InsightData, InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
 };
 
 const SCHEMA: &str = r#"
@@ -813,6 +812,100 @@ impl StorageDb {
         })
     }
 
+    pub fn list_hourly_insights_in_range(
+        &self,
+        window_start: DateTime<Utc>,
+        window_end: DateTime<Utc>,
+    ) -> Result<Vec<Insight>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    id,
+                    type,
+                    window_start,
+                    window_end,
+                    data,
+                    narrative,
+                    model_used,
+                    tokens_used,
+                    cost_cents,
+                    created_at
+                 FROM insights
+                 WHERE type = ?1 AND window_start >= ?2 AND window_end <= ?3
+                 ORDER BY window_start ASC, id ASC",
+            )
+            .context("failed to prepare hourly insight range query")?;
+
+        let insights = stmt
+            .query_map(
+                params![
+                    InsightType::Hourly.as_str(),
+                    format_db_timestamp(&window_start),
+                    format_db_timestamp(&window_end),
+                ],
+                map_insight_row,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to query hourly insights for {}..{}",
+                    window_start, window_end
+                )
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map hourly insight range results")?;
+
+        Ok(insights)
+    }
+
+    pub fn get_latest_daily_insight_for_date(&self, date: NaiveDate) -> Result<Option<Insight>> {
+        let day_start = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+        let next_day_start = date
+            .succ_opt()
+            .expect("successor date should be representable")
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    id,
+                    type,
+                    window_start,
+                    window_end,
+                    data,
+                    narrative,
+                    model_used,
+                    tokens_used,
+                    cost_cents,
+                    created_at
+                 FROM insights
+                 WHERE type = ?1 AND window_start >= ?2 AND window_start < ?3
+                 ORDER BY window_end DESC, created_at DESC, id DESC
+                 LIMIT 1",
+            )
+            .context("failed to prepare latest daily insight query")?;
+
+        let insight = stmt
+            .query_row(
+                params![
+                    InsightType::Daily.as_str(),
+                    format_db_timestamp(&day_start),
+                    format_db_timestamp(&next_day_start),
+                ],
+                map_insight_row,
+            )
+            .optional()
+            .with_context(|| format!("failed to query daily insight for {date}"))?;
+
+        Ok(insight)
+    }
+
     pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
         let mut stmt = self
             .conn
@@ -1308,6 +1401,21 @@ fn map_search_hit_row(row: &Row<'_>) -> rusqlite::Result<ExtractionSearchHit> {
     })
 }
 
+fn map_insight_row(row: &Row<'_>) -> rusqlite::Result<Insight> {
+    Ok(Insight {
+        id: row.get("id")?,
+        insight_type: parse_enum_column::<InsightType>(row.get("type")?)?,
+        window_start: parse_timestamp_column(row.get("window_start")?)?,
+        window_end: parse_timestamp_column(row.get("window_end")?)?,
+        data: parse_json_column(row.get("data")?)?,
+        narrative: row.get("narrative")?,
+        model_used: row.get("model_used")?,
+        tokens_used: row.get("tokens_used")?,
+        cost_cents: row.get("cost_cents")?,
+        created_at: parse_timestamp_column(row.get("created_at")?)?,
+    })
+}
+
 fn parse_timestamp_column(raw: String) -> rusqlite::Result<DateTime<Utc>> {
     parse_db_timestamp(&raw).map_err(into_row_error)
 }
@@ -1337,7 +1445,6 @@ fn parse_string_list_column(raw: Option<String>) -> rusqlite::Result<Vec<String>
     decode_string_list(raw).map_err(into_row_error)
 }
 
-#[cfg(test)]
 fn parse_json_column<T>(raw: String) -> rusqlite::Result<T>
 where
     T: DeserializeOwned,

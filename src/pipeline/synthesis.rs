@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{ensure, Context, Result};
-use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Timelike, Utc};
+use chrono::{
+    DateTime, Duration as ChronoDuration, NaiveDate, NaiveTime, SecondsFormat, Timelike, Utc,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch,
@@ -15,20 +17,24 @@ use crate::{
     storage::{
         db::StorageDb,
         models::{
-            ExtractionBatchDetail, HourlyProjectSummary, Insight, InsightData, InsightType,
-            NewInsight,
+            DailyProjectSummary, ExtractionBatchDetail, FocusBlock, HourlyProjectSummary, Insight,
+            InsightData, InsightType, NewInsight,
         },
     },
 };
 
 use super::{
     json::extract_json_payload,
-    prompts::{HOURLY_DIGEST_PROMPT_TEMPLATE, ROLLING_CONTEXT_PROMPT_TEMPLATE},
+    prompts::{
+        DAILY_SUMMARY_PROMPT_TEMPLATE, HOURLY_DIGEST_PROMPT_TEMPLATE,
+        ROLLING_CONTEXT_PROMPT_TEMPLATE,
+    },
 };
 
 const ROLLING_CONTEXT_WINDOW_MINUTES: i64 = 30;
 const HOURLY_DIGEST_WINDOW_HOURS: i64 = 1;
 const HOURLY_DIGEST_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const DAILY_SUMMARY_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
 
 pub struct RollingContextScheduler {
     config: AppConfig,
@@ -234,6 +240,116 @@ impl HourlyDigestScheduler {
     }
 }
 
+pub struct DailySummaryScheduler {
+    config: AppConfig,
+    db: StorageDb,
+    provider: Arc<dyn LlmProvider>,
+}
+
+impl DailySummaryScheduler {
+    pub fn open(config: AppConfig, home: impl AsRef<Path>) -> Result<Self> {
+        let provider = open_synthesis_provider(&config)?;
+        Self::with_provider(config, home, provider)
+    }
+
+    pub fn with_provider(
+        config: AppConfig,
+        home: impl AsRef<Path>,
+        provider: Arc<dyn LlmProvider>,
+    ) -> Result<Self> {
+        ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
+        parse_daily_summary_time(&config.synthesis.daily_summary_time)?;
+
+        let db = open_synthesis_db(&config, home.as_ref())?;
+
+        Ok(Self {
+            config,
+            db,
+            provider,
+        })
+    }
+
+    pub async fn run_until_shutdown(&mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let summary_time = parse_daily_summary_time(&self.config.synthesis.daily_summary_time)?;
+        let first_tick = next_daily_summary_boundary(Utc::now(), summary_time);
+        let mut interval = time::interval_at(interval_start(first_tick), DAILY_SUMMARY_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    match self.run_once().await {
+                        Ok(Some(insight)) => {
+                            info!(
+                                insight_id = insight.id,
+                                date = %insight.window_start.date_naive(),
+                                window_end = %insight.window_end,
+                                "daily summary available"
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            error!(error = %error, "daily summary synthesis failed");
+                        }
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn run_once(&mut self) -> Result<Option<Insight>> {
+        let summary_time = parse_daily_summary_time(&self.config.synthesis.daily_summary_time)?;
+        let date = Utc::now().date_naive();
+        self.run_once_at(utc_datetime_on_date(date, summary_time))
+            .await
+    }
+
+    async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
+        let date = window_end.date_naive();
+        if let Some(existing) = self.db.get_latest_daily_insight_for_date(date)? {
+            return Ok(Some(existing));
+        }
+
+        let window_start = utc_datetime_on_date(
+            date,
+            NaiveTime::from_hms_opt(0, 0, 0).expect("midnight should be representable"),
+        );
+        let hourly_insights = self
+            .db
+            .list_hourly_insights_in_range(window_start, window_end)?;
+        if hourly_insights.is_empty() {
+            return Ok(None);
+        }
+
+        let prompt = build_daily_summary_prompt(date, window_start, window_end, &hourly_insights);
+        let response = self
+            .provider
+            .complete_text(&prompt)
+            .await
+            .context("daily summary request failed")?;
+        let data = parse_daily_summary_response(&response.content)?;
+        validate_daily_summary_date(&data, date)?;
+        let insight = build_new_synthesis_insight(
+            &self.config,
+            InsightType::Daily,
+            window_start,
+            window_end,
+            data,
+            &response,
+        )?;
+        let persisted = self.db.insert_insight(&insight)?;
+
+        Ok(Some(persisted))
+    }
+}
+
 pub async fn run_rolling_context_scheduler(
     config: AppConfig,
     home: impl AsRef<Path>,
@@ -250,6 +366,40 @@ pub async fn run_hourly_digest_scheduler(
 ) -> Result<()> {
     let mut scheduler = HourlyDigestScheduler::open(config, home)?;
     scheduler.run_until_shutdown(shutdown).await
+}
+
+pub async fn run_daily_summary_scheduler(
+    config: AppConfig,
+    home: impl AsRef<Path>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    let mut scheduler = DailySummaryScheduler::open(config, home)?;
+    scheduler.run_until_shutdown(shutdown).await
+}
+
+pub async fn get_or_generate_today_summary_at_home(
+    config: AppConfig,
+    home: impl AsRef<Path>,
+    now: DateTime<Utc>,
+) -> Result<Option<Insight>> {
+    let home = home.as_ref();
+    let date = now.date_naive();
+    let day_start = utc_datetime_on_date(
+        date,
+        NaiveTime::from_hms_opt(0, 0, 0).expect("midnight should be representable"),
+    );
+    let db = open_synthesis_db(&config, home)?;
+
+    if let Some(existing) = db.get_latest_daily_insight_for_date(date)? {
+        return Ok(Some(existing));
+    }
+
+    if db.list_hourly_insights_in_range(day_start, now)?.is_empty() {
+        return Ok(None);
+    }
+
+    let mut scheduler = DailySummaryScheduler::open(config, home)?;
+    scheduler.run_once_at(now).await
 }
 
 pub fn build_rolling_context_prompt(
@@ -282,6 +432,27 @@ pub fn build_hourly_digest_prompt(
     prompt.push_str(HOURLY_DIGEST_PROMPT_TEMPLATE);
     append_requested_window(&mut prompt, "hour_start", hour_start, "hour_end", hour_end);
     append_extraction_batches(&mut prompt, batches);
+    append_prompt_footer(&mut prompt);
+    prompt
+}
+
+pub fn build_daily_summary_prompt(
+    date: NaiveDate,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    hourly_insights: &[Insight],
+) -> String {
+    let mut prompt =
+        String::with_capacity(DAILY_SUMMARY_PROMPT_TEMPLATE.len() + hourly_insights.len() * 768);
+    prompt.push_str(DAILY_SUMMARY_PROMPT_TEMPLATE);
+    prompt.push_str("\n\nRequested date:\n");
+    prompt.push_str(&format!(
+        "- date: {}\n- window_start: {}\n- window_end: {}\n",
+        date,
+        format_prompt_timestamp(window_start),
+        format_prompt_timestamp(window_end),
+    ));
+    append_hourly_insights(&mut prompt, hourly_insights);
     append_prompt_footer(&mut prompt);
     prompt
 }
@@ -327,6 +498,27 @@ pub fn parse_hourly_digest_response(json_str: &str) -> Result<InsightData> {
         people_interacted: parsed.people_interacted,
         key_moments: parsed.key_moments,
         focus_score: parsed.focus_score,
+        narrative: parsed.narrative,
+    })
+}
+
+pub fn parse_daily_summary_response(json_str: &str) -> Result<InsightData> {
+    let payload = extract_json_payload(json_str);
+    let parsed = serde_json::from_str::<DailySummaryPayload>(payload)
+        .context("failed to parse daily summary response JSON")?;
+    ensure!(
+        parsed.insight_type == InsightType::Daily,
+        "expected daily summary response, received insight type `{}`",
+        parsed.insight_type
+    );
+
+    Ok(InsightData::Daily {
+        date: parsed.date,
+        total_active_hours: parsed.total_active_hours,
+        projects: parsed.projects,
+        time_allocation: parsed.time_allocation,
+        focus_blocks: parsed.focus_blocks,
+        open_threads: parsed.open_threads,
         narrative: parsed.narrative,
     })
 }
@@ -460,9 +652,59 @@ fn append_extraction_batches(prompt: &mut String, batches: &[ExtractionBatchDeta
     }
 }
 
+fn append_hourly_insights(prompt: &mut String, insights: &[Insight]) {
+    prompt.push_str("\nHourly digests:\n");
+
+    if insights.is_empty() {
+        prompt.push_str("- none\n");
+    }
+
+    for insight in insights {
+        let InsightData::Hourly {
+            hour_start,
+            hour_end,
+            dominant_activity,
+            projects,
+            topics,
+            people_interacted,
+            key_moments,
+            focus_score,
+            narrative,
+        } = &insight.data
+        else {
+            unreachable!("daily summary prompts only accept hourly insights");
+        };
+
+        prompt.push_str(&format!(
+            concat!(
+                "- insight_id: {insight_id}\n",
+                "  hour_start_utc: {hour_start}\n",
+                "  hour_end_utc: {hour_end}\n",
+                "  dominant_activity: {dominant_activity}\n",
+                "  projects: {projects}\n",
+                "  topics: {topics}\n",
+                "  people_interacted: {people}\n",
+                "  key_moments: {key_moments}\n",
+                "  focus_score: {focus_score}\n",
+                "  narrative: {narrative}\n"
+            ),
+            insight_id = insight.id,
+            hour_start = format_prompt_timestamp(*hour_start),
+            hour_end = format_prompt_timestamp(*hour_end),
+            dominant_activity = dominant_activity,
+            projects = format_json_value(projects),
+            topics = format_string_list(topics),
+            people = format_string_list(people_interacted),
+            key_moments = format_string_list(key_moments),
+            focus_score = focus_score,
+            narrative = narrative,
+        ));
+    }
+}
+
 fn append_prompt_footer(prompt: &mut String) {
     prompt.push_str(
-        "\nUse only the extraction data above. Return JSON only; do not wrap it in markdown or add commentary.",
+        "\nUse only the structured data above. Return JSON only; do not wrap it in markdown or add commentary.",
     );
 }
 
@@ -512,6 +754,21 @@ fn validate_hourly_digest_window(
     )
 }
 
+fn validate_daily_summary_date(data: &InsightData, expected_date: NaiveDate) -> Result<()> {
+    let InsightData::Daily { date, .. } = data else {
+        unreachable!("daily summary parser only returns daily insight data");
+    };
+
+    ensure!(
+        *date == expected_date,
+        "daily summary response date {} did not match requested date {}",
+        date,
+        expected_date,
+    );
+
+    Ok(())
+}
+
 fn validate_requested_window(
     label: &str,
     actual_start: DateTime<Utc>,
@@ -548,6 +805,30 @@ fn next_hour_boundary(after: DateTime<Utc>) -> DateTime<Utc> {
     }
 }
 
+fn parse_daily_summary_time(raw: &str) -> Result<NaiveTime> {
+    NaiveTime::parse_from_str(raw, "%H:%M")
+        .with_context(|| format!("invalid synthesis daily_summary_time `{raw}`; expected HH:MM"))
+}
+
+fn utc_datetime_on_date(date: NaiveDate, time: NaiveTime) -> DateTime<Utc> {
+    date.and_time(time).and_utc()
+}
+
+fn next_daily_summary_boundary(after: DateTime<Utc>, summary_time: NaiveTime) -> DateTime<Utc> {
+    let boundary = utc_datetime_on_date(after.date_naive(), summary_time);
+    if after <= boundary {
+        boundary
+    } else {
+        utc_datetime_on_date(
+            after
+                .date_naive()
+                .succ_opt()
+                .expect("successor date should exist"),
+            summary_time,
+        )
+    }
+}
+
 fn interval_start(target: DateTime<Utc>) -> Instant {
     let now = Utc::now();
     let delay = target
@@ -563,6 +844,13 @@ fn format_prompt_timestamp(timestamp: DateTime<Utc>) -> String {
 
 fn format_string_list(values: &[String]) -> String {
     serde_json::to_string(values).unwrap_or_else(|_| "[]".to_owned())
+}
+
+fn format_json_value<T>(value: &T) -> String
+where
+    T: Serialize,
+{
+    serde_json::to_string(value).unwrap_or_else(|_| "null".to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -593,6 +881,20 @@ struct HourlyDigestPayload {
     people_interacted: Vec<String>,
     key_moments: Vec<String>,
     focus_score: f64,
+    narrative: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DailySummaryPayload {
+    #[serde(rename = "type")]
+    insight_type: InsightType,
+    date: NaiveDate,
+    total_active_hours: f64,
+    projects: Vec<DailyProjectSummary>,
+    time_allocation: BTreeMap<String, String>,
+    focus_blocks: Vec<FocusBlock>,
+    open_threads: Vec<String>,
     narrative: String,
 }
 
@@ -658,6 +960,29 @@ mod tests {
     }
 
     #[test]
+    fn build_daily_summary_prompt_includes_hourly_digests() {
+        let date = NaiveDate::from_ymd_opt(2026, 4, 10).unwrap();
+        let window_start = Utc.with_ymd_and_hms(2026, 4, 10, 0, 0, 0).unwrap();
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
+        let prompt = build_daily_summary_prompt(
+            date,
+            window_start,
+            window_end,
+            &[sample_hourly_insight(1, 9), sample_hourly_insight(2, 10)],
+        );
+
+        assert!(prompt.contains("You are synthesizing a daily summary"));
+        assert!(prompt.contains("date: 2026-04-10"));
+        assert!(prompt.contains("window_start: 2026-04-10T00:00:00Z"));
+        assert!(prompt.contains("window_end: 2026-04-10T18:00:00Z"));
+        assert!(prompt.contains("insight_id: 1"));
+        assert!(prompt.contains("dominant_activity: coding"));
+        assert!(prompt.contains("projects: [{\"name\":\"screencap\""));
+        assert!(prompt.contains("people_interacted: [\"@alice\"]"));
+        assert!(prompt.contains("narrative: Productive coding hour"));
+    }
+
+    #[test]
     fn parse_rolling_context_response_accepts_fenced_json() {
         let parsed = parse_rolling_context_response(
             "```json\n{\n  \"type\": \"rolling\",\n  \"window_start\": \"2026-04-10T14:00:00Z\",\n  \"window_end\": \"2026-04-10T14:30:00Z\",\n  \"current_focus\": \"Debugging JWT token refresh in the screencap auth module\",\n  \"active_project\": \"screencap\",\n  \"apps_used\": {\"VS Code\": \"18 min\", \"Chrome\": \"8 min\"},\n  \"context_switches\": 2,\n  \"mood\": \"deep-focus\",\n  \"summary\": \"Focused coding session on auth refresh handling.\"\n}\n```",
@@ -710,6 +1035,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_daily_summary_response_accepts_fenced_json() {
+        let parsed = parse_daily_summary_response(
+            "```json\n{\n  \"type\": \"daily\",\n  \"date\": \"2026-04-10\",\n  \"total_active_hours\": 7.5,\n  \"projects\": [\n    {\"name\": \"screencap\", \"total_minutes\": 195, \"activities\": [\"auth module debugging\"], \"key_accomplishments\": [\"Fixed JWT refresh bug\"]}\n  ],\n  \"time_allocation\": {\"coding\": \"3h 15m\"},\n  \"focus_blocks\": [\n    {\"start\": \"09:15\", \"end\": \"11:45\", \"duration_min\": 150, \"project\": \"screencap\", \"quality\": \"deep-focus\"}\n  ],\n  \"open_threads\": [\"Need to finish the export path\"],\n  \"narrative\": \"Productive day focused on screencap.\"\n}\n```",
+        )
+        .expect("parse daily summary response");
+
+        assert_eq!(
+            parsed,
+            InsightData::Daily {
+                date: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+                total_active_hours: 7.5,
+                projects: vec![DailyProjectSummary {
+                    name: "screencap".into(),
+                    total_minutes: 195,
+                    activities: vec!["auth module debugging".into()],
+                    key_accomplishments: vec!["Fixed JWT refresh bug".into()],
+                }],
+                time_allocation: BTreeMap::from([("coding".into(), "3h 15m".into())]),
+                focus_blocks: vec![FocusBlock {
+                    start: "09:15".into(),
+                    end: "11:45".into(),
+                    duration_min: 150,
+                    project: "screencap".into(),
+                    quality: "deep-focus".into(),
+                }],
+                open_threads: vec!["Need to finish the export path".into()],
+                narrative: "Productive day focused on screencap.".into(),
+            }
+        );
+    }
+
+    #[test]
     fn parse_rolling_context_response_rejects_malformed_json() {
         let error = parse_rolling_context_response(
             "```json\n{\"type\":\"rolling\",\"window_start\":}\n```",
@@ -731,6 +1088,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_daily_summary_response_rejects_malformed_json() {
+        let error = parse_daily_summary_response("```json\n{\"type\":\"daily\",\"date\":}\n```")
+            .expect_err("malformed json should fail");
+        assert!(error
+            .to_string()
+            .contains("failed to parse daily summary response JSON"));
+    }
+
+    #[test]
     fn next_hour_boundary_rounds_up_unless_already_aligned() {
         let mid_hour = Utc.with_ymd_and_hms(2026, 4, 10, 14, 23, 45).unwrap();
         let aligned = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
@@ -740,6 +1106,24 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap()
         );
         assert_eq!(next_hour_boundary(aligned), aligned);
+    }
+
+    #[test]
+    fn next_daily_summary_boundary_rounds_up_unless_already_aligned() {
+        let summary_time = NaiveTime::from_hms_opt(18, 0, 0).unwrap();
+        let before_boundary = Utc.with_ymd_and_hms(2026, 4, 10, 17, 45, 0).unwrap();
+        let aligned = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
+        let after_boundary = Utc.with_ymd_and_hms(2026, 4, 10, 18, 5, 0).unwrap();
+
+        assert_eq!(
+            next_daily_summary_boundary(before_boundary, summary_time),
+            aligned
+        );
+        assert_eq!(next_daily_summary_boundary(aligned, summary_time), aligned);
+        assert_eq!(
+            next_daily_summary_boundary(after_boundary, summary_time),
+            Utc.with_ymd_and_hms(2026, 4, 11, 18, 0, 0).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -834,6 +1218,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_once_skips_empty_daily_windows() -> Result<()> {
+        let home = temp_home_root("daily-empty");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = DailySummaryScheduler::with_provider(config, &home, provider.clone())?;
+
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
+        let insight = scheduler.run_once_at(window_end).await?;
+        assert!(insight.is_none());
+        assert!(provider.calls().is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn run_once_persists_hourly_digest_insight() -> Result<()> {
         let home = temp_home_root("hourly-digest");
         let config = test_config(&home);
@@ -917,6 +1317,174 @@ mod tests {
         assert!(calls[0].prompt.contains("capture_id: 1"));
 
         fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_persists_daily_summary_insight() -> Result<()> {
+        let home = temp_home_root("daily-summary");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = DailySummaryScheduler::with_provider(config, &home, provider.clone())?;
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
+        seed_hourly_insights(&mut scheduler.db, window_end.date_naive())?;
+
+        provider.push_response(Ok(LlmResponse::with_usage_and_cost(
+            daily_success_response_json(window_end.date_naive()),
+            TokenUsage {
+                prompt_tokens: 320,
+                completion_tokens: 120,
+                total_tokens: 440,
+            },
+            0.61,
+        )));
+
+        let insight = scheduler
+            .run_once_at(window_end)
+            .await?
+            .expect("daily summary should be created");
+
+        assert_eq!(insight.insight_type, InsightType::Daily);
+        assert_eq!(
+            insight.window_start,
+            Utc.with_ymd_and_hms(2026, 4, 10, 0, 0, 0).unwrap()
+        );
+        assert_eq!(insight.window_end, window_end);
+        assert_eq!(insight.model_used.as_deref(), Some("mock-synthesis-model"));
+        assert_eq!(insight.tokens_used, Some(440));
+        assert_eq!(insight.cost_cents, Some(0.61));
+
+        let InsightData::Daily {
+            date,
+            total_active_hours,
+            projects,
+            time_allocation,
+            focus_blocks,
+            open_threads,
+            narrative,
+        } = &insight.data
+        else {
+            unreachable!("expected daily insight payload");
+        };
+        assert_eq!(*date, NaiveDate::from_ymd_opt(2026, 4, 10).unwrap());
+        assert_eq!(*total_active_hours, 7.5);
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "screencap");
+        assert_eq!(
+            time_allocation.get("coding").map(String::as_str),
+            Some("3h 15m")
+        );
+        assert_eq!(focus_blocks.len(), 2);
+        assert_eq!(open_threads.len(), 2);
+        assert!(narrative.contains("Productive day focused on screencap"));
+
+        let insight_count: i64 = scheduler.db.connection().query_row(
+            "SELECT COUNT(*) FROM insights WHERE type = 'daily'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(insight_count, 1);
+
+        let fts_narrative: String = scheduler.db.connection().query_row(
+            "SELECT narrative FROM insights_fts WHERE insight_id = ?1",
+            [insight.id],
+            |row| row.get(0),
+        )?;
+        assert!(fts_narrative.contains("Productive day focused on screencap"));
+
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].kind, MockCallKind::Text);
+        assert!(calls[0].images.is_empty());
+        assert!(calls[0].prompt.contains("date: 2026-04-10"));
+        assert!(calls[0].prompt.contains("insight_id:"));
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    fn sample_hourly_insight(id: i64, hour_start_utc: u32) -> Insight {
+        let hour_start = Utc
+            .with_ymd_and_hms(2026, 4, 10, hour_start_utc, 0, 0)
+            .unwrap();
+        let hour_end = hour_start + ChronoDuration::hours(1);
+        Insight {
+            id,
+            insight_type: InsightType::Hourly,
+            window_start: hour_start,
+            window_end: hour_end,
+            data: InsightData::Hourly {
+                hour_start,
+                hour_end,
+                dominant_activity: "coding".into(),
+                projects: vec![HourlyProjectSummary {
+                    name: Some("screencap".into()),
+                    minutes: 42,
+                    activities: vec!["debugging auth".into(), "writing tests".into()],
+                }],
+                topics: vec!["JWT".into(), "authentication".into()],
+                people_interacted: vec!["@alice".into()],
+                key_moments: vec!["Found the bug".into()],
+                focus_score: 0.72,
+                narrative: "Productive coding hour. The user traced the auth flow and wrote tests."
+                    .into(),
+            },
+            narrative: "Productive coding hour. The user traced the auth flow and wrote tests."
+                .into(),
+            model_used: Some("mock-synthesis-model".into()),
+            tokens_used: Some(300),
+            cost_cents: Some(0.42),
+            created_at: hour_end,
+        }
+    }
+
+    fn sample_hourly_new_insight(date: NaiveDate, start_hour: u32) -> NewInsight {
+        let hour_start =
+            utc_datetime_on_date(date, NaiveTime::from_hms_opt(start_hour, 0, 0).unwrap());
+        let hour_end = hour_start + ChronoDuration::hours(1);
+        NewInsight {
+            insight_type: InsightType::Hourly,
+            window_start: hour_start,
+            window_end: hour_end,
+            data: InsightData::Hourly {
+                hour_start,
+                hour_end,
+                dominant_activity: if start_hour < 12 {
+                    "coding".into()
+                } else {
+                    "communication".into()
+                },
+                projects: vec![
+                    HourlyProjectSummary {
+                        name: Some("screencap".into()),
+                        minutes: 42,
+                        activities: vec!["debugging auth".into(), "writing tests".into()],
+                    },
+                    HourlyProjectSummary {
+                        name: None,
+                        minutes: 18,
+                        activities: vec!["Slack conversations".into()],
+                    },
+                ],
+                topics: vec!["JWT".into(), "authentication".into(), "testing".into()],
+                people_interacted: vec!["@alice".into()],
+                key_moments: vec![
+                    "Found the JWT refresh bug and validated the fix".into(),
+                    "Shared the outcome with Alice in Slack".into(),
+                ],
+                focus_score: 0.72,
+                narrative: "Productive coding hour. The user traced the JWT refresh path, checked documentation, ran targeted tests, and shared the result in Slack.".into(),
+            },
+            model_used: Some("mock-synthesis-model".into()),
+            tokens_used: Some(300),
+            cost_cents: Some(0.42),
+        }
+    }
+
+    fn seed_hourly_insights(db: &mut StorageDb, date: NaiveDate) -> Result<()> {
+        db.insert_insight(&sample_hourly_new_insight(date, 9))?;
+        db.insert_insight(&sample_hourly_new_insight(date, 10))?;
+        db.insert_insight(&sample_hourly_new_insight(date, 14))?;
         Ok(())
     }
 
@@ -1122,12 +1690,40 @@ mod tests {
         )
     }
 
+    fn daily_success_response_json(date: NaiveDate) -> String {
+        format!(
+            concat!(
+                "{{",
+                "\"type\":\"daily\",",
+                "\"date\":\"{}\",",
+                "\"total_active_hours\":7.5,",
+                "\"projects\":[",
+                "{{\"name\":\"screencap\",\"total_minutes\":195,\"activities\":[\"auth module debugging\",\"test writing\"],\"key_accomplishments\":[\"Fixed JWT refresh bug\"]}},",
+                "{{\"name\":\"admin\",\"total_minutes\":85,\"activities\":[\"Slack\",\"email\"],\"key_accomplishments\":[\"Aligned on deployment timeline\"]}}",
+                "],",
+                "\"time_allocation\":{{\"coding\":\"3h 15m\",\"communication\":\"1h 25m\"}},",
+                "\"focus_blocks\":[",
+                "{{\"start\":\"09:15\",\"end\":\"11:45\",\"duration_min\":150,\"project\":\"screencap\",\"quality\":\"deep-focus\"}},",
+                "{{\"start\":\"14:00\",\"end\":\"15:30\",\"duration_min\":90,\"project\":\"screencap\",\"quality\":\"moderate-focus\"}}",
+                "],",
+                "\"open_threads\":[",
+                "\"Need to finish the export path\",",
+                "\"Follow up with Alice on API docs\"",
+                "],",
+                "\"narrative\":\"Productive day focused on screencap. The user made progress on auth, tests, and follow-up communication.\"",
+                "}}"
+            ),
+            date,
+        )
+    }
+
     fn test_config(home: &Path) -> AppConfig {
         let mut config = AppConfig::default();
         config.storage.path = home.to_string_lossy().into_owned();
         config.synthesis.model = "mock-synthesis-model".into();
         config.synthesis.rolling_interval_secs = 60;
         config.synthesis.hourly_enabled = true;
+        config.synthesis.daily_summary_time = "18:00".into();
         config
     }
 

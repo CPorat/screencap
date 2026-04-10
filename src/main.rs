@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::{env, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
-use screencap::{config::AppConfig, daemon};
+use screencap::{config::AppConfig, daemon, pipeline::synthesis};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -87,6 +88,15 @@ async fn main() -> Result<()> {
             let config = AppConfig::load()?;
             print_daemon_status(&daemon::status(&config)?);
         }
+        Some(Command::Today) => {
+            let config = AppConfig::load()?;
+            let home = runtime_home_dir()?;
+            let now = Utc::now();
+            match synthesis::get_or_generate_today_summary_at_home(config, &home, now).await? {
+                Some(insight) => println!("{}", serde_json::to_string_pretty(&insight.data)?),
+                None => println!("no daily summary available for {}", now.date_naive()),
+            }
+        }
         Some(command) => {
             let _config = AppConfig::load()?;
             handle_scaffolded_command(command);
@@ -128,7 +138,6 @@ fn emit_placeholder(command: &str, details: Option<String>) {
 fn handle_scaffolded_command(command: Command) {
     match command {
         Command::Now => emit_placeholder("now", None),
-        Command::Today => emit_placeholder("today", None),
         Command::Search(args) => emit_placeholder(
             "search",
             Some(format!(
@@ -152,6 +161,14 @@ fn handle_scaffolded_command(command: Command) {
         | Command::Stop
         | Command::Status
         | Command::DaemonChild
-        | Command::Config => unreachable!("handled before scaffolding dispatch"),
+        | Command::Config
+        | Command::Today => unreachable!("handled before scaffolding dispatch"),
     }
+}
+
+fn runtime_home_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("HOME environment variable is not set"))
 }

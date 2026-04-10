@@ -18,6 +18,7 @@ Branch: ralph/v1-implementation
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
 - When synthesis needs both extraction batch summaries and frame-level evidence, add a typed storage helper that groups `extraction_batches` with joined `captures`/`extractions`; keep multi-table SQL in `StorageDb` so prompt builders stay focused on prompt shape.
+- Daily synthesis should read typed hourly `Insight` rows from `StorageDb`, and on-demand entry points should check for an existing daily summary before opening an LLM provider so already-generated summaries stay readable without API credentials.
 
 
 
@@ -142,4 +143,14 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Hourly synthesis should align to completed wall-clock hour boundaries and skip empty windows so downstream daily summaries consume durable, non-empty hourly records.
   - When providers expose cost metadata alongside usage, thread it through the shared response type once and let extraction and synthesis persistence reuse that field instead of re-deriving costs independently.
+---
+
+## 2026-04-10 23:13:52 UTC - US-012
+- Implemented daily summary synthesis in `src/pipeline/synthesis.rs`: added the SPEC daily prompt builder, fenced-JSON parser, date validation, a daily scheduler keyed off `daily_summary_time`, and an on-demand path that reuses an existing summary for the day before opening the synthesis provider.
+- Added insight storage helpers in `src/storage/db.rs` so daily synthesis consumes typed hourly `Insight` rows from SQLite, and wired `screencap today` in `src/main.rs` to print the stored-or-generated daily summary as formatted JSON.
+- Added focused coverage for daily prompt construction, parsing, schedule boundary calculation, synthesis persistence, and a CLI integration path that seeds hourly insights, serves a local OpenAI-compatible response once, then verifies a second `today` call reuses the persisted summary without any API key.
+- Files changed: AGENTS.md, src/main.rs, src/pipeline/prompts.rs, src/pipeline/synthesis.rs, src/storage/db.rs, tests/daemon_cli.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Daily synthesis should consume persisted hourly insights rather than re-deriving the day from extraction batches, so each synthesis stage builds on the durable contract of the previous one.
+  - On-demand summary commands should check storage before constructing providers, which keeps previously generated insights readable even when API credentials are unavailable.
 ---

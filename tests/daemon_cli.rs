@@ -1,3 +1,5 @@
+mod support;
+
 use std::{
     fs,
     net::TcpListener,
@@ -31,8 +33,11 @@ impl TestHome {
 
         fs::create_dir_all(&app_root)
             .with_context(|| format!("failed to create test app root at {}", app_root.display()))?;
-        fs::write(app_root.join("config.toml"), format!("[server]\nport = {port}\n"))
-            .with_context(|| format!("failed to write test config at {}", app_root.display()))?;
+        fs::write(
+            app_root.join("config.toml"),
+            format!("[server]\nport = {port}\n"),
+        )
+        .with_context(|| format!("failed to write test config at {}", app_root.display()))?;
 
         Ok(home)
     }
@@ -57,7 +62,8 @@ impl Drop for TestHome {
 }
 
 fn reserve_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").context("failed to reserve a local tcp port")?;
+    let listener =
+        TcpListener::bind("127.0.0.1:0").context("failed to reserve a local tcp port")?;
     listener
         .local_addr()
         .map(|address| address.port())
@@ -129,6 +135,7 @@ fn wait_for_exit(child: &mut Child) -> Result<()> {
 
 #[test]
 fn start_status_stop_manage_background_daemon() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("background")?;
     let start = run_cli(home.path(), &["start"])?;
     assert_success(&start, "start");
@@ -138,16 +145,34 @@ fn start_status_stop_manage_background_daemon() -> Result<()> {
         String::from_utf8_lossy(&start.stdout),
     );
 
-    wait_for(|| Ok(home.pid_path().exists()), "pid file after background start")?;
+    wait_for(
+        || Ok(home.pid_path().exists()),
+        "pid file after background start",
+    )?;
 
     let status = run_cli(home.path(), &["status"])?;
     assert_success(&status, "status");
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("state: running"), "unexpected status output: {stdout}");
-    assert!(stdout.contains("pid: "), "unexpected status output: {stdout}");
-    assert!(stdout.contains("uptime_secs: "), "unexpected status output: {stdout}");
-    assert!(stdout.contains("captures_today: "), "unexpected status output: {stdout}");
-    assert!(stdout.contains("storage_bytes: "), "unexpected status output: {stdout}");
+    assert!(
+        stdout.contains("state: running"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("pid: "),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("uptime_secs: "),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("captures_today: "),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("storage_bytes: "),
+        "unexpected status output: {stdout}"
+    );
 
     let stop = run_cli(home.path(), &["stop"])?;
     assert_success(&stop, "stop");
@@ -157,23 +182,36 @@ fn start_status_stop_manage_background_daemon() -> Result<()> {
         String::from_utf8_lossy(&stop.stdout),
     );
 
-    wait_for(|| Ok(!home.pid_path().exists()), "pid file removal after stop")?;
+    wait_for(
+        || Ok(!home.pid_path().exists()),
+        "pid file removal after stop",
+    )?;
 
     let status = run_cli(home.path(), &["status"])?;
     assert_success(&status, "status after stop");
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("state: stopped"), "unexpected status output: {stdout}");
-    assert!(stdout.contains("pid: -"), "unexpected status output: {stdout}");
+    assert!(
+        stdout.contains("state: stopped"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("pid: -"),
+        "unexpected status output: {stdout}"
+    );
 
     Ok(())
 }
 
 #[test]
 fn foreground_daemon_can_be_stopped_via_cli() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("foreground")?;
     let mut child = spawn_foreground(home.path())?;
 
-    wait_for(|| Ok(home.pid_path().exists()), "pid file after foreground start")?;
+    wait_for(
+        || Ok(home.pid_path().exists()),
+        "pid file after foreground start",
+    )?;
 
     let status = run_cli(home.path(), &["status"])?;
     assert_success(&status, "status while foreground daemon runs");
@@ -187,7 +225,10 @@ fn foreground_daemon_can_be_stopped_via_cli() -> Result<()> {
     assert_success(&stop, "stop foreground daemon");
 
     wait_for_exit(&mut child)?;
-    wait_for(|| Ok(!home.pid_path().exists()), "pid file removal after foreground stop")?;
+    wait_for(
+        || Ok(!home.pid_path().exists()),
+        "pid file removal after foreground stop",
+    )?;
 
     Ok(())
 }

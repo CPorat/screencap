@@ -162,7 +162,7 @@
         "cargo test passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "Use tokio::test with a test helper that spins up the axum server on a random port.",
       "tool": "omp",
       "model": "gpt-5.4",

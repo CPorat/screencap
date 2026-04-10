@@ -349,6 +349,27 @@ pub struct FocusBlock {
     pub quality: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureDetail {
+    pub capture: Capture,
+    pub extraction: Option<Extraction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppCaptureCount {
+    pub app_name: String,
+    pub capture_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureQuery {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub app_name: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractionSearchHit {
     pub extraction: Extraction,

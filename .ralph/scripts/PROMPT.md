@@ -1,13 +1,14 @@
-# Ralph Agent Instructions — Screencap
+# Agent Loop Instructions — Screencap
 
 You are an autonomous coding agent building Screencap, a lightweight macOS-only screen memory tool.
+
+**CRITICAL: You are running inside an external orchestration loop. Do NOT activate or use any ralph, pi-ralph, pi-ultrawork, pi-autopilot, or other loop/persistence skills. Do NOT create .pi/ directories, context snapshots, or state files. Just follow the instructions below directly.**
 
 ## Context
 
 Read these files before starting any work:
 - `SPEC.md` — the full product specification
 - `AGENTS.md` — coding conventions and architectural constraints
-- `.factory/library/architecture.md` — detailed architecture decisions
 
 ## Your Task
 
@@ -24,12 +25,12 @@ Read these files before starting any work:
 
 ## Model Strategy
 
-All stories run via `omp` with `github-copilot` provider. Per-task model overrides are set in each story's `tool`, `model`, `provider`, and `thinking` fields in `prd.json`.
+Per-task model overrides are set in each story's `tool`, `model`, `provider`, and `thinking` fields in `prd.json`.
 
 - **Backend/Rust stories**: `gpt-5.4` with `high` thinking
 - **Frontend/Svelte stories (US-015–019, US-033)**: `gemini-3.1-pro-preview` with `high` thinking
 
-The `ralph.sh` script reads these per-task fields automatically — no manual override needed.
+The orchestration script reads these per-task fields automatically — no manual override needed.
 
 ## Frontend Design Skill
 

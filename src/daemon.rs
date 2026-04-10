@@ -25,6 +25,7 @@ use crate::{
     config::AppConfig,
     storage::{
         db::StorageDb,
+        metrics,
         models::{Capture, NewCapture},
     },
 };
@@ -76,7 +77,10 @@ impl PidFileGuard {
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create daemon pid directory at {}", parent.display())
+                format!(
+                    "failed to create daemon pid directory at {}",
+                    parent.display()
+                )
             })?;
         }
 
@@ -97,8 +101,9 @@ impl PidFileGuard {
                 .open(&path)
             {
                 Ok(mut file) => {
-                    file.write_all(serialized.as_bytes())
-                        .with_context(|| format!("failed to write pid file at {}", path.display()))?;
+                    file.write_all(serialized.as_bytes()).with_context(|| {
+                        format!("failed to write pid file at {}", path.display())
+                    })?;
                     file.sync_all().with_context(|| {
                         format!("failed to flush pid file at {}", path.display())
                     })?;
@@ -106,8 +111,9 @@ impl PidFileGuard {
                 }
                 Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
                 Err(err) => {
-                    return Err(err)
-                        .with_context(|| format!("failed to create pid file at {}", path.display()))
+                    return Err(err).with_context(|| {
+                        format!("failed to create pid file at {}", path.display())
+                    })
                 }
             }
         }
@@ -163,7 +169,12 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
         config.capture.idle_interval_secs,
         shutdown_rx.clone(),
     ));
-    let mut server_task = tokio::spawn(api::server::serve(listener, shutdown_rx));
+    let mut server_task = tokio::spawn(api::server::serve(
+        listener,
+        config.clone(),
+        home.to_path_buf(),
+        shutdown_rx,
+    ));
 
     tokio::select! {
         result = shutdown_signal() => {
@@ -263,7 +274,7 @@ fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
     let pid_path = AppConfig::pid_file_path(home);
     let active = load_live_pid_record(&pid_path)?;
     let captures_today = count_captures_today(config, home)?;
-    let storage_bytes = directory_size(&config.storage_root(home))?;
+    let storage_bytes = metrics::directory_size(&config.storage_root(home))?;
     let uptime_secs = active
         .as_ref()
         .map(|record| {
@@ -326,7 +337,10 @@ async fn wait_for_process_exit(record: &PidRecord, pid_path: &Path) -> Result<()
         }
 
         if time::Instant::now() >= deadline {
-            bail!("timed out waiting for daemon process {} to exit", record.pid);
+            bail!(
+                "timed out waiting for daemon process {} to exit",
+                record.pid
+            );
         }
 
         time::sleep(PID_POLL_INTERVAL).await;
@@ -336,8 +350,9 @@ async fn wait_for_process_exit(record: &PidRecord, pid_path: &Path) -> Result<()
 async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .context("failed to register SIGTERM handler")?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .context("failed to register SIGTERM handler")?;
 
         tokio::select! {
             result = tokio::signal::ctrl_c() => {
@@ -365,47 +380,8 @@ fn count_captures_today(config: &AppConfig, home: &Path) -> Result<u64> {
 
     let db = StorageDb::open_at_path(&db_path)
         .with_context(|| format!("failed to open capture database at {}", db_path.display()))?;
-    let day_start = Utc::now()
-        .date_naive()
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight should be representable")
-        .and_utc();
-    let day_end = day_start + ChronoDuration::days(1);
 
-    db.count_captures_in_window(day_start, day_end)
-}
-
-fn directory_size(path: &Path) -> Result<u64> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(0),
-        Err(err) => return Err(err).with_context(|| format!("failed to stat {}", path.display())),
-    };
-
-    if metadata.file_type().is_symlink() {
-        return Ok(0);
-    }
-
-    if metadata.is_file() {
-        return Ok(metadata.len());
-    }
-
-    if !metadata.is_dir() {
-        return Ok(0);
-    }
-
-    let mut total = 0_u64;
-    for entry in fs::read_dir(path)
-        .with_context(|| format!("failed to read directory {}", path.display()))?
-    {
-        let entry = entry
-            .with_context(|| format!("failed to enumerate directory {}", path.display()))?;
-        total = total
-            .checked_add(directory_size(&entry.path())?)
-            .ok_or_else(|| anyhow!("storage usage overflowed u64"))?;
-    }
-
-    Ok(total)
+    metrics::count_captures_today(&db, Utc::now())
 }
 
 fn runtime_home_dir() -> Result<PathBuf> {
@@ -419,7 +395,10 @@ fn read_pid_record(path: &Path) -> Result<Option<PidRecord>> {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err).with_context(|| format!("failed to read pid file at {}", path.display())),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to read pid file at {}", path.display()))
+        }
     };
 
     toml::from_str(&raw)
@@ -452,7 +431,9 @@ fn remove_pid_file_if_matches(path: &Path, record: &PidRecord) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err).with_context(|| format!("failed to remove pid file at {}", path.display())),
+        Err(err) => {
+            Err(err).with_context(|| format!("failed to remove pid file at {}", path.display()))
+        }
     }
 }
 
@@ -460,7 +441,7 @@ fn process_exists(pid: u32) -> Result<bool> {
     let pid = i32::try_from(pid).context("pid exceeds supported range")?;
     let result = unsafe { libc::kill(pid, 0) };
     if result == 0 {
-        return Ok(true);
+        return Ok(!process_is_zombie(pid)?);
     }
 
     let err = std::io::Error::last_os_error();
@@ -469,6 +450,44 @@ fn process_exists(pid: u32) -> Result<bool> {
         Some(code) if code == libc::EPERM => Ok(true),
         _ => Err(err).with_context(|| format!("failed to probe daemon process {pid}")),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn process_is_zombie(pid: i32) -> Result<bool> {
+    use std::mem::{size_of, MaybeUninit};
+
+    let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let info_size = i32::try_from(size_of::<libc::proc_bsdinfo>())
+        .expect("proc_bsdinfo size should fit in i32");
+    let bytes_read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast::<std::ffi::c_void>(),
+            info_size,
+        )
+    };
+    if bytes_read == 0 {
+        let err = std::io::Error::last_os_error();
+        return match err.raw_os_error() {
+            Some(code) if code == libc::ESRCH => Ok(false),
+            _ => Err(err).with_context(|| format!("failed to inspect daemon process {pid}")),
+        };
+    }
+    if bytes_read != info_size {
+        return Err(anyhow!(
+            "unexpected proc_pidinfo size for process {pid}: expected {info_size}, got {bytes_read}"
+        ));
+    }
+
+    let info = unsafe { info.assume_init() };
+    Ok(info.pbi_status == libc::SZOMB)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_is_zombie(_pid: i32) -> Result<bool> {
+    Ok(false)
 }
 
 fn send_signal(pid: u32, signal: i32) -> Result<()> {
@@ -555,7 +574,10 @@ impl CaptureLoop {
         }
 
         let display_ids = screenshot::display_ids().context("failed to enumerate displays")?;
-        ensure!(!display_ids.is_empty(), "capture bridge returned no displays");
+        ensure!(
+            !display_ids.is_empty(),
+            "capture bridge returned no displays"
+        );
 
         let mut screenshot_paths = Vec::with_capacity(display_ids.len());
         let mut captures = Vec::with_capacity(display_ids.len());
@@ -567,8 +589,9 @@ impl CaptureLoop {
                 self.config.capture.jpeg_quality,
             ) {
                 cleanup_files(&screenshot_paths);
-                return Err(err)
-                    .with_context(|| format!("failed to capture screenshot for display {display_id}"));
+                return Err(err).with_context(|| {
+                    format!("failed to capture screenshot for display {display_id}")
+                });
             }
 
             screenshot_paths.push(screenshot_path.clone());
@@ -660,7 +683,9 @@ fn cleanup_files(paths: &[PathBuf]) {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => debug!(path = %path.display(), error = %err, "failed to clean up screenshot")
+            Err(err) => {
+                debug!(path = %path.display(), error = %err, "failed to clean up screenshot")
+            }
         }
     }
 }
@@ -726,7 +751,13 @@ mod tests {
 
         let mut capture_loop = CaptureLoop::open(config, home.clone())?;
         let first = capture_loop.capture_once_at(first_time)?;
-        assert!(matches!(first, CaptureCycleOutcome::Captured { capture_count: 1, .. }));
+        assert!(matches!(
+            first,
+            CaptureCycleOutcome::Captured {
+                capture_count: 1,
+                ..
+            }
+        ));
 
         let second = capture_loop.capture_once_at(second_time)?;
         assert!(matches!(
@@ -765,7 +796,13 @@ mod tests {
 
         let mut capture_loop = CaptureLoop::open(config, home.clone())?;
         let outcome = capture_loop.capture_once_at(timestamp)?;
-        assert!(matches!(outcome, CaptureCycleOutcome::Captured { capture_count: 1, .. }));
+        assert!(matches!(
+            outcome,
+            CaptureCycleOutcome::Captured {
+                capture_count: 1,
+                ..
+            }
+        ));
 
         let captures = capture_loop.db.get_pending_captures()?;
         assert_eq!(captures.len(), 1);

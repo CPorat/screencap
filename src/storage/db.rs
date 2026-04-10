@@ -6,7 +6,11 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, types::Type, Connection, OptionalExtension, Row, Transaction};
+use rusqlite::{
+    params, params_from_iter,
+    types::{Type, Value},
+    Connection, OpenFlags, OptionalExtension, Row, Transaction,
+};
 #[cfg(test)]
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
@@ -15,8 +19,9 @@ use crate::config::AppConfig;
 
 use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
-    Capture, Extraction, ExtractionBatch, ExtractionSearchHit, ExtractionStatus, Insight,
-    InsightData, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
+    AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionBatch,
+    ExtractionSearchHit, ExtractionStatus, Insight, InsightData, NewCapture, NewExtraction,
+    NewExtractionBatch, NewInsight, Sentiment,
 };
 
 const SCHEMA: &str = r#"
@@ -102,6 +107,19 @@ CREATE INDEX IF NOT EXISTS idx_extractions_activity ON extractions(activity_type
 CREATE INDEX IF NOT EXISTS idx_insights_type_window ON insights(type, window_start);
 "#;
 
+const CAPTURE_SELECT: &str = "SELECT
+    id,
+    timestamp,
+    app_name,
+    window_title,
+    bundle_id,
+    display_id,
+    screenshot_path,
+    extraction_status,
+    extraction_id,
+    created_at
+    FROM captures";
+
 #[derive(Debug)]
 pub struct StorageDb {
     conn: Connection,
@@ -138,6 +156,28 @@ impl StorageDb {
             conn,
             path: Some(path),
         })
+    }
+
+    pub fn open_existing_at_path(path: impl AsRef<Path>) -> Result<Option<Self>> {
+        let path = path.as_ref().to_path_buf();
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to stat sqlite database at {}", path.display())
+                })
+            }
+        }
+
+        let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open sqlite database at {}", path.display()))?;
+        configure_connection(&conn)?;
+
+        Ok(Some(Self {
+            conn,
+            path: Some(path),
+        }))
     }
 
     pub fn open_in_memory() -> Result<Self> {
@@ -301,6 +341,137 @@ impl StorageDb {
             .context("failed to query latest capture")?;
 
         Ok(capture)
+    }
+
+    pub fn count_captures(&self) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))
+            .context("failed to count captures")?;
+
+        u64::try_from(count).context("capture count overflowed u64")
+    }
+
+    pub fn list_captures(&self, query: &CaptureQuery) -> Result<Vec<Capture>> {
+        let mut sql = String::from(CAPTURE_SELECT);
+        let mut filters = Vec::new();
+        let mut params = Vec::new();
+
+        if let Some(from) = query.from.as_ref() {
+            filters.push("timestamp >= ?");
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = query.to.as_ref() {
+            filters.push("timestamp <= ?");
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        if let Some(app_name) = query.app_name.as_ref() {
+            filters.push("app_name = ?");
+            params.push(Value::Text(app_name.clone()));
+        }
+
+        if !filters.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&filters.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?");
+        params.push(Value::Integer(
+            i64::try_from(query.limit).context("capture query limit exceeds sqlite range")?,
+        ));
+        params.push(Value::Integer(
+            i64::try_from(query.offset).context("capture query offset exceeds sqlite range")?,
+        ));
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed to prepare filtered capture query")?;
+        let captures = stmt
+            .query_map(params_from_iter(params.iter()), map_capture_row)
+            .context("failed to query filtered captures")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map filtered captures")?;
+
+        Ok(captures)
+    }
+
+    pub fn get_capture_detail(&self, capture_id: i64) -> Result<Option<CaptureDetail>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    captures.id,
+                    captures.timestamp,
+                    captures.app_name,
+                    captures.window_title,
+                    captures.bundle_id,
+                    captures.display_id,
+                    captures.screenshot_path,
+                    captures.extraction_status,
+                    captures.extraction_id,
+                    captures.created_at,
+                    extractions.id AS detail_extraction_id,
+                    extractions.capture_id AS detail_extraction_capture_id,
+                    extractions.batch_id AS detail_extraction_batch_id,
+                    extractions.activity_type AS detail_extraction_activity_type,
+                    extractions.description AS detail_extraction_description,
+                    extractions.app_context AS detail_extraction_app_context,
+                    extractions.project AS detail_extraction_project,
+                    extractions.topics AS detail_extraction_topics,
+                    extractions.people AS detail_extraction_people,
+                    extractions.key_content AS detail_extraction_key_content,
+                    extractions.sentiment AS detail_extraction_sentiment,
+                    extractions.created_at AS detail_extraction_created_at
+                 FROM captures
+                 LEFT JOIN extractions ON extractions.id = captures.extraction_id
+                 WHERE captures.id = ?1",
+            )
+            .with_context(|| format!("failed to prepare capture detail query for {capture_id}"))?;
+
+        let detail = stmt
+            .query_row(params![capture_id], |row| {
+                Ok(CaptureDetail {
+                    capture: map_capture_row(row)?,
+                    extraction: map_optional_detail_extraction_row(row)?,
+                })
+            })
+            .optional()
+            .with_context(|| format!("failed to query capture detail for {capture_id}"))?;
+
+        Ok(detail)
+    }
+
+    pub fn list_app_capture_counts(&self) -> Result<Vec<AppCaptureCount>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT
+                    app_name,
+                    COUNT(*) AS capture_count
+                 FROM captures
+                 WHERE app_name IS NOT NULL AND trim(app_name) <> ''
+                 GROUP BY app_name
+                 ORDER BY capture_count DESC, app_name ASC",
+            )
+            .context("failed to prepare app capture count query")?;
+
+        let app_counts = stmt
+            .query_map([], |row| {
+                let capture_count: i64 = row.get("capture_count")?;
+                Ok(AppCaptureCount {
+                    app_name: row.get("app_name")?,
+                    capture_count: u64::try_from(capture_count)
+                        .map_err(|error| into_row_error(error.into()))?,
+                })
+            })
+            .context("failed to query app capture counts")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map app capture counts")?;
+
+        Ok(app_counts)
     }
 
     pub fn update_capture_status(
@@ -539,7 +710,14 @@ impl StorageDb {
     }
 }
 
+fn configure_connection(conn: &Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .context("failed to configure sqlite connection")?;
+    Ok(())
+}
+
 fn initialize_connection(conn: &Connection) -> Result<()> {
+    configure_connection(conn)?;
     conn.execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
     Ok(())
@@ -715,11 +893,7 @@ fn insert_capture_record(
     Ok(conn.last_insert_rowid())
 }
 
-fn materialize_capture(
-    id: i64,
-    capture: &NewCapture,
-    created_at: &DateTime<Utc>,
-) -> Capture {
+fn materialize_capture(id: i64, capture: &NewCapture, created_at: &DateTime<Utc>) -> Capture {
     Capture {
         id,
         timestamp: capture.timestamp,
@@ -764,6 +938,31 @@ fn map_extraction_row(row: &Row<'_>) -> rusqlite::Result<Extraction> {
         sentiment: parse_optional_enum_column::<Sentiment>(row.get("sentiment")?)?,
         created_at: parse_timestamp_column(row.get("created_at")?)?,
     })
+}
+
+fn map_optional_detail_extraction_row(row: &Row<'_>) -> rusqlite::Result<Option<Extraction>> {
+    let Some(id) = row.get("detail_extraction_id")? else {
+        return Ok(None);
+    };
+
+    Ok(Some(Extraction {
+        id,
+        capture_id: row.get("detail_extraction_capture_id")?,
+        batch_id: parse_uuid_column(row.get("detail_extraction_batch_id")?)?,
+        activity_type: parse_optional_enum_column::<ActivityType>(
+            row.get("detail_extraction_activity_type")?,
+        )?,
+        description: row.get("detail_extraction_description")?,
+        app_context: row.get("detail_extraction_app_context")?,
+        project: row.get("detail_extraction_project")?,
+        topics: parse_string_list_column(row.get("detail_extraction_topics")?)?,
+        people: parse_string_list_column(row.get("detail_extraction_people")?)?,
+        key_content: row.get("detail_extraction_key_content")?,
+        sentiment: parse_optional_enum_column::<Sentiment>(
+            row.get("detail_extraction_sentiment")?,
+        )?,
+        created_at: parse_timestamp_column(row.get("detail_extraction_created_at")?)?,
+    }))
 }
 
 fn map_search_hit_row(row: &Row<'_>) -> rusqlite::Result<ExtractionSearchHit> {
@@ -1002,6 +1201,102 @@ mod tests {
             .unwrap();
         assert_eq!(updated.extraction_status, ExtractionStatus::Processed);
         assert_eq!(updated.extraction_id, Some(extraction.id));
+    }
+
+    #[test]
+    fn capture_api_queries_return_filtered_results_and_details() {
+        let mut db = StorageDb::open_in_memory().expect("database should open");
+        let first_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+        let second_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 0).unwrap();
+        let third_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 10, 0).unwrap();
+
+        let first = db
+            .insert_capture(&sample_capture(first_time, "code"))
+            .expect("first capture should insert");
+        let mut second_capture = sample_capture(second_time, "safari-1");
+        second_capture.app_name = Some("Safari".into());
+        second_capture.window_title = Some("Docs".into());
+        let second = db
+            .insert_capture(&second_capture)
+            .expect("second capture should insert");
+        let mut third_capture = sample_capture(third_time, "safari-2");
+        third_capture.app_name = Some("Safari".into());
+        third_capture.window_title = Some("Issue".into());
+        let third = db
+            .insert_capture(&third_capture)
+            .expect("third capture should insert");
+
+        let captures = db
+            .list_captures(&CaptureQuery {
+                from: Some(first_time),
+                to: Some(third_time),
+                app_name: Some("Safari".into()),
+                limit: 1,
+                offset: 1,
+            })
+            .expect("filtered capture query should work");
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, third.id);
+
+        let batch = db
+            .insert_extraction_batch(&NewExtractionBatch {
+                id: Uuid::new_v4(),
+                batch_start: second_time,
+                batch_end: third_time,
+                capture_count: 2,
+                primary_activity: Some("browsing".into()),
+                project_context: Some("docs".into()),
+                narrative: Some("Read docs and filed notes".into()),
+                raw_response: None,
+                model_used: Some("mock-model".into()),
+                tokens_used: Some(42),
+                cost_cents: Some(0.3),
+            })
+            .expect("batch should insert");
+        let extraction = db
+            .insert_extraction(&NewExtraction {
+                capture_id: second.id,
+                batch_id: batch.id,
+                activity_type: Some(ActivityType::Browsing),
+                description: Some("Reading Screencap API docs".into()),
+                app_context: Some("Safari docs tab".into()),
+                project: Some("screencap".into()),
+                topics: vec!["api".into(), "axum".into()],
+                people: vec![],
+                key_content: Some("GET /api/captures".into()),
+                sentiment: Some(Sentiment::Exploring),
+            })
+            .expect("extraction should insert");
+        db.update_capture_status(second.id, ExtractionStatus::Processed, Some(extraction.id))
+            .expect("status update should work");
+
+        let detail = db
+            .get_capture_detail(second.id)
+            .expect("capture detail should query")
+            .expect("capture detail should exist");
+        assert_eq!(detail.capture.id, second.id);
+        assert_eq!(
+            detail.extraction.as_ref().map(|value| value.id),
+            Some(extraction.id)
+        );
+        assert_eq!(
+            detail
+                .extraction
+                .as_ref()
+                .and_then(|value| value.description.as_deref()),
+            Some("Reading Screencap API docs")
+        );
+
+        let apps = db
+            .list_app_capture_counts()
+            .expect("app capture counts should query");
+        assert!(apps
+            .iter()
+            .any(|app| app.app_name == "Code" && app.capture_count == 1));
+        assert!(apps
+            .iter()
+            .any(|app| app.app_name == "Safari" && app.capture_count == 2));
+        assert_eq!(first.id, 1);
     }
 
     #[test]

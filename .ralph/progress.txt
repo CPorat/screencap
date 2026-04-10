@@ -11,6 +11,9 @@ Branch: ralph/v1-implementation
 - When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
+- REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
+- Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
+
 
 
 ---
@@ -75,4 +78,13 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - PID files are more reliable if they store both `pid` and `started_at`; status/stop can then distinguish live daemons from stale on-disk state and recover automatically after crashes.
   - For lifecycle tests, foreground daemons are best verified through the real CLI `stop` path instead of ad hoc signals so shutdown behavior and PID-file cleanup stay covered together.
+---
+## 2026-04-10 22:12:14 UTC - US-007
+- Implemented the axum REST surface for daemon health/stats plus read-only capture, screenshot, and app listing endpoints, including JSON error responses and screenshot URL derivation from stored capture paths.
+- Added storage helpers and metrics support for filtered capture listing, capture detail lookup, app capture counts, and directory-size/captures-today reporting without creating the SQLite database on first read.
+- Added API integration coverage that boots the server on a random localhost port, verifies empty-state reads, exercises capture/detail/apps/stats/screenshot endpoints against real fixtures, and confirms screenshot traversal/symlink escapes are rejected.
+- Files changed: AGENTS.md, Cargo.toml, src/api/routes.rs, src/api/server.rs, src/daemon.rs, src/main.rs, src/storage/db.rs, src/storage/mod.rs, src/storage/models.rs, src/storage/metrics.rs, tests/api_server.rs, tests/daemon_cli.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Read-only API endpoints should open SQLite read-only and return empty/404 responses without creating runtime state on disk.
+  - Screenshot file serving should treat stored paths as untrusted input: sanitize them to relative components and walk the tree with no-follow opens so symlinks cannot escape the screenshots root.
 ---

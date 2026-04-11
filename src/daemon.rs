@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::watch,
@@ -27,6 +27,7 @@ use crate::{
         db::StorageDb,
         metrics,
         models::{Capture, NewCapture},
+        prune,
     },
 };
 
@@ -34,7 +35,7 @@ const INTERNAL_DAEMON_SUBCOMMAND: &str = "__daemon-child";
 const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
-
+const DAILY_PRUNE_HOUR_UTC: u32 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
     Running,
@@ -152,6 +153,7 @@ pub fn status(config: &AppConfig) -> Result<DaemonStatus> {
 }
 
 async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
+    prune::run_startup_prune(config, home)?;
     let capture_loop = CaptureLoop::open(config.clone(), home.to_path_buf())?;
     let listener = api::server::bind(config).await?;
     let _pid_guard = PidFileGuard::acquire(AppConfig::pid_file_path(home))?;
@@ -167,6 +169,7 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
     let mut capture_task = tokio::spawn(run_capture_loop(
         capture_loop,
         config.capture.idle_interval_secs,
+        config.storage.max_age_days,
         shutdown_rx.clone(),
     ));
     let mut server_task = tokio::spawn(api::server::serve(
@@ -209,16 +212,27 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
 async fn run_capture_loop(
     mut capture_loop: CaptureLoop,
     idle_interval_secs: u64,
+    retention_days: u32,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let mut interval = time::interval(Duration::from_secs(idle_interval_secs));
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    let mut last_prune_date: Option<NaiveDate> = None;
     loop {
         tokio::select! {
             _ = interval.tick() => {
                 if let Err(err) = capture_loop.capture_once() {
                     error!(error = %err, "capture cycle failed");
+                }
+
+                if let Err(err) = run_daily_prune_if_due(
+                    &capture_loop,
+                    retention_days,
+                    &mut last_prune_date,
+                    Utc::now(),
+                ) {
+                    error!(error = %err, retention_days, "daily prune cycle failed");
                 }
             }
             changed = shutdown.changed() => {
@@ -228,6 +242,33 @@ async fn run_capture_loop(
             }
         }
     }
+
+    Ok(())
+}
+
+fn run_daily_prune_if_due(
+    capture_loop: &CaptureLoop,
+    retention_days: u32,
+    last_prune_date: &mut Option<NaiveDate>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    if retention_days == 0 {
+        return Ok(());
+    }
+
+    let today = now.date_naive();
+    if now.hour() < DAILY_PRUNE_HOUR_UTC || *last_prune_date == Some(today) {
+        return Ok(());
+    }
+
+    let rows_deleted = capture_loop.db.prune_old_data(retention_days)?;
+    *last_prune_date = Some(today);
+    info!(
+        rows_deleted,
+        retention_days,
+        run_date = %today,
+        "completed daily data prune"
+    );
 
     Ok(())
 }

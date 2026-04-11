@@ -554,7 +554,7 @@
         "cargo test passes"
       ],
       "priority": 23,
-      "passes": false,
+      "passes": true,
       "notes": "The JPEG deletion test is critical \u2014 it's easy to forget to delete filesystem artifacts when pruning DB rows.",
       "tool": "omp",
       "model": "gpt-5.4",

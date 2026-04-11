@@ -69,7 +69,7 @@ struct ProjectsArgs {
 
 #[derive(Debug, Args)]
 struct PruneArgs {
-    #[arg(long, default_value = "90d")]
+    #[arg(long = "older-than", default_value = "90d")]
     older_than: String,
 }
 
@@ -122,13 +122,10 @@ async fn main() -> Result<()> {
         Some(Command::Projects(args)) => handle_projects(args)?,
         Some(Command::Export(args)) => markdown::run_export(args.date, args.last, args.output).await?,
         Some(Command::Costs) => handle_costs()?,
+        Some(Command::Prune(args)) => handle_prune(args)?,
         Some(Command::Mcp) => {
             let config = AppConfig::load()?;
             screencap::mcp::server::run_mcp_server(config).await?;
-        }
-        Some(command) => {
-            let _config = AppConfig::load()?;
-            handle_scaffolded_command(command);
         }
     }
 
@@ -289,6 +286,13 @@ fn handle_costs() -> Result<()> {
 
 
 
+
+
+fn handle_prune(args: PruneArgs) -> Result<()> {
+    screencap::storage::prune::run_prune(args.older_than)
+}
+
+
 fn emit_placeholder(command: &str, details: Option<String>) {
     match details {
         Some(details) => println!("{command} is scaffolded but not implemented yet ({details})"),
@@ -296,27 +300,6 @@ fn emit_placeholder(command: &str, details: Option<String>) {
     }
 }
 
-fn handle_scaffolded_command(command: Command) {
-    match command {
-        Command::Prune(args) => {
-            emit_placeholder("prune", Some(format!("older_than={}", args.older_than)))
-        }
-        Command::Start
-        | Command::Stop
-        | Command::Status
-        | Command::DaemonChild
-        | Command::Config
-        | Command::Now
-        | Command::Today
-        | Command::Yesterday
-        | Command::Week
-        | Command::Search(_)
-        | Command::Projects(_)
-        | Command::Costs
-        | Command::Export(_)
-        | Command::Mcp => unreachable!("handled before scaffolding dispatch"),
-    }
-}
 
 fn load_config_and_home() -> Result<(AppConfig, PathBuf)> {
     Ok((AppConfig::load()?, runtime_home_dir()?))

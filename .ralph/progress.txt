@@ -4,6 +4,7 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
 - MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
@@ -335,4 +336,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: keep the markdown export template centralized so CLI export and auto-export paths produce identical section ordering and headings.
   - Gotchas encountered: treat stdout as the default sink only when no explicit output path is provided; otherwise branch cleanly to file/directory writes by export mode.
   - Useful context: Obsidian vault sync should remain a post-write copy step so primary export success/failure is reported independently from secondary sync behavior.
+---
+
+## [2026-04-11 10:59:44 UTC] - US-022
+- Implemented Data Retention and Pruning: added `screencap prune --older-than <window>` execution, storage-layer prune logic that deletes old captures/extractions/batches plus non-daily insights, startup and daily daemon auto-prune hooks keyed by `max_age_days`, and integration/unit coverage verifying old JPEG deletion while preserving old daily insights.
+- Files changed: src/storage/prune.rs, src/storage/db.rs, src/storage/mod.rs, src/main.rs, src/daemon.rs, tests/prune.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: prune filesystem artifacts before deleting their DB rows, then clean orphaned FTS rows in the same transaction so search indexes cannot drift from retained data.
+  - Gotchas encountered: stored screenshot paths can be absolute, `~/...`, or relative; path resolution must normalize all cases against the storage root and treat missing files as non-fatal during retention runs.
+  - Useful context: keep daily insights exempt from retention deletes, and run auto-prune both at daemon startup and once per UTC day so long-running daemons do not accumulate stale data between restarts.
 ---

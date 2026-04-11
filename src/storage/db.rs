@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -13,6 +14,7 @@ use rusqlite::{
 };
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
+use tracing::info;
 
 use crate::config::AppConfig;
 
@@ -1158,6 +1160,169 @@ impl StorageDb {
         })
     }
 
+
+
+
+
+
+    pub fn prune_old_data(&self, days: u32) -> Result<usize> {
+        let cutoff = Utc::now() - chrono::Duration::days(i64::from(days));
+        let cutoff_timestamp = format_db_timestamp(&cutoff);
+        let (rows_deleted, _) = self.prune_older_than(&cutoff_timestamp)?;
+        Ok(rows_deleted)
+    }
+
+    pub fn prune_older_than(&self, timestamp: &str) -> Result<(usize, u64)> {
+        let cutoff = parse_db_timestamp(timestamp)
+            .with_context(|| format!("failed to parse prune cutoff timestamp `{timestamp}`"))?;
+        let cutoff_timestamp = format_db_timestamp(&cutoff);
+        let storage_root = self.path().and_then(Path::parent);
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT screenshot_path
+                 FROM captures
+                 WHERE timestamp < ?1",
+            )
+            .context("failed to prepare prune screenshot path query")?;
+
+        let screenshot_paths = stmt
+            .query_map(params![&cutoff_timestamp], |row| row.get::<_, String>(0))
+            .context("failed to query prune screenshot paths")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map prune screenshot paths")?;
+
+        let mut bytes_reclaimed = 0_u64;
+        for stored_path in screenshot_paths {
+            let full_path = resolve_screenshot_path(&stored_path, storage_root);
+
+            match fs::metadata(&full_path) {
+                Ok(metadata) => {
+                    bytes_reclaimed = bytes_reclaimed.saturating_add(metadata.len());
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to read metadata for pruned screenshot file {}",
+                            full_path.display()
+                        )
+                    })
+                }
+            }
+
+            match fs::remove_file(&full_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to delete pruned screenshot file {}",
+                            full_path.display()
+                        )
+                    })
+                }
+            }
+        }
+
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("failed to start prune transaction")?;
+
+        tx.execute(
+            "UPDATE captures
+             SET extraction_id = NULL
+             WHERE extraction_id IN (
+                 SELECT id
+                 FROM extractions
+                 WHERE created_at < ?1
+                    OR capture_id IN (SELECT id FROM captures WHERE timestamp < ?1)
+                    OR batch_id IN (SELECT id FROM extraction_batches WHERE batch_end < ?1)
+             )",
+            params![&cutoff_timestamp],
+        )
+        .context("failed to clear extraction links for pruned captures")?;
+
+        tx.execute(
+            "DELETE FROM search_index
+             WHERE extraction_id IN (
+                 SELECT id
+                 FROM extractions
+                 WHERE created_at < ?1
+                    OR capture_id IN (SELECT id FROM captures WHERE timestamp < ?1)
+                    OR batch_id IN (SELECT id FROM extraction_batches WHERE batch_end < ?1)
+             )",
+            params![&cutoff_timestamp],
+        )
+        .context("failed to clear search index rows for pruned extractions")?;
+
+        let deleted_extractions = tx
+            .execute(
+                "DELETE FROM extractions
+                 WHERE created_at < ?1
+                    OR capture_id IN (SELECT id FROM captures WHERE timestamp < ?1)
+                    OR batch_id IN (SELECT id FROM extraction_batches WHERE batch_end < ?1)",
+                params![&cutoff_timestamp],
+            )
+            .context("failed to delete old extraction rows")?;
+
+        let deleted_captures = tx
+            .execute(
+                "DELETE FROM captures
+                 WHERE timestamp < ?1",
+                params![&cutoff_timestamp],
+            )
+            .context("failed to delete old capture rows")?;
+
+        let deleted_batches = tx
+            .execute(
+                "DELETE FROM extraction_batches
+                 WHERE batch_end < ?1",
+                params![&cutoff_timestamp],
+            )
+            .context("failed to delete old extraction batch rows")?;
+
+        let deleted_insights = tx
+            .execute(
+                "DELETE FROM insights
+                 WHERE window_end < ?1 AND type != ?2",
+                params![&cutoff_timestamp, InsightType::Daily.as_str()],
+            )
+            .context("failed to delete old non-daily insights")?;
+
+        tx.execute(
+            "DELETE FROM insights_fts
+             WHERE insight_id NOT IN (SELECT id FROM insights)",
+            [],
+        )
+        .context("failed to clear orphaned insight search rows")?;
+
+        tx.execute(
+            "DELETE FROM search_index
+             WHERE extraction_id NOT IN (SELECT id FROM extractions)",
+            [],
+        )
+        .context("failed to clear orphaned extraction search rows")?;
+
+        tx.commit().context("failed to commit prune transaction")?;
+
+        let rows_deleted = deleted_captures + deleted_extractions + deleted_batches + deleted_insights;
+        info!(
+            cutoff = %cutoff_timestamp,
+            rows_deleted,
+            bytes_reclaimed,
+            deleted_captures,
+            deleted_extractions,
+            deleted_batches,
+            deleted_insights,
+            "completed storage prune"
+        );
+
+        Ok((rows_deleted, bytes_reclaimed))
+    }
+
     pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
         self.search_extractions_filtered(&ExtractionSearchQuery {
             query: query.to_owned(),
@@ -1248,6 +1413,35 @@ impl StorageDb {
 
         Ok(results)
     }
+}
+
+fn resolve_screenshot_path(raw_path: &str, storage_root: Option<&Path>) -> PathBuf {
+    if raw_path == "~" {
+        if let Ok(home) = home_dir() {
+            return home;
+        }
+    }
+
+    if let Some(stripped) = raw_path.strip_prefix("~/") {
+        if let Ok(home) = home_dir() {
+            return home.join(stripped);
+        }
+    }
+
+    let candidate = PathBuf::from(raw_path);
+    if candidate.is_absolute() {
+        return candidate;
+    }
+
+    if let Some(root) = storage_root {
+        if candidate.starts_with("screenshots") {
+            return root.join(&candidate);
+        }
+
+        return root.join("screenshots").join(&candidate);
+    }
+
+    candidate
 }
 
 fn configure_connection(conn: &Connection) -> Result<()> {
@@ -1976,6 +2170,244 @@ mod tests {
             .unwrap();
         assert_eq!(updated.extraction_status, ExtractionStatus::Processed);
         assert_eq!(updated.extraction_id, Some(extraction.id));
+    }
+
+    #[test]
+    fn prune_old_data_removes_files_and_related_rows() {
+        let path = temp_db_path("prune");
+        let parent = path.parent().unwrap().to_path_buf();
+        let screenshots_root = parent.join("screenshots");
+        fs::create_dir_all(&screenshots_root).expect("screenshots root should be created");
+
+        let mut db = StorageDb::open_at_path(&path).expect("database should open");
+        let old_time = Utc::now() - chrono::Duration::days(10);
+        let recent_time = Utc::now() - chrono::Duration::days(1);
+
+        let old_relative_path = PathBuf::from("2026/04/01/old.jpg");
+        let recent_relative_path = PathBuf::from("2026/04/10/recent.jpg");
+
+        let old_file_path = screenshots_root.join(&old_relative_path);
+        let recent_file_path = screenshots_root.join(&recent_relative_path);
+        fs::create_dir_all(
+            old_file_path
+                .parent()
+                .expect("old screenshot parent should exist"),
+        )
+        .expect("old screenshot parent should be created");
+        fs::create_dir_all(
+            recent_file_path
+                .parent()
+                .expect("recent screenshot parent should exist"),
+        )
+        .expect("recent screenshot parent should be created");
+        fs::write(&old_file_path, b"old").expect("old screenshot should be written");
+        fs::write(&recent_file_path, b"recent").expect("recent screenshot should be written");
+
+        let old_capture = db
+            .insert_capture(&NewCapture {
+                timestamp: old_time,
+                app_name: Some("Code".into()),
+                window_title: Some("Old capture".into()),
+                bundle_id: Some("com.microsoft.VSCode".into()),
+                display_id: Some(1),
+                screenshot_path: old_relative_path.to_string_lossy().into_owned(),
+            })
+            .expect("old capture should insert");
+        let recent_capture = db
+            .insert_capture(&NewCapture {
+                timestamp: recent_time,
+                app_name: Some("Code".into()),
+                window_title: Some("Recent capture".into()),
+                bundle_id: Some("com.microsoft.VSCode".into()),
+                display_id: Some(1),
+                screenshot_path: recent_relative_path.to_string_lossy().into_owned(),
+            })
+            .expect("recent capture should insert");
+
+        let old_batch = db
+            .insert_extraction_batch(&NewExtractionBatch {
+                id: Uuid::new_v4(),
+                batch_start: old_time - chrono::Duration::minutes(5),
+                batch_end: old_time,
+                capture_count: 1,
+                primary_activity: Some("coding".into()),
+                project_context: Some("screencap".into()),
+                narrative: Some("old narrative".into()),
+                raw_response: None,
+                model_used: None,
+                tokens_used: None,
+                cost_cents: None,
+            })
+            .expect("old batch should insert");
+        let recent_batch = db
+            .insert_extraction_batch(&NewExtractionBatch {
+                id: Uuid::new_v4(),
+                batch_start: recent_time - chrono::Duration::minutes(5),
+                batch_end: recent_time,
+                capture_count: 1,
+                primary_activity: Some("coding".into()),
+                project_context: Some("screencap".into()),
+                narrative: Some("recent narrative".into()),
+                raw_response: None,
+                model_used: None,
+                tokens_used: None,
+                cost_cents: None,
+            })
+            .expect("recent batch should insert");
+
+        let old_extraction = db
+            .insert_extraction(&NewExtraction {
+                capture_id: old_capture.id,
+                batch_id: old_batch.id,
+                activity_type: Some(ActivityType::Coding),
+                description: Some("old extraction".into()),
+                app_context: Some("old context".into()),
+                project: Some("screencap".into()),
+                topics: vec!["old".into()],
+                people: vec![],
+                key_content: Some("old key content".into()),
+                sentiment: Some(Sentiment::Focused),
+            })
+            .expect("old extraction should insert");
+        let recent_extraction = db
+            .insert_extraction(&NewExtraction {
+                capture_id: recent_capture.id,
+                batch_id: recent_batch.id,
+                activity_type: Some(ActivityType::Coding),
+                description: Some("recent extraction".into()),
+                app_context: Some("recent context".into()),
+                project: Some("screencap".into()),
+                topics: vec!["recent".into()],
+                people: vec![],
+                key_content: Some("recent key content".into()),
+                sentiment: Some(Sentiment::Focused),
+            })
+            .expect("recent extraction should insert");
+
+        db.update_capture_status(
+            old_capture.id,
+            ExtractionStatus::Processed,
+            Some(old_extraction.id),
+        )
+        .expect("old capture status should update");
+        db.update_capture_status(
+            recent_capture.id,
+            ExtractionStatus::Processed,
+            Some(recent_extraction.id),
+        )
+        .expect("recent capture status should update");
+
+        let old_daily_start = old_time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let old_daily_end = old_time
+            .date_naive()
+            .and_hms_opt(23, 59, 59)
+            .unwrap()
+            .and_utc();
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Daily,
+            window_start: old_daily_start,
+            window_end: old_daily_end,
+            data: InsightData::Daily {
+                date: old_time.date_naive(),
+                total_active_hours: 1.0,
+                projects: vec![],
+                time_allocation: std::collections::BTreeMap::new(),
+                focus_blocks: vec![],
+                open_threads: vec![],
+                narrative: "old daily insight".into(),
+            },
+            model_used: None,
+            tokens_used: None,
+            cost_cents: None,
+        })
+        .expect("old daily insight should insert");
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Hourly,
+            window_start: old_time,
+            window_end: old_time + chrono::Duration::hours(1),
+            data: InsightData::Hourly {
+                hour_start: old_time,
+                hour_end: old_time + chrono::Duration::hours(1),
+                dominant_activity: "coding".into(),
+                projects: vec![],
+                topics: vec![],
+                people_interacted: vec![],
+                key_moments: vec![],
+                focus_score: 0.5,
+                narrative: "old hourly insight".into(),
+            },
+            model_used: None,
+            tokens_used: None,
+            cost_cents: None,
+        })
+        .expect("old hourly insight should insert");
+
+        let cutoff_timestamp = format_db_timestamp(&(Utc::now() - chrono::Duration::days(7)));
+        let rows_deleted = db.prune_old_data(7).expect("prune should succeed");
+        assert_eq!(rows_deleted, 4);
+        assert!(!old_file_path.exists(), "old screenshot should be deleted");
+        assert!(recent_file_path.exists(), "recent screenshot should remain");
+
+        let capture_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))
+            .expect("capture count should query");
+        assert_eq!(capture_count, 1);
+
+        let extraction_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))
+            .expect("extraction count should query");
+        assert_eq!(extraction_count, 1);
+
+        let batch_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| row.get(0))
+            .expect("batch count should query");
+        assert_eq!(batch_count, 1);
+
+        let non_daily_old_insights: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM insights WHERE type != 'daily' AND window_end < ?1",
+                params![&cutoff_timestamp],
+                |row| row.get(0),
+            )
+            .expect("old non-daily insight count should query");
+        assert_eq!(non_daily_old_insights, 0);
+
+        let daily_old_insights: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM insights WHERE type = 'daily' AND window_end < ?1",
+                params![&cutoff_timestamp],
+                |row| row.get(0),
+            )
+            .expect("old daily insight count should query");
+        assert_eq!(daily_old_insights, 1);
+
+        let old_search_rows: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM search_index WHERE extraction_id = ?1",
+                params![old_extraction.id],
+                |row| row.get(0),
+            )
+            .expect("old search index rows should query");
+        assert_eq!(old_search_rows, 0);
+
+        let recent_search_rows: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM search_index WHERE extraction_id = ?1",
+                params![recent_extraction.id],
+                |row| row.get(0),
+            )
+            .expect("recent search index rows should query");
+        assert_eq!(recent_search_rows, 1);
+
+        drop(db);
+        fs::remove_dir_all(parent).expect("temp storage directory should be removable");
     }
 
     #[test]

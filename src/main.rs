@@ -86,9 +86,9 @@ struct ExportArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
-
     let cli = Cli::parse();
+    init_tracing(matches!(cli.command, Some(Command::Mcp)));
+
     match cli.command {
         None | Some(Command::DaemonChild) => {
             let config = AppConfig::load()?;
@@ -122,6 +122,10 @@ async fn main() -> Result<()> {
         Some(Command::Search(args)) => handle_search(args)?,
         Some(Command::Projects(args)) => handle_projects(args)?,
         Some(Command::Costs) => handle_costs()?,
+        Some(Command::Mcp) => {
+            let config = AppConfig::load()?;
+            screencap::mcp::run_mcp_server(config)?;
+        }
         Some(command) => {
             let _config = AppConfig::load()?;
             handle_scaffolded_command(command);
@@ -131,8 +135,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn init_tracing() {
+fn init_tracing(force_stderr: bool) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if force_stderr {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .with_writer(std::io::stderr)
+            .try_init();
+        return;
+    }
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -282,7 +295,6 @@ fn emit_placeholder(command: &str, details: Option<String>) {
 
 fn handle_scaffolded_command(command: Command) {
     match command {
-        Command::Mcp => emit_placeholder("mcp", None),
         Command::Prune(args) => {
             emit_placeholder("prune", Some(format!("older_than={}", args.older_than)))
         }
@@ -304,7 +316,8 @@ fn handle_scaffolded_command(command: Command) {
         | Command::Week
         | Command::Search(_)
         | Command::Projects(_)
-        | Command::Costs => unreachable!("handled before scaffolding dispatch"),
+        | Command::Costs
+        | Command::Mcp => unreachable!("handled before scaffolding dispatch"),
     }
 }
 

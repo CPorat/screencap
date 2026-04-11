@@ -169,7 +169,7 @@ impl Default for CaptureConfig {
             event_settle_ms: 500,
             jpeg_quality: 75,
             excluded_apps: vec!["1Password".into(), "Keychain Access".into()],
-            excluded_window_titles: vec!["Private".into(), "Incognito".into()],
+            excluded_window_titles: vec![],
         }
     }
 }
@@ -405,6 +405,7 @@ markdown_template = "compact"
         assert_eq!(config.capture.idle_interval_secs, 120);
         assert_eq!(config.capture.event_settle_ms, 500);
         assert_eq!(config.capture.excluded_apps, vec!["Secrets"]);
+        assert_eq!(config.capture.excluded_window_titles, vec!["Hidden"]);
         assert_eq!(config.extraction.provider, AiProvider::Lmstudio);
         assert_eq!(config.extraction.max_images_per_batch, 4);
         assert_eq!(config.synthesis.provider, AiProvider::Openai);
@@ -442,7 +443,6 @@ markdown_template = "compact"
 
         fs::remove_dir_all(&home).expect("cleanup temp home");
     }
-
 
     #[test]
     fn invalid_toml_returns_error() {

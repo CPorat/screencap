@@ -642,7 +642,6 @@ fn ask_returns_semantic_answer_with_references() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn projects_show_capture_based_allocations() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;

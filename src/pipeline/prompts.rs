@@ -207,7 +207,10 @@ pub fn build_semantic_search_prompt(query: &str, extractions: &[Extraction]) -> 
             topics = format_string_list(&extraction.topics),
             people = format_string_list(&extraction.people),
             key_content = extraction.key_content.as_deref().unwrap_or(""),
-            sentiment = extraction.sentiment.map(|value| value.as_str()).unwrap_or("unknown"),
+            sentiment = extraction
+                .sentiment
+                .map(|value| value.as_str())
+                .unwrap_or("unknown"),
         ));
     }
 

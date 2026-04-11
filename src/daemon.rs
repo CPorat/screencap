@@ -14,6 +14,7 @@ use std::{
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 use tokio::{
     sync::{mpsc, watch},
     time,
@@ -615,6 +616,7 @@ struct CaptureLoop {
     config: AppConfig,
     home: PathBuf,
     db: StorageDb,
+    excluded_window_title_patterns: Vec<Regex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -635,6 +637,26 @@ enum CaptureCycleOutcome {
     },
 }
 
+fn compile_excluded_window_title_patterns(raw_patterns: &[String]) -> Result<Vec<Regex>> {
+    raw_patterns
+        .iter()
+        .enumerate()
+        .map(|(index, pattern)| {
+            Regex::new(pattern).with_context(|| {
+                format!(
+                    "invalid capture.excluded_window_titles regex at index {index}: {pattern}"
+                )
+            })
+        })
+        .collect()
+}
+
+fn is_excluded_window_title(window_title: &str, patterns: &[Regex]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| pattern.is_match(window_title))
+}
+
 impl CaptureLoop {
     fn open(config: AppConfig, home: PathBuf) -> Result<Self> {
         ensure!(
@@ -642,11 +664,18 @@ impl CaptureLoop {
             "capture idle_interval_secs must be greater than 0"
         );
 
+        let excluded_window_title_patterns =
+            compile_excluded_window_title_patterns(&config.capture.excluded_window_titles)?;
         let db_path = config.storage_root(&home).join("screencap.db");
         let db = StorageDb::open_at_path(&db_path)
             .with_context(|| format!("failed to open capture database at {}", db_path.display()))?;
 
-        Ok(Self { config, home, db })
+        Ok(Self {
+            config,
+            home,
+            db,
+            excluded_window_title_patterns,
+        })
     }
 
     fn capture_once(&mut self) -> Result<CaptureCycleOutcome> {
@@ -656,11 +685,26 @@ impl CaptureLoop {
     fn capture_once_at(&mut self, timestamp: DateTime<Utc>) -> Result<CaptureCycleOutcome> {
         let active_window = window::get_active_window().context("failed to fetch active window")?;
 
-        if self.is_excluded(&active_window) {
+        if self.config.capture.excluded_apps.contains(&active_window.app_name) {
             info!(
                 app_name = %active_window.app_name,
                 window_title = %active_window.window_title,
-                "skipping capture for excluded window context"
+                "skipping capture for excluded app"
+            );
+            return Ok(CaptureCycleOutcome::SkippedExcluded {
+                app_name: active_window.app_name,
+                window_title: active_window.window_title,
+            });
+        }
+
+        if is_excluded_window_title(
+            &active_window.window_title,
+            &self.excluded_window_title_patterns,
+        ) {
+            info!(
+                app_name = %active_window.app_name,
+                window_title = %active_window.window_title,
+                "Skipping capture: window title matches exclusion pattern"
             );
             return Ok(CaptureCycleOutcome::SkippedExcluded {
                 app_name: active_window.app_name,
@@ -682,36 +726,51 @@ impl CaptureLoop {
             });
         }
 
-        let display_ids = screenshot::display_ids().context("failed to enumerate displays")?;
-        ensure!(
-            !display_ids.is_empty(),
-            "capture bridge returned no displays"
-        );
+        let display_count =
+            screenshot::get_display_count().context("failed to enumerate displays")?;
+        ensure!(display_count > 0, "capture bridge returned no displays");
 
-        let mut screenshot_paths = Vec::with_capacity(display_ids.len());
-        let mut captures = Vec::with_capacity(display_ids.len());
-        for display_id in display_ids {
+        let mut screenshot_paths = Vec::with_capacity(display_count);
+        let mut captures = Vec::with_capacity(display_count);
+        let mut failed_displays = Vec::new();
+
+        for display_index in 0..display_count {
+            let display_id =
+                u32::try_from(display_index).context("display index overflowed u32")?;
             let screenshot_path = self.screenshot_path(timestamp, display_id);
-            if let Err(err) = screenshot::capture_screenshot(
+            match screenshot::capture_screenshot(
                 display_id,
                 &screenshot_path,
                 self.config.capture.jpeg_quality,
             ) {
-                cleanup_files(&screenshot_paths);
-                return Err(err).with_context(|| {
-                    format!("failed to capture screenshot for display {display_id}")
-                });
+                Ok(()) => {
+                    screenshot_paths.push(screenshot_path.clone());
+                    captures.push(NewCapture {
+                        timestamp,
+                        app_name: Some(active_window.app_name.clone()),
+                        window_title: Some(active_window.window_title.clone()),
+                        bundle_id: Some(active_window.bundle_id.clone()),
+                        display_id: Some(i64::from(display_id)),
+                        screenshot_path: screenshot_path.to_string_lossy().into_owned(),
+                    });
+                }
+                Err(err) => {
+                    error!(display_id, error = %err, "failed to capture display screenshot");
+                    failed_displays.push((display_id, err));
+                }
             }
+        }
 
-            screenshot_paths.push(screenshot_path.clone());
-            captures.push(NewCapture {
-                timestamp,
-                app_name: Some(active_window.app_name.clone()),
-                window_title: Some(active_window.window_title.clone()),
-                bundle_id: Some(active_window.bundle_id.clone()),
-                display_id: Some(i64::from(display_id)),
-                screenshot_path: screenshot_path.to_string_lossy().into_owned(),
-            });
+        if !failed_displays.is_empty() {
+            cleanup_files(&screenshot_paths);
+            let failed_display_details = failed_displays
+                .into_iter()
+                .map(|(display_id, err)| format!("{display_id}: {err}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(anyhow!(
+                "failed to capture one or more displays: {failed_display_details}"
+            ));
         }
 
         if let Err(err) = self.db.insert_captures(&captures) {
@@ -731,16 +790,6 @@ impl CaptureLoop {
             app_name: active_window.app_name,
             window_title: active_window.window_title,
         })
-    }
-
-    fn is_excluded(&self, active_window: &WindowInfo) -> bool {
-        self.config.capture.excluded_apps.contains(&active_window.app_name)
-            || self
-                .config
-                .capture
-                .excluded_window_titles
-                .iter()
-                .any(|title| active_window.window_title.contains(title))
     }
 
     fn duplicate_capture(
@@ -795,6 +844,36 @@ fn cleanup_files(paths: &[PathBuf]) {
     }
 }
 
+#[cfg(test)]
+mod exclusion_pattern_tests {
+    use super::{compile_excluded_window_title_patterns, is_excluded_window_title};
+
+    #[test]
+    fn excluded_window_title_regex_matches() {
+        let patterns = compile_excluded_window_title_patterns(&vec![
+            "^Mock\\s+Window$".to_string(),
+            ".*Incognito.*".to_string(),
+        ])
+        .expect("regex patterns should compile");
+
+        assert!(is_excluded_window_title("Mock Window", &patterns));
+        assert!(is_excluded_window_title("Personal Incognito Tab", &patterns));
+        assert!(!is_excluded_window_title("Regular Browser", &patterns));
+    }
+
+    #[test]
+    fn invalid_excluded_window_title_regex_returns_error() {
+        let err = compile_excluded_window_title_patterns(&vec!["[invalid".to_string()])
+            .expect_err("invalid regex should fail compilation");
+
+        assert!(
+            err.to_string()
+                .contains("invalid capture.excluded_window_titles regex at index 0"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
 #[cfg(all(test, feature = "mock-capture"))]
 mod tests {
     use std::{
@@ -844,6 +923,23 @@ mod tests {
     }
 
     #[test]
+    fn invalid_excluded_window_title_regex_fails_capture_loop_open() {
+        let home = temp_home_root("invalid-window-title-regex");
+        let mut config = test_config(&home);
+        config.capture.excluded_window_titles = vec!["[invalid".into()];
+
+        let err = CaptureLoop::open(config, home.clone())
+            .expect_err("invalid title regex should fail daemon startup");
+        assert!(
+            err.to_string()
+                .contains("invalid capture.excluded_window_titles regex at index 0"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_dir_all(&home).expect("cleanup temp home");
+    }
+
+    #[test]
     fn excluded_app_is_skipped() -> Result<()> {
         let home = temp_home_root("excluded-app");
         let mut config = test_config(&home);
@@ -867,7 +963,7 @@ mod tests {
     fn excluded_window_title_pattern_is_skipped() -> Result<()> {
         let home = temp_home_root("excluded-window-title");
         let mut config = test_config(&home);
-        config.capture.excluded_window_titles = vec!["Mock".into()];
+        config.capture.excluded_window_titles = vec!["^Mock\\s+Window$".into()];
         let timestamp = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
 
         let mut capture_loop = CaptureLoop::open(config, home.clone())?;
@@ -883,7 +979,6 @@ mod tests {
         fs::remove_dir_all(&home)?;
         Ok(())
     }
-
 
     #[test]
     fn dedup_skips_unchanged_context_within_idle_interval() -> Result<()> {

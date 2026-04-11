@@ -158,7 +158,6 @@ declare module '$env/static/private' {
 	export const XDG_CONFIG_HOME: string;
 	export const npm_config_min_release_age: string;
 	export const VSCODE_NLS_CONFIG: string;
-	export const CARGO_FEATURE_MOCK_CAPTURE: string;
 	export const HOMEBREW_PREFIX: string;
 	export const CI: string;
 	export const CARGO_CFG_TARGET_ARCH: string;
@@ -411,7 +410,6 @@ declare module '$env/dynamic/private' {
 		XDG_CONFIG_HOME: string;
 		npm_config_min_release_age: string;
 		VSCODE_NLS_CONFIG: string;
-		CARGO_FEATURE_MOCK_CAPTURE: string;
 		HOMEBREW_PREFIX: string;
 		CI: string;
 		CARGO_CFG_TARGET_ARCH: string;

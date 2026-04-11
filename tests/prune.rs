@@ -42,9 +42,7 @@ impl TestHome {
         let port = reserve_port()?;
         fs::write(
             app_root.join("config.toml"),
-            format!(
-                "[server]\nport = {port}\n\n[storage]\nmax_age_days = {max_age_days}\n"
-            ),
+            format!("[server]\nport = {port}\n\n[storage]\nmax_age_days = {max_age_days}\n"),
         )
         .with_context(|| format!("failed to write test config at {}", app_root.display()))?;
 
@@ -58,7 +56,6 @@ impl TestHome {
     fn db_path(&self) -> PathBuf {
         self.path.join(".screencap").join("screencap.db")
     }
-
 }
 
 impl Drop for TestHome {
@@ -156,7 +153,11 @@ fn seed_prune_fixture(home: &TestHome) -> Result<Vec<PathBuf>> {
 
     let new_relative = PathBuf::from("screenshots/2026/01/01/new.jpg");
     let new_absolute = home.path().join(".screencap").join(&new_relative);
-    fs::create_dir_all(new_absolute.parent().expect("new screenshot parent should exist"))?;
+    fs::create_dir_all(
+        new_absolute
+            .parent()
+            .expect("new screenshot parent should exist"),
+    )?;
     fs::write(new_absolute, vec![1_u8; 128])?;
     db.insert_capture(&NewCapture {
         timestamp: new_time,
@@ -167,7 +168,11 @@ fn seed_prune_fixture(home: &TestHome) -> Result<Vec<PathBuf>> {
         screenshot_path: new_relative.to_string_lossy().into_owned(),
     })?;
 
-    let old_daily_start = old_time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let old_daily_start = old_time
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
     let old_daily_end = old_time
         .date_naive()
         .and_hms_opt(23, 59, 59)
@@ -223,7 +228,10 @@ fn prune_command_deletes_old_rows_and_files() -> Result<()> {
     let output = run_cli(home.path(), &["prune", "--older-than", "90d"])?;
     assert_success(&output, "prune");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("pruned"), "unexpected prune output: {stdout}");
+    assert!(
+        stdout.contains("pruned"),
+        "unexpected prune output: {stdout}"
+    );
 
     for old_file in &old_files {
         assert!(
@@ -250,14 +258,16 @@ fn prune_command_deletes_old_rows_and_files() -> Result<()> {
     )?;
     assert_eq!(new_capture_count, 1);
 
-    let extraction_count: i64 = db
-        .connection()
-        .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
+    let extraction_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM extractions", [], |row| row.get(0))?;
     assert_eq!(extraction_count, 0);
 
-    let batch_count: i64 = db
-        .connection()
-        .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| row.get(0))?;
+    let batch_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| {
+                row.get(0)
+            })?;
     assert_eq!(batch_count, 0);
 
     let old_non_daily_count: i64 = db.connection().query_row(
@@ -276,7 +286,6 @@ fn prune_command_deletes_old_rows_and_files() -> Result<()> {
 
     Ok(())
 }
-
 
 #[test]
 fn daemon_startup_auto_prunes_when_max_age_configured() -> Result<()> {

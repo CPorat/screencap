@@ -646,7 +646,6 @@ async fn handle_semantic_search(
     }))
 }
 
-
 fn parse_capture_list_params(raw: Option<&str>) -> Result<CaptureListParams, ApiError> {
     parse_query_params(raw, "invalid capture query parameters")
 }
@@ -787,7 +786,6 @@ fn semantic_search_reference_from_hit(
         extraction: hit.extraction,
     })
 }
-
 
 fn screenshot_url_from_path(state: &ApiState, screenshot_path: &str) -> Option<String> {
     let path = Path::new(screenshot_path);

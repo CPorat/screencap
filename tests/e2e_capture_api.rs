@@ -136,7 +136,10 @@ async fn capture_loop_populates_api_captures() -> Result<()> {
 
     let port = reserve_port()?;
     let config_path = write_config(home, port)?;
-    assert!(config_path.exists(), "config should be written before start");
+    assert!(
+        config_path.exists(),
+        "config should be written before start"
+    );
 
     let _daemon = ForegroundDaemon::spawn(home)?;
 

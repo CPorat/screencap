@@ -2173,6 +2173,40 @@ mod tests {
     }
 
     #[test]
+    fn insert_captures_rolls_back_when_any_row_fails() {
+        let mut db = StorageDb::open_in_memory().expect("database should open");
+        db.connection()
+            .execute(
+                r#"
+                CREATE TEMP TRIGGER reject_failing_capture_insert
+                BEFORE INSERT ON captures
+                WHEN NEW.screenshot_path = '/tmp/fail.jpg'
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced insert failure');
+                END;
+                "#,
+                [],
+            )
+            .expect("failure trigger should install");
+
+        let first_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 10, 0).unwrap();
+        let second_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 11, 0).unwrap();
+        let mut failing_capture = sample_capture(second_time, "fail");
+        failing_capture.screenshot_path = "/tmp/fail.jpg".into();
+
+        let error = db
+            .insert_captures(&[sample_capture(first_time, "ok"), failing_capture])
+            .expect_err("batch insert should fail");
+        assert!(error.to_string().contains("/tmp/fail.jpg"));
+
+        let capture_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))
+            .expect("capture count query should work");
+        assert_eq!(capture_count, 0, "transaction should rollback entire batch");
+    }
+
+    #[test]
     fn prune_old_data_removes_files_and_related_rows() {
         let path = temp_db_path("prune");
         let parent = path.parent().unwrap().to_path_buf();

@@ -23,12 +23,10 @@ use crate::{
     storage::{
         db::StorageDb,
         models::{
-            DailyProjectSummary, ExtractionBatchDetail, ExtractionSearchHit,
-            ExtractionSearchQuery, FocusBlock, HourlyProjectSummary, Insight, InsightData,
-            InsightType, NewInsight,
+            DailyProjectSummary, ExtractionBatchDetail, ExtractionSearchHit, ExtractionSearchQuery,
+            FocusBlock, HourlyProjectSummary, Insight, InsightData, InsightType, NewInsight,
         },
     },
-
 };
 
 use super::{
@@ -332,7 +330,8 @@ impl DailySummaryScheduler {
             return Ok(None);
         }
 
-        self.run_once_at(utc_datetime_on_date(date, summary_time)).await
+        self.run_once_at(utc_datetime_on_date(date, summary_time))
+            .await
     }
 
     async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
@@ -477,10 +476,9 @@ pub fn semantic_search_candidates(
 
 fn semantic_search_fallback_terms(query: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "for",
-        "from", "how", "i", "in", "into", "is", "it", "of", "on", "or", "that",
-        "the", "to", "was", "were", "what", "when", "where", "which", "who", "why",
-        "with", "you", "your",
+        "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "for", "from", "how", "i",
+        "in", "into", "is", "it", "of", "on", "or", "that", "the", "to", "was", "were", "what",
+        "when", "where", "which", "who", "why", "with", "you", "your",
     ];
 
     let mut terms = query
@@ -628,7 +626,6 @@ pub fn parse_semantic_search_response(json_str: &str) -> Result<SemanticSearchPa
         .context("failed to parse semantic search response JSON")
 }
 
-
 pub fn parse_rolling_context_response(json_str: &str) -> Result<InsightData> {
     let payload = extract_json_payload(json_str);
     let parsed = serde_json::from_str::<RollingContextPayload>(payload)
@@ -719,7 +716,6 @@ fn rank_semantic_references(
 
     ranked
 }
-
 
 fn open_synthesis_provider(config: &AppConfig) -> Result<Arc<dyn LlmProvider>> {
     let provider_config = LlmProviderConfig::from(&config.synthesis);
@@ -1068,7 +1064,6 @@ pub struct SemanticSearchPayload {
     pub capture_ids: Vec<i64>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RollingContextPayload {
@@ -1193,7 +1188,6 @@ mod tests {
         assert!(prompt.contains("projects: [{\"name\":\"screencap\""));
         assert!(prompt.contains("people_interacted: [\"@alice\"]"));
         assert!(prompt.contains("narrative: Productive coding hour"));
-
     }
 
     #[test]
@@ -1322,10 +1316,9 @@ mod tests {
     }
     #[test]
     fn parse_semantic_search_response_rejects_malformed_json() {
-        let error = parse_semantic_search_response(
-            "```json\n{\"answer\":\"bad\",\"capture_ids\":}\n```",
-        )
-        .expect_err("malformed semantic json should fail");
+        let error =
+            parse_semantic_search_response("```json\n{\"answer\":\"bad\",\"capture_ids\":}\n```")
+                .expect_err("malformed semantic json should fail");
         assert!(error
             .to_string()
             .contains("failed to parse semantic search response JSON"));
@@ -1382,7 +1375,9 @@ mod tests {
         let calls = provider.calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].kind, MockCallKind::Text);
-        assert!(calls[0].prompt.contains("what was I doing around jwt refresh?"));
+        assert!(calls[0]
+            .prompt
+            .contains("what was I doing around jwt refresh?"));
         assert!(calls[0].prompt.contains("capture_id: 1"));
 
         fs::remove_dir_all(&home)?;
@@ -1457,7 +1452,11 @@ mod tests {
         let before_summary = Utc.with_ymd_and_hms(2026, 4, 10, 17, 59, 59).unwrap();
         let at_summary = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
 
-        assert!(!should_run_daily_summary(before_summary, summary_time, false));
+        assert!(!should_run_daily_summary(
+            before_summary,
+            summary_time,
+            false
+        ));
         assert!(should_run_daily_summary(at_summary, summary_time, false));
         assert!(!should_run_daily_summary(at_summary, summary_time, true));
     }

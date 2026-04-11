@@ -790,7 +790,6 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     assert_eq!(semantic_results.tokens_used, Some(104));
     assert_eq!(semantic_results.cost_cents, Some(0.19));
 
-
     let screenshot_response = client
         .get(format!(
             "{base_url}/api/screenshots/{relative_screenshot_path}"

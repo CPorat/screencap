@@ -40,6 +40,7 @@ Branch: ralph/v1-implementation
 - Settings route UIs should derive daemon liveness from `/api/health`, pair it with `/api/stats` telemetry for storage/capture panels, and always provide a first-class disconnected state with explicit CLI recovery steps.
 - Markdown export commands should treat `--output` as a file for single-day exports but require a directory for multi-day `--last` ranges; generate `{date}.md` files per day and keep stdout export as the default only when no custom daily export path is configured.
 - Prompt templates should load from `~/.screencap/prompts/*.txt` with default templates seeded once and existing custom files preserved, so prompt behavior is operator-tunable without recompiling.
+- Capture persistence should treat each multi-display timestamp as one atomic unit: track JPEGs created in that cycle and remove them if any transactional DB write fails, so retries cannot inherit orphaned files.
 
 
 
@@ -444,4 +445,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: seed default prompt files once and keep code constants as fallback templates so users can customize prompts without recompiling.
   - Gotchas encountered: startup prompt initialization must never overwrite existing files, or custom prompt tuning is lost silently.
   - Useful context: tests remain stable when prompt loading resolves under custom HOME roots and explicitly verifies both default seeding and custom-template persistence.
+---
+
+## [2026-04-11 12:54:29 UTC] - US-029
+- What was implemented (Multiple Display capture logic and transaction rollback): finalized multi-display capture-cycle staging and transactional persistence so all display rows commit together, with rollback cleanup that removes newly-created JPEGs whenever any DB write fails.
+- Files changed: src/daemon.rs, src/storage/db.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: treat one multi-display capture timestamp as a single unit-of-work; commit only after all capture rows persist, and delete staged JPEGs on any transaction failure.
+  - Gotchas encountered: partial-success paths can silently leave orphaned screenshots unless cleanup tracks exactly which files were created in the current cycle.
+  - Useful context: keep rollback at the capture/storage boundary so callers cannot bypass filesystem↔SQLite consistency guarantees.
 ---

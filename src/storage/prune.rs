@@ -47,7 +47,10 @@ pub fn run_startup_prune(config: &AppConfig, home: &Path) -> Result<Option<(usiz
     let db_path = config.storage_root(home).join("screencap.db");
 
     if !db_path.exists() {
-        info!(max_age_days, "startup prune skipped because database does not exist");
+        info!(
+            max_age_days,
+            "startup prune skipped because database does not exist"
+        );
         return Ok(Some((0, 0)));
     }
 

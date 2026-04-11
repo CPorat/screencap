@@ -6,7 +6,6 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, Days, Duration as ChronoDuration, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
-use serde::Deserialize;
 use screencap::{
     config::AppConfig,
     daemon,
@@ -20,6 +19,7 @@ use screencap::{
         },
     },
 };
+use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_SEARCH_LIMIT: usize = 20;
@@ -72,7 +72,6 @@ struct AskArgs {
     #[arg(long)]
     last: Option<String>,
 }
-
 
 #[derive(Debug, Args)]
 struct ProjectsArgs {
@@ -140,7 +139,9 @@ async fn main() -> Result<()> {
         Some(Command::Search(args)) => handle_search(args)?,
         Some(Command::Projects(args)) => handle_projects(args)?,
         Some(Command::Ask(args)) => handle_ask(args).await?,
-        Some(Command::Export(args)) => markdown::run_export(args.date, args.last, args.output).await?,
+        Some(Command::Export(args)) => {
+            markdown::run_export(args.date, args.last, args.output).await?
+        }
         Some(Command::Costs) => handle_costs()?,
         Some(Command::Prune(args)) => handle_prune(args)?,
         Some(Command::Mcp) => {
@@ -333,7 +334,6 @@ async fn handle_ask(args: AskArgs) -> Result<()> {
     Ok(())
 }
 
-
 fn handle_projects(args: ProjectsArgs) -> Result<()> {
     let (config, home) = load_config_and_home()?;
     let Some(db) = open_read_db(&config, &home)? else {
@@ -360,11 +360,6 @@ fn handle_costs() -> Result<()> {
 
     Ok(())
 }
-
-
-
-
-
 
 async fn handle_capture_pause(paused: bool) -> Result<()> {
     let config = AppConfig::load()?;
@@ -398,14 +393,12 @@ fn handle_prune(args: PruneArgs) -> Result<()> {
     screencap::storage::prune::run_prune(args.older_than)
 }
 
-
 fn emit_placeholder(command: &str, details: Option<String>) {
     match details {
         Some(details) => println!("{command} is scaffolded but not implemented yet ({details})"),
         None => println!("{command} is scaffolded but not implemented yet"),
     }
 }
-
 
 fn load_config_and_home() -> Result<(AppConfig, PathBuf)> {
     Ok((AppConfig::load()?, runtime_home_dir()?))

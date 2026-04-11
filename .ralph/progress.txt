@@ -385,3 +385,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: E2E daemon tests need retry loops and explicit timeouts around `/api/health` and `/api/captures` to avoid flake from startup/capture timing variance.
   - Useful context: use a temporary HOME plus per-test config/port to keep daemon startup deterministic and isolated from developer-local state.
 ---
+
+## [2026-04-11 12:29:46 UTC] - US-024
+- What was implemented (Semantic search endpoint with LLM): completed US-024 delivery verification for semantic query handling built on FTS pre-filtered context, synthesis-LLM JSON extraction with raw-text fallback, and shared synthesis flow used by both `/api/search/semantic` and `screencap ask`.
+- Files changed: .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: semantic query quality is stronger when FTS narrows candidate extraction context before sending evidence to the synthesis LLM.
+  - Gotchas encountered: LLM output parsing should prefer strict JSON extraction but retain a raw-text fallback path so endpoint responses degrade gracefully instead of failing hard.
+  - Useful context: keep query-to-synthesis orchestration in shared helpers so API and CLI ask paths do not drift in ranking/prompt behavior.
+---

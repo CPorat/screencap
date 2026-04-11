@@ -36,6 +36,8 @@ Branch: ralph/v1-implementation
 - LaunchAgents should point at the current `screencap` executable with the hidden `__daemon-child` subcommand and set `HOME` explicitly, so login autostart reuses the same runtime root without recursively invoking the backgrounding `start` command.
 
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
+- API routes that need both SQLite reads and async LLM calls should collect all DB-backed evidence before the first `.await` and drop the `rusqlite` connection before awaiting, because axum handler futures must be `Send` while `rusqlite::Connection` is not.
+
 - CLI read commands should open SQLite read-only when possible, return helpful empty-state output without creating `screencap.db`, and label capture-count-based project breakdowns explicitly so terminal summaries do not overclaim time accuracy.
 - Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
@@ -647,4 +649,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: capture paths must propagate the exact display IDs returned by the native bridge all the way through filename generation and SQLite persistence; display counts are only for sizing, not addressing.
   - Gotchas encountered: a mock backend that only exposes display `0` can hide index-vs-ID bugs, so mock-capture tests should be able to exercise non-zero and multi-display ID sets.
   - Useful context: the Swift bridge already exposes true `SCDisplay.displayID` values through `copy_display_ids`, and `capture_screenshot` resolves strictly by that ID, so the Rust daemon must never synthesize substitute IDs.
+---
+## [2026-04-11 21:24:02 UTC] - US-036
+- What was implemented: added `POST /api/analyze` for on-demand time-range analysis, with a structured tagged response that either returns a rolling-style window summary or a prompt-driven question answer over the selected capture window.
+- Files changed: AGENTS.md, src/api/routes.rs, src/pipeline/synthesis.rs, tests/api_server.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: on-demand API analysis can reuse rolling-context prompt/parsing for no-query summaries and semantic-search candidate selection for prompt-driven answers, giving one endpoint two grounded analysis modes without new prompt formats.
+  - Gotchas encountered: axum handlers cannot hold `rusqlite` connections across `.await`; gather SQLite evidence first, drop the connection, then perform async provider calls.
+  - Useful context: treating `query` and `prompt` as mutually exclusive aliases keeps the request contract simple while still supporting callers that think in terms of prompts instead of search queries.
 ---

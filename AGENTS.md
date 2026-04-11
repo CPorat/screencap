@@ -69,6 +69,8 @@ Three-layer pipeline:
 - Daemon lifecycle should keep its PID file under `~/.screencap/`, store both `pid` and `started_at`, and have `start`/`stop`/`status` heal stale PID files by checking process liveness before trusting on-disk state.
 - LaunchAgents should invoke the current `screencap` executable with the hidden `__daemon-child` subcommand and an explicit `HOME` environment value, so login-launched daemons reuse the same runtime root and never recurse through the backgrounding `start` command.
 - REST API read endpoints should open SQLite in read-only mode when possible and return empty/404 results without creating `screencap.db`; GET traffic must not mutate runtime state.
+- API handlers that use `rusqlite` connections must gather SQLite-backed evidence before the first `.await` and drop the connection before any async LLM call, because axum handlers need `Send` futures and `rusqlite::Connection` is not `Send`.
+
 - CLI read commands should likewise open SQLite read-only when possible, print helpful empty-state text instead of creating `screencap.db` on empty homes, and label any capture-count-based project breakdowns explicitly instead of implying minute-accurate time tracking.
 - Search and insight read APIs should expose typed storage helpers that join back to the canonical `captures` rows, so callers can filter by capture metadata and render screenshot context without follow-up lookups.
 - When serving screenshots over HTTP, accept only sanitized paths relative to the screenshots root and walk them with `openat(..., O_NOFOLLOW)` so traversal or symlink escapes cannot leave the screenshot tree.

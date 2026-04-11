@@ -860,7 +860,7 @@
         "Integration tests cover success and representative failure paths"
       ],
       "priority": 36,
-      "passes": false,
+      "passes": true,
       "notes": "Spec system endpoints include POST /api/analyze for on-demand time-range analysis.",
       "tool": "omp",
       "model": "gpt-5.4",

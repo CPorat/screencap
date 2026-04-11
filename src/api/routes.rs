@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{Path as AxumPath, Query, RawQuery, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
@@ -18,6 +18,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
+    ai::provider::ProviderError,
     config::AppConfig,
     daemon::CAPTURE_PAUSED,
     pipeline::synthesis,
@@ -26,8 +27,8 @@ use crate::{
         metrics,
         models::{
             AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionSearchHit,
-            ExtractionSearchQuery, ExtractionStatus, Insight, InsightType, ProjectTimeAllocation,
-            TopicFrequency,
+            ExtractionSearchQuery, ExtractionStatus, Insight, InsightData, InsightType,
+            ProjectTimeAllocation, TopicFrequency,
         },
         screenshots::{
             read_screenshot_file, relative_screenshot_path, sanitize_relative_screenshot_path,
@@ -42,6 +43,10 @@ const DEFAULT_SEARCH_LIMIT: usize = 50;
 const MAX_SEARCH_LIMIT: usize = 200;
 const DEFAULT_SEMANTIC_SEARCH_LIMIT: usize = 100;
 const MAX_SEMANTIC_SEARCH_LIMIT: usize = 300;
+const NO_PROCESSED_ACTIVITY_IN_RANGE: &str =
+    "no processed activity is available in the requested range; extraction may still be pending";
+const NO_RELEVANT_ACTIVITY_IN_RANGE: &str =
+    "No relevant captures were found for that query in the selected range.";
 
 #[derive(Clone)]
 struct ApiState {
@@ -168,6 +173,43 @@ struct SemanticSearchResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct AnalyzeResponse {
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    capture_count: u64,
+    analysis_query: Option<String>,
+    analysis: AnalyzePayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AnalyzePayload {
+    RollingContext {
+        batch_count: usize,
+        analyzed_capture_count: usize,
+        insight: InsightData,
+        tokens_used: Option<u32>,
+        cost_cents: Option<f64>,
+    },
+    QuestionAnswer {
+        analyzed_capture_count: usize,
+        answer: String,
+        references: Vec<SemanticSearchReference>,
+        tokens_used: Option<u32>,
+        cost_cents: Option<f64>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct AnalyzeRequest {
+    from: String,
+    to: String,
+    query: Option<String>,
+    prompt: Option<String>,
+}
+
+
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
 }
@@ -238,6 +280,13 @@ impl ApiError {
         }
     }
 
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
+
     fn internal(error: anyhow::Error) -> Self {
         error!(error = %error, "api request failed");
         Self {
@@ -278,6 +327,8 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/insights/topics", get(list_topic_frequencies))
         .route("/api/search", get(search_extractions))
         .route("/api/search/semantic", get(handle_semantic_search))
+        .route("/api/analyze", post(analyze_time_range))
+
         .route("/", get(static_assets::root_handler))
         .route("/{*path}", get(static_assets::static_handler))
         .with_state(state)
@@ -648,6 +699,190 @@ async fn handle_semantic_search(
         tokens_used: result.tokens_used,
     }))
 }
+
+async fn analyze_time_range(
+    State(state): State<ApiState>,
+    payload: Bytes,
+) -> Result<Json<AnalyzeResponse>, ApiError> {
+    let request: AnalyzeRequest = serde_json::from_slice(&payload).map_err(|error| {
+        ApiError::bad_request(format!("invalid analysis request body: {error}"))
+    })?;
+    let window_start = parse_body_timestamp("from", &request.from)?;
+    let window_end = parse_body_timestamp("to", &request.to)?;
+    validate_timestamp_range(Some(&window_start), Some(&window_end))?;
+    let analysis_query = normalize_analysis_query(request.query, request.prompt)?;
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        if let Some(query) = analysis_query {
+            return Ok(Json(AnalyzeResponse {
+                window_start,
+                window_end,
+                capture_count: 0,
+                analysis_query: Some(query),
+                analysis: AnalyzePayload::QuestionAnswer {
+                    analyzed_capture_count: 0,
+                    answer: NO_RELEVANT_ACTIVITY_IN_RANGE.into(),
+                    references: Vec::new(),
+                    tokens_used: None,
+                    cost_cents: None,
+                },
+            }));
+        }
+
+        return Err(ApiError::not_found(NO_PROCESSED_ACTIVITY_IN_RANGE));
+    };
+
+    let capture_count = db
+        .count_captures_in_window(window_start, window_end)
+        .map_err(ApiError::internal)?;
+
+    let result = match analysis_query {
+        Some(query) => {
+            let candidates = synthesis::semantic_search_candidates(
+                &db,
+                &query,
+                Some(window_start),
+                Some(window_end),
+                DEFAULT_SEMANTIC_SEARCH_LIMIT,
+            )
+            .map_err(ApiError::internal)?;
+            drop(db);
+
+            synthesis::answer_time_range_query(
+                &state.config,
+                window_start,
+                window_end,
+                capture_count,
+                query,
+                candidates,
+            )
+            .await
+            .map_err(map_analysis_error)?
+        }
+        None => {
+            let batches = db
+                .list_extraction_batch_details_in_range(window_start, window_end)
+                .map_err(ApiError::internal)?;
+            drop(db);
+            if batches.is_empty() {
+                return Err(ApiError::not_found(NO_PROCESSED_ACTIVITY_IN_RANGE));
+            }
+
+            synthesis::summarize_time_range(
+                &state.config,
+                window_start,
+                window_end,
+                capture_count,
+                batches,
+            )
+            .await
+            .map_err(map_analysis_error)?
+        }
+    };
+
+    Ok(Json(api_analyze_response_from_result(&state, result)?))
+}
+
+fn parse_body_timestamp(label: &str, raw: &str) -> Result<DateTime<Utc>, ApiError> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| {
+            ApiError::bad_request(format!(
+                "request body field `{label}` must be a valid ISO 8601 timestamp"
+            ))
+        })
+}
+
+fn normalize_analysis_query(
+    query: Option<String>,
+    prompt: Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let query = trim_to_option(query);
+    let prompt = trim_to_option(prompt);
+
+    match (query, prompt) {
+        (Some(query), Some(prompt)) if query != prompt => Err(ApiError::bad_request(
+            "provide either `query` or `prompt`, not both",
+        )),
+        (Some(query), Some(_)) | (Some(query), None) => Ok(Some(query)),
+        (None, Some(prompt)) => Ok(Some(prompt)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn map_analysis_error(error: anyhow::Error) -> ApiError {
+    if let Some(provider_error) = find_provider_error(&error) {
+        return ApiError::service_unavailable(format!(
+            "analysis provider unavailable: {provider_error}"
+        ));
+    }
+
+    if error.to_string().contains("synthesis pipeline is disabled") {
+        return ApiError::service_unavailable(
+            "analysis provider unavailable: synthesis pipeline is disabled",
+        );
+    }
+
+    ApiError::internal(error)
+}
+
+fn find_provider_error(error: &anyhow::Error) -> Option<&ProviderError> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ProviderError>())
+}
+
+fn api_analyze_response_from_result(
+    state: &ApiState,
+    result: synthesis::TimeRangeAnalysisResult,
+) -> Result<AnalyzeResponse, ApiError> {
+    let synthesis::TimeRangeAnalysisResult {
+        window_start,
+        window_end,
+        capture_count,
+        analysis_query,
+        analysis,
+    } = result;
+
+    let analysis = match analysis {
+        synthesis::TimeRangeAnalysis::RollingContext {
+            batch_count,
+            analyzed_capture_count,
+            insight,
+            tokens_used,
+            cost_cents,
+        } => AnalyzePayload::RollingContext {
+            batch_count,
+            analyzed_capture_count,
+            insight,
+            tokens_used,
+            cost_cents,
+        },
+        synthesis::TimeRangeAnalysis::QuestionAnswer {
+            analyzed_capture_count,
+            result,
+        } => AnalyzePayload::QuestionAnswer {
+            analyzed_capture_count,
+            answer: result.answer,
+            references: result
+                .references
+                .into_iter()
+                .map(|hit| semantic_search_reference_from_hit(state, hit))
+                .collect::<Result<Vec<_>, _>>()?,
+            tokens_used: result.tokens_used,
+            cost_cents: result.cost_cents,
+        },
+    };
+
+    Ok(AnalyzeResponse {
+        window_start,
+        window_end,
+        capture_count,
+        analysis_query,
+        analysis,
+    })
+}
+
 
 fn parse_capture_list_params(raw: Option<&str>) -> Result<CaptureListParams, ApiError> {
     parse_query_params(raw, "invalid capture query parameters")

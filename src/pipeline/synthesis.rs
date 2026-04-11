@@ -52,6 +52,31 @@ pub struct SemanticSearchResult {
     pub cost_cents: Option<f64>,
 }
 
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeRangeAnalysisResult {
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
+    pub capture_count: u64,
+    pub analysis_query: Option<String>,
+    pub analysis: TimeRangeAnalysis,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimeRangeAnalysis {
+    RollingContext {
+        batch_count: usize,
+        analyzed_capture_count: usize,
+        insight: InsightData,
+        tokens_used: Option<u32>,
+        cost_cents: Option<f64>,
+    },
+    QuestionAnswer {
+        analyzed_capture_count: usize,
+        result: SemanticSearchResult,
+    },
+}
+
 pub struct RollingContextScheduler {
     config: AppConfig,
     db: StorageDb,
@@ -432,6 +457,95 @@ pub async fn get_or_generate_today_summary_at_home(
     scheduler.run_once_at(now).await
 }
 
+pub async fn summarize_time_range(
+    config: &AppConfig,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    capture_count: u64,
+    batches: Vec<ExtractionBatchDetail>,
+) -> Result<TimeRangeAnalysisResult> {
+    let window_start = truncate_to_second(window_start);
+    let window_end = truncate_to_second(window_end);
+    ensure!(
+        window_start <= window_end,
+        "analysis window start {} must not be after end {}",
+        window_start,
+        window_end
+    );
+    ensure!(
+        !batches.is_empty(),
+        "time-range summary requires at least one extraction batch"
+    );
+
+    ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
+    let provider = open_synthesis_provider(config)?;
+
+    // Reuse the rolling-context contract for ad-hoc summaries so callers get the
+    // same structured window analysis without waiting for a persisted scheduler run.
+    let prompt = build_rolling_context_prompt(window_start, window_end, &batches);
+    let response = provider
+        .complete_text(&prompt)
+        .await
+        .context("time-range analysis request failed")?;
+    let insight = parse_rolling_context_response(&response.content)?;
+    validate_rolling_context_window(&insight, window_start, window_end)?;
+
+    let analyzed_capture_count = batches.iter().map(|batch| batch.frames.len()).sum();
+
+    Ok(TimeRangeAnalysisResult {
+        window_start,
+        window_end,
+        capture_count,
+        analysis_query: None,
+        analysis: TimeRangeAnalysis::RollingContext {
+            batch_count: batches.len(),
+            analyzed_capture_count,
+            insight,
+            tokens_used: response_tokens_used(&response),
+            cost_cents: response.cost_cents,
+        },
+    })
+}
+
+pub async fn answer_time_range_query(
+    config: &AppConfig,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    capture_count: u64,
+    query: String,
+    candidates: Vec<ExtractionSearchHit>,
+) -> Result<TimeRangeAnalysisResult> {
+    let window_start = truncate_to_second(window_start);
+    let window_end = truncate_to_second(window_end);
+    ensure!(
+        window_start <= window_end,
+        "analysis window start {} must not be after end {}",
+        window_start,
+        window_end
+    );
+
+    let analyzed_capture_count = candidates.len();
+    let result = if analyzed_capture_count == 0 {
+        empty_semantic_search_result()
+    } else {
+        ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
+        let provider = open_synthesis_provider(config)?;
+        semantic_search_with_provider(provider.as_ref(), &query, candidates).await?
+    };
+
+    Ok(TimeRangeAnalysisResult {
+        window_start,
+        window_end,
+        capture_count,
+        analysis_query: Some(query),
+        analysis: TimeRangeAnalysis::QuestionAnswer {
+            analyzed_capture_count,
+            result,
+        },
+    })
+}
+
+
 pub fn semantic_search_candidates(
     db: &StorageDb,
     query: &str,
@@ -518,18 +632,23 @@ pub async fn semantic_search_with_provider(
     semantic_search_from_candidates(provider, query, candidates).await
 }
 
+fn empty_semantic_search_result() -> SemanticSearchResult {
+    SemanticSearchResult {
+        answer: "No relevant captures were found for that query in the selected range.".into(),
+        references: Vec::new(),
+        tokens_used: None,
+        cost_cents: None,
+    }
+}
+
+
 async fn semantic_search_from_candidates(
     provider: &dyn LlmProvider,
     query: &str,
     candidates: Vec<ExtractionSearchHit>,
 ) -> Result<SemanticSearchResult> {
     if candidates.is_empty() {
-        return Ok(SemanticSearchResult {
-            answer: "No relevant captures were found for that query in the selected range.".into(),
-            references: Vec::new(),
-            tokens_used: None,
-            cost_cents: None,
-        });
+        return Ok(empty_semantic_search_result());
     }
 
     let prompt = build_semantic_search_prompt(
@@ -729,6 +848,13 @@ fn open_synthesis_db(config: &AppConfig, home: &Path) -> Result<StorageDb> {
     StorageDb::open_at_path(&db_path)
         .with_context(|| format!("failed to open synthesis database at {}", db_path.display()))
 }
+
+fn response_tokens_used(response: &LlmResponse) -> Option<u32> {
+    response
+        .usage
+        .and_then(|usage| u32::try_from(usage.total_tokens).ok())
+}
+
 
 fn build_new_synthesis_insight(
     config: &AppConfig,

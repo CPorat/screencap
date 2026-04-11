@@ -629,3 +629,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: a clean codebase can still fail the final acceptance gate on missing top-level documentation even when `cargo check`, `clippy`, tests, release build, and web checks are already green.
   - Useful context: `cargo build` and `cargo build --release` already invoke `build.rs`, so README build instructions should describe the embedded web and Swift bridge steps as part of the normal Rust build rather than as a separate manual packaging flow.
 ---
+
+## [2026-04-11 17:46:06 UTC] - US-034
+- What was implemented: finalized the ship gate by verifying the current top-level README content against the built product surface, then running the full Rust and web quality suite required for release readiness.
+- Files changed: README.md, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: the final verification story should explicitly cover both Rust and web build pipelines, because `build.rs` couples the Swift bridge and embedded UI into the release artifact.
+  - Gotchas encountered: `cargo test --features mock-capture` is the truthful project-wide test command on developer machines without macOS capture permissions; documenting plain `cargo test` understates the real gate.
+  - Useful context: a release README should document runtime layout, embedded web serving, and localhost API/MCP entry points, not just compile commands, or the final ship check remains incomplete.
+---

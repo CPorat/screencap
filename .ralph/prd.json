@@ -637,8 +637,8 @@
         "cargo test passes"
       ],
       "priority": 27,
-      "passes": false,
-      "notes": "AUDIT: src/ai/anthropic.rs is empty. Not wired in create_provider. Config allows provider='anthropic' but runtime returns UnsupportedProvider error.",
+      "passes": true,
+      "notes": "Completed: native Anthropic Messages API provider now supports text and vision requests, is wired through create_provider, and has focused request/response coverage."
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

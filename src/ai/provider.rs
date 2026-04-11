@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::config::{AiProvider, ExtractionConfig, SynthesisConfig};
 
-use super::openai_compat::OpenAiCompatClient;
+use super::{anthropic::AnthropicClient, openai_compat::OpenAiCompatClient};
 
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 
@@ -166,6 +166,7 @@ pub fn create_provider(config: &LlmProviderConfig) -> ProviderResult<Box<dyn Llm
         AiProvider::Openrouter | AiProvider::Openai | AiProvider::Lmstudio => {
             Ok(Box::new(OpenAiCompatClient::new(config.clone())?))
         }
+        AiProvider::Anthropic => Ok(Box::new(AnthropicClient::new(config.clone())?)),
         provider => Err(ProviderError::UnsupportedProvider {
             provider: provider_name(provider),
         }),
@@ -193,10 +194,11 @@ pub fn provider_name(provider: AiProvider) -> &'static str {
     }
 }
 
-pub fn supported_openai_compat_base_url(provider: AiProvider) -> ProviderResult<&'static str> {
+pub fn supported_base_url(provider: AiProvider) -> ProviderResult<&'static str> {
     match provider {
         AiProvider::Openrouter => Ok("https://openrouter.ai/api/v1"),
         AiProvider::Openai => Ok("https://api.openai.com/v1"),
+        AiProvider::Anthropic => Ok("https://api.anthropic.com"),
         AiProvider::Lmstudio => Ok("http://localhost:1234/v1"),
         provider => Err(ProviderError::UnsupportedProvider {
             provider: provider_name(provider),
@@ -206,7 +208,7 @@ pub fn supported_openai_compat_base_url(provider: AiProvider) -> ProviderResult<
 
 pub fn resolved_base_url(config: &LlmProviderConfig) -> ProviderResult<String> {
     let base_url = if config.base_url.trim().is_empty() {
-        supported_openai_compat_base_url(config.provider)?.to_owned()
+        supported_base_url(config.provider)?.to_owned()
     } else {
         config.base_url.trim().to_owned()
     };
@@ -217,17 +219,28 @@ pub fn resolved_base_url(config: &LlmProviderConfig) -> ProviderResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::test_support::EnvGuard;
 
     #[test]
     fn create_provider_accepts_openrouter_config() {
         let env_var = "SCREENCAP_TEST_OPENROUTER_KEY";
-        let _guard = TestEnvGuard::set(env_var, "token");
+        let _guard = EnvGuard::set(env_var, "token");
         let config = LlmProviderConfig::new(
             AiProvider::Openrouter,
             "google/gemini-2.0-flash",
             env_var,
             "",
         );
+
+        create_provider(&config).expect("create provider");
+    }
+
+    #[test]
+    fn create_provider_accepts_anthropic_config() {
+        let env_var = "SCREENCAP_TEST_ANTHROPIC_PROVIDER_KEY";
+        let _guard = EnvGuard::set(env_var, "token");
+        let config =
+            LlmProviderConfig::new(AiProvider::Anthropic, "claude-sonnet-4-5", env_var, "");
 
         create_provider(&config).expect("create provider");
     }
@@ -243,59 +256,22 @@ mod tests {
     }
 
     #[test]
+    fn resolved_base_url_uses_anthropic_default() {
+        let config =
+            LlmProviderConfig::new(AiProvider::Anthropic, "claude-sonnet-4-5", "IGNORED", "");
+
+        assert_eq!(
+            resolved_base_url(&config).expect("resolve base url"),
+            "https://api.anthropic.com"
+        );
+    }
+
+    #[test]
     fn load_api_key_rejects_missing_values() {
         let env_var = "SCREENCAP_TEST_MISSING_KEY";
-        let _guard = TestEnvGuard::unset(env_var);
+        let _guard = EnvGuard::unset(env_var);
 
         let error = load_api_key(env_var).expect_err("missing key should fail");
         assert!(matches!(error, ProviderError::MissingApiKey { .. }));
-    }
-
-    struct TestEnvGuard {
-        key: String,
-        previous: Option<String>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl TestEnvGuard {
-        fn set(key: &str, value: &str) -> Self {
-            static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-            let lock = ENV_LOCK
-                .get_or_init(|| std::sync::Mutex::new(()))
-                .lock()
-                .expect("lock env");
-            let previous = env::var(key).ok();
-            env::set_var(key, value);
-            Self {
-                key: key.to_owned(),
-                previous,
-                _lock: lock,
-            }
-        }
-
-        fn unset(key: &str) -> Self {
-            static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-            let lock = ENV_LOCK
-                .get_or_init(|| std::sync::Mutex::new(()))
-                .lock()
-                .expect("lock env");
-            let previous = env::var(key).ok();
-            env::remove_var(key);
-            Self {
-                key: key.to_owned(),
-                previous,
-                _lock: lock,
-            }
-        }
-    }
-
-    impl Drop for TestEnvGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = &self.previous {
-                env::set_var(&self.key, previous);
-            } else {
-                env::remove_var(&self.key);
-            }
-        }
     }
 }

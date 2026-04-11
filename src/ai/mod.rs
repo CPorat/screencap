@@ -4,3 +4,5 @@ pub mod mock;
 pub mod ollama;
 pub mod openai_compat;
 pub mod provider;
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -156,6 +156,7 @@ declare module '$env/static/private' {
 	export const HOME: string;
 	export const CARGO_FEATURE_DEFAULT: string;
 	export const XDG_CONFIG_HOME: string;
+	export const npm_config_min_release_age: string;
 	export const VSCODE_NLS_CONFIG: string;
 	export const CARGO_FEATURE_MOCK_CAPTURE: string;
 	export const HOMEBREW_PREFIX: string;
@@ -408,6 +409,7 @@ declare module '$env/dynamic/private' {
 		HOME: string;
 		CARGO_FEATURE_DEFAULT: string;
 		XDG_CONFIG_HOME: string;
+		npm_config_min_release_age: string;
 		VSCODE_NLS_CONFIG: string;
 		CARGO_FEATURE_MOCK_CAPTURE: string;
 		HOMEBREW_PREFIX: string;

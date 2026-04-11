@@ -798,7 +798,7 @@
       ],
       "priority": 34,
       "passes": true,
-      "notes": "This is the UI equivalent of US-030 (pipeline e2e). If this passes, the UI works end-to-end. Must use expect MCP tools exclusively. Delegate to a subagent if available. The frontend-design skill at .agents/skills/frontend-design/SKILL.md defines the design quality bar the UI must meet. Static-web embedding now routes all non-API paths to index.html with rust-embed assets served from web/dist."
+      "notes": "This is the UI equivalent of US-030 (pipeline e2e). If this passes, the UI works end-to-end. Must use expect MCP tools exclusively. Delegate to a subagent if available. The frontend-design skill at .agents/skills/frontend-design/SKILL.md defines the design quality bar the UI must meet. Static-web embedding now routes all non-API paths to index.html with rust-embed assets served from web/dist.",
       "tool": "omp",
       "model": "gemini-3.1-pro-preview",
       "provider": "github-copilot",

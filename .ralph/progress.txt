@@ -4,6 +4,8 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- Pause/resume control paths should use a single global `AtomicBool` gate checked inside the capture loop, with API and CLI surfaces only toggling that shared state so pause semantics stay consistent across entry points.
+
 - Event-driven capture triggers should bridge `NSWorkspace.didActivateApplicationNotification` through a C callback into a bounded Rust `mpsc` channel managed by an RAII listener guard, so app-switch captures fire immediately without leaking observers.
 
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
@@ -422,4 +424,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: guard Swift `Process()` launch paths with explicit binary-availability checks before wiring menu actions so menu state and command execution stay consistent.
   - Gotchas encountered: GUI-launched apps often have different PATH resolution than shell sessions, so `hasScreencapCommand()` should probe known locations plus `which` fallback before declaring command availability.
   - Useful context: disable menu items when the binary is unavailable and show an explicit unavailable status to prevent false-success interactions in operator-facing controls.
+---
+
+## [2026-04-11 12:41:50 UTC] - US-027
+- What was implemented (Pause/Resume API and CLI): added daemon pause/resume REST endpoints (`POST /api/pause`, `POST /api/resume`), wired CLI `screencap pause|resume` commands to those endpoints, and gated capture cycles behind a shared daemon pause flag.
+- Files changed: src/api/routes.rs, src/daemon.rs, src/main.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: use `AtomicBool` as the daemon-global pause state and check it at the top of each capture-loop tick so pause skips work without stopping lifecycle/API services.
+  - Gotchas encountered: pause/resume endpoints must return explicit state (`{ paused: bool }`) so CLI callers can confirm final daemon state instead of inferring success from HTTP status alone.
+  - Useful context: keeping pause/resume as daemon RPC (`localhost` API) avoids PID signaling complexity and keeps command behavior identical for foreground and background daemon modes.
 ---

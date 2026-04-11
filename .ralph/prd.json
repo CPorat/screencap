@@ -239,8 +239,8 @@
         "cargo test passes"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": "AUDIT: Scheduler code and tests exist but run_extraction_scheduler is never wired into the daemon — pending captures won't auto-process. Must be spawned in daemon::run_foreground. Same gap applies to synthesis schedulers.",
+      "passes": true,
+      "notes": "Resolved: foreground daemon now wires extraction plus rolling/hourly/daily synthesis schedulers, and daemon integration coverage verifies rolling and daily insights are generated automatically.",
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

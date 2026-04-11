@@ -44,6 +44,8 @@ Branch: ralph/v1-implementation
 - Timeline pagination fetch loops should maintain explicit `nextOffset` and `hasMore` state derived from each `/api/captures` page size, so infinite loading remains deterministic without relying on separate total-count queries.
 - Mock LLM providers used by daemon E2E tests should synthesize schema-valid default JSON (extraction + rolling/hourly/daily summaries) when response queues are empty, so full scheduler startup can run without external API keys or brittle per-call fixture setup.
 - Daemon runtime should spawn pipeline schedulers as independent shutdown-aware tasks, but treat missing/unsupported AI provider setup as a logged no-op so capture/API startup still succeeds while operator credentials are being configured.
+- Writable SQLite connections should enable a busy timeout plus WAL mode, because the daemon runs capture, API, and synthesis/extraction schedulers concurrently and should absorb brief lock contention instead of failing writes.
+- Rolling synthesis windows should be truncated to whole seconds before prompt construction and response validation, because the prompt format serializes RFC3339 timestamps without subsecond precision.
 
 
 
@@ -486,4 +488,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: daemon/UI/API E2E checks are most reliable when one test process verifies all three surfaces (`/`, `/api/health`, `/api/stats`/readiness) from the same spawned daemon instance with isolated HOME and reserved port.
   - Gotchas encountered: scheduler startup can request LLM outputs earlier than expected; mock providers must return schema-valid defaults when explicit queued responses are exhausted or startup smoke tests fail for non-product reasons.
   - Useful context: use short retry polling for health readiness and a Drop-based child-process guard so failures never leak daemon processes between integration tests.
+---
+## [2026-04-11 14:10:15 UTC] - US-009b
+- What was implemented (Extraction pipeline: scheduler, persistence, and FTS updates): completed daemon wiring for automatic extraction plus rolling/hourly/daily synthesis scheduler tasks under one shutdown flow, and added daemon integration coverage proving rolling and daily synthesis run automatically in the foreground daemon.
+- Files changed: AGENTS.md, src/daemon.rs, src/export/markdown.rs, src/mcp/server.rs, src/pipeline/synthesis.rs, src/storage/db.rs, tests/e2e_daemon_ui_api.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: writable SQLite connections need WAL mode plus a busy timeout once the daemon owns concurrent capture/API/pipeline connections, or scheduler writes can fail under brief lock contention.
+  - Gotchas encountered: rolling synthesis windows sourced from `Utc::now()` must be truncated to whole seconds before prompt construction and response validation, because the prompt/response contract serializes timestamps without subsecond precision.
+  - Useful context: daemon scheduler wiring is easiest to verify with an end-to-end test that seeds SQLite, boots the real binary with isolated HOME/config, and waits for generated insight rows plus API visibility from the same process.
 ---

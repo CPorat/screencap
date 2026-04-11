@@ -43,6 +43,7 @@ Three-layer pipeline:
 - OpenAI-compatible provider implementations should resolve provider-specific default base URLs in one helper and return response text plus optional token-usage metadata; local backends that omit usage must stay `None` instead of inventing zero-cost data.
 - When an OpenAI-compatible backend returns usage cost metadata (for example OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that omit cost should leave it `None` rather than guessing.
 - Daemon startup should spawn extraction/synthesis schedulers as separate shutdown-aware tasks, but missing or unsupported AI provider configuration must degrade those schedulers to a logged no-op instead of blocking capture/API startup; users should still be able to collect screenshots before configuring networked pipelines.
+- Writable SQLite connections should set a busy timeout and enable WAL mode, because the daemon runs capture, API, and pipeline schedulers with concurrent database connections and should wait briefly instead of failing with `database is locked`.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
 - Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
@@ -51,6 +52,7 @@ Three-layer pipeline:
 - When deriving the frontmost window title from `CGWindowListCopyWindowInfo`, treat the first layer-0 window for the frontmost app PID as authoritative; if that window has no title, return an empty string instead of scanning later windows from the same app.
 - When one capture cycle spans multiple displays, write all screenshots for that cycle first and persist their `captures` rows in one SQLite transaction; if any display capture or DB write fails, delete that cycle’s new JPEGs so disk state cannot drift from the database.
 - All timestamps are ISO 8601 in UTC.
+- Rolling synthesis should truncate scheduler window timestamps to whole seconds before prompt construction and validation, because prompt templates serialize RFC3339 timestamps without subsecond precision.
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
 - When full-text search content spans multiple tables, keep a dedicated FTS table keyed by the canonical row id and update it from storage helpers; do not use an external-content FTS table tied to only one source table if some indexed fields come from joins.
 - Daemon lifecycle should keep its PID file under `~/.screencap/`, store both `pid` and `started_at`, and have `start`/`stop`/`status` heal stale PID files by checking process liveness before trusting on-disk state.

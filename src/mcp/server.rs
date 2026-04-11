@@ -112,10 +112,7 @@ impl McpServer {
             return None;
         }
 
-        let id = match request_object.get("id").cloned() {
-            Some(id) => id,
-            None => return None,
-        };
+        let id = request_object.get("id").cloned()?;
 
         let params = request_object.get("params");
 

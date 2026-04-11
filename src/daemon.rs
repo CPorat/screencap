@@ -29,7 +29,7 @@ use crate::{
         window::{self, WindowInfo},
     },
     config::AppConfig,
-    pipeline::scheduler::ExtractionScheduler,
+    pipeline::{scheduler, synthesis},
     storage::{
         db::StorageDb,
         metrics,
@@ -235,7 +235,26 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
         home.to_path_buf(),
         shutdown_rx.clone(),
     ));
-    let mut extraction_task = tokio::spawn(run_managed_extraction_scheduler(
+    let mut extraction_task = tokio::spawn(run_managed_pipeline_task(
+        PipelineTaskKind::Extraction,
+        config.clone(),
+        home.to_path_buf(),
+        shutdown_rx.clone(),
+    ));
+    let mut rolling_task = tokio::spawn(run_managed_pipeline_task(
+        PipelineTaskKind::RollingContext,
+        config.clone(),
+        home.to_path_buf(),
+        shutdown_rx.clone(),
+    ));
+    let mut hourly_task = tokio::spawn(run_managed_pipeline_task(
+        PipelineTaskKind::HourlyDigest,
+        config.clone(),
+        home.to_path_buf(),
+        shutdown_rx.clone(),
+    ));
+    let mut daily_task = tokio::spawn(run_managed_pipeline_task(
+        PipelineTaskKind::DailySummary,
         config.clone(),
         home.to_path_buf(),
         shutdown_rx,
@@ -246,55 +265,182 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
             result?;
             info!("shutdown signal received");
             let _ = shutdown_tx.send(true);
-            capture_task.await.context("capture loop task panicked")??;
-            server_task.await.context("api server task panicked")??;
-            extraction_task.await.context("extraction scheduler task panicked")??;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("api server", server_task),
+                ("extraction scheduler", extraction_task),
+                ("rolling context scheduler", rolling_task),
+                ("hourly digest scheduler", hourly_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
             Ok(())
         }
         result = &mut capture_task => {
             let _ = shutdown_tx.send(true);
             let capture_result = result.context("capture loop task panicked")?;
-            server_task.await.context("api server task panicked")??;
-            extraction_task.await.context("extraction scheduler task panicked")??;
+            join_named_tasks(vec![
+                ("api server", server_task),
+                ("extraction scheduler", extraction_task),
+                ("rolling context scheduler", rolling_task),
+                ("hourly digest scheduler", hourly_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
             task_exit_result("capture loop", capture_result)
         }
         result = &mut server_task => {
             let _ = shutdown_tx.send(true);
             let server_result = result.context("api server task panicked")?;
-            capture_task.await.context("capture loop task panicked")??;
-            extraction_task.await.context("extraction scheduler task panicked")??;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("extraction scheduler", extraction_task),
+                ("rolling context scheduler", rolling_task),
+                ("hourly digest scheduler", hourly_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
             task_exit_result("api server", server_result)
         }
         result = &mut extraction_task => {
             let _ = shutdown_tx.send(true);
             let extraction_result = result.context("extraction scheduler task panicked")?;
-            capture_task.await.context("capture loop task panicked")??;
-            server_task.await.context("api server task panicked")??;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("api server", server_task),
+                ("rolling context scheduler", rolling_task),
+                ("hourly digest scheduler", hourly_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
             task_exit_result("extraction scheduler", extraction_result)
+        }
+        result = &mut rolling_task => {
+            let _ = shutdown_tx.send(true);
+            let rolling_result = result.context("rolling context scheduler task panicked")?;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("api server", server_task),
+                ("extraction scheduler", extraction_task),
+                ("hourly digest scheduler", hourly_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
+            task_exit_result("rolling context scheduler", rolling_result)
+        }
+        result = &mut hourly_task => {
+            let _ = shutdown_tx.send(true);
+            let hourly_result = result.context("hourly digest scheduler task panicked")?;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("api server", server_task),
+                ("extraction scheduler", extraction_task),
+                ("rolling context scheduler", rolling_task),
+                ("daily summary scheduler", daily_task),
+            ]).await?;
+            task_exit_result("hourly digest scheduler", hourly_result)
+        }
+        result = &mut daily_task => {
+            let _ = shutdown_tx.send(true);
+            let daily_result = result.context("daily summary scheduler task panicked")?;
+            join_named_tasks(vec![
+                ("capture loop", capture_task),
+                ("api server", server_task),
+                ("extraction scheduler", extraction_task),
+                ("rolling context scheduler", rolling_task),
+                ("hourly digest scheduler", hourly_task),
+            ]).await?;
+            task_exit_result("daily summary scheduler", daily_result)
         }
     }
 }
 
-async fn run_managed_extraction_scheduler(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PipelineTaskKind {
+    Extraction,
+    RollingContext,
+    HourlyDigest,
+    DailySummary,
+}
+
+impl PipelineTaskKind {
+    fn task_name(self) -> &'static str {
+        match self {
+            Self::Extraction => "extraction scheduler",
+            Self::RollingContext => "rolling context scheduler",
+            Self::HourlyDigest => "hourly digest scheduler",
+            Self::DailySummary => "daily summary scheduler",
+        }
+    }
+
+    fn automatic_work_label(self) -> &'static str {
+        match self {
+            Self::Extraction => "automatic extraction",
+            Self::RollingContext => "automatic rolling context synthesis",
+            Self::HourlyDigest => "automatic hourly digest synthesis",
+            Self::DailySummary => "automatic daily summary synthesis",
+        }
+    }
+
+    fn is_disabled(self, config: &AppConfig) -> bool {
+        match self {
+            Self::Extraction => !config.extraction.enabled,
+            Self::RollingContext | Self::DailySummary => !config.synthesis.enabled,
+            Self::HourlyDigest => !config.synthesis.enabled || !config.synthesis.hourly_enabled,
+        }
+    }
+
+    async fn run(
+        self,
+        config: AppConfig,
+        home: &Path,
+        shutdown: watch::Receiver<bool>,
+    ) -> Result<()> {
+        match self {
+            Self::Extraction => scheduler::run_extraction_scheduler(config, home, shutdown).await,
+            Self::RollingContext => {
+                synthesis::run_rolling_context_scheduler(config, home, shutdown).await
+            }
+            Self::HourlyDigest => {
+                synthesis::run_hourly_digest_scheduler(config, home, shutdown).await
+            }
+            Self::DailySummary => {
+                synthesis::run_daily_summary_scheduler(config, home, shutdown).await
+            }
+        }
+    }
+}
+
+async fn run_managed_pipeline_task(
+    kind: PipelineTaskKind,
     config: AppConfig,
     home: PathBuf,
     shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    if !config.extraction.enabled {
+    if kind.is_disabled(&config) {
         return wait_for_shutdown(shutdown).await;
     }
 
-    match ExtractionScheduler::open(config, &home) {
-        Ok(mut scheduler) => scheduler.run_until_shutdown(shutdown).await,
+    match kind.run(config, &home, shutdown.clone()).await {
+        Ok(()) => Ok(()),
         Err(error) if is_nonfatal_pipeline_init_error(&error) => {
             warn!(
                 error = %error,
-                "extraction scheduler disabled; capture and API services will continue without automatic extraction"
+                task = kind.task_name(),
+                "{} disabled; capture and API services will continue without {}",
+                kind.task_name(),
+                kind.automatic_work_label()
             );
             wait_for_shutdown(shutdown).await
         }
-        Err(error) => Err(error.context("failed to initialize extraction scheduler")),
+        Err(error) => Err(error.context(format!("failed to initialize {}", kind.task_name()))),
     }
+}
+
+async fn join_named_tasks(
+    tasks: Vec<(&'static str, tokio::task::JoinHandle<Result<()>>)>,
+) -> Result<()> {
+    for (task_name, task) in tasks {
+        task.await
+            .with_context(|| format!("{task_name} task panicked"))??;
+    }
+
+    Ok(())
 }
 
 async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) -> Result<()> {
@@ -916,7 +1062,7 @@ mod exclusion_pattern_tests {
 
     #[test]
     fn excluded_window_title_regex_matches() {
-        let patterns = compile_excluded_window_title_patterns(&vec![
+        let patterns = compile_excluded_window_title_patterns(&[
             "^Mock\\s+Window$".to_string(),
             ".*Incognito.*".to_string(),
         ])
@@ -932,7 +1078,7 @@ mod exclusion_pattern_tests {
 
     #[test]
     fn invalid_excluded_window_title_regex_returns_error() {
-        let err = compile_excluded_window_title_patterns(&vec!["[invalid".to_string()])
+        let err = compile_excluded_window_title_patterns(&["[invalid".to_string()])
             .expect_err("invalid regex should fail compilation");
 
         assert!(

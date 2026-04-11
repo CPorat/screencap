@@ -208,7 +208,7 @@ fn parse_last_days(raw: &str) -> Result<u64> {
     }
 
     let (amount, unit) = trimmed.split_at(trimmed.len() - 1);
-    if unit.to_ascii_lowercase() != "d" {
+    if !unit.eq_ignore_ascii_case("d") {
         bail!("--last only supports day windows like `7d`");
     }
 
@@ -506,9 +506,9 @@ fn copy_screenshots(
     Ok((links, screenshots_dir))
 }
 
-fn ordered_activity_rows<'a>(
-    allocation: &'a std::collections::BTreeMap<String, String>,
-) -> Vec<(&'a str, &'a str)> {
+fn ordered_activity_rows(
+    allocation: &std::collections::BTreeMap<String, String>,
+) -> Vec<(&str, &str)> {
     const CANONICAL_ORDER: [&str; 6] = [
         "coding",
         "communication",

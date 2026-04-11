@@ -3,6 +3,7 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -1441,6 +1442,8 @@ fn resolve_screenshot_path(raw_path: &str, storage_root: Option<&Path>) -> PathB
 }
 
 fn configure_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_secs(5))
+        .context("failed to configure sqlite busy timeout")?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .context("failed to configure sqlite connection")?;
     Ok(())
@@ -1448,6 +1451,8 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 
 fn initialize_connection(conn: &Connection) -> Result<()> {
     configure_connection(conn)?;
+    conn.execute_batch("PRAGMA journal_mode = WAL;")
+        .context("failed to enable sqlite WAL mode")?;
     conn.execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
     Ok(())

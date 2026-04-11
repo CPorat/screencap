@@ -124,6 +124,7 @@ impl RollingContextScheduler {
     }
 
     async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
+        let window_end = truncate_to_second(window_end);
         let window_start = window_end - ChronoDuration::minutes(ROLLING_CONTEXT_WINDOW_MINUTES);
         let batches = self
             .db
@@ -982,6 +983,12 @@ fn validate_requested_window(
     Ok(())
 }
 
+fn truncate_to_second(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    timestamp
+        .with_nanosecond(0)
+        .expect("UTC timestamps should always truncate to the second")
+}
+
 fn truncate_to_hour(timestamp: DateTime<Utc>) -> DateTime<Utc> {
     timestamp
         .with_minute(0)
@@ -1531,6 +1538,48 @@ mod tests {
             .prompt
             .contains("Investigated the JWT refresh path"));
         assert!(calls[0].prompt.contains("capture_id: 1"));
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_truncates_rolling_window_to_seconds() -> Result<()> {
+        let home = temp_home_root("rolling-context-subsecond");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler =
+            RollingContextScheduler::with_provider(config, &home, provider.clone())?;
+        let raw_window_end = Utc
+            .with_ymd_and_hms(2026, 4, 10, 14, 30, 0)
+            .unwrap()
+            .with_nanosecond(654_321_000)
+            .expect("subsecond rolling timestamp");
+        let expected_window_end = truncate_to_second(raw_window_end);
+        seed_recent_extractions(&mut scheduler.db, expected_window_end)?;
+
+        provider.push_response(Ok(LlmResponse::with_usage(
+            success_response_json(
+                expected_window_end - ChronoDuration::minutes(30),
+                expected_window_end,
+            ),
+            TokenUsage {
+                prompt_tokens: 180,
+                completion_tokens: 80,
+                total_tokens: 260,
+            },
+        )));
+
+        let insight = scheduler
+            .run_once_at(raw_window_end)
+            .await?
+            .expect("rolling context should be created");
+
+        assert_eq!(insight.window_end, expected_window_end);
+        assert_eq!(
+            insight.window_start,
+            expected_window_end - ChronoDuration::minutes(30)
+        );
 
         fs::remove_dir_all(&home)?;
         Ok(())

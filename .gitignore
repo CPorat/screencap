@@ -1,3 +1,6 @@
 
 # Playwright CLI
 .playwright-cli/
+
+# Ralph iteration logs (runtime artifacts)
+.ralph/logs/

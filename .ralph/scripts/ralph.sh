@@ -203,14 +203,54 @@ run_agent() {
       opencode run "$prompt_content" 2>&1 | tee /dev/stderr
       ;;
     omp)
-      local omp_args=(-p)
+      local omp_args=(--mode json -p)
       [ -n "$use_provider" ] && omp_args+=(--provider "$use_provider")
       [ -n "$use_model" ] && omp_args+=(--model "$use_model")
       [ -n "$use_thinking" ] && omp_args+=(--thinking "$use_thinking")
-      omp "${omp_args[@]}" @"$prompt_file" 2>&1 | tee /dev/stderr
+      omp "${omp_args[@]}" @"$prompt_file" \
+        > >(tee "$ITER_LOG_DIR/events.jsonl") \
+        2>"$ITER_LOG_DIR/stderr.log"
       ;;
   esac
 }
+
+print_omp_summary() {
+  local log="$1"
+  [ ! -f "$log" ] && return
+
+  local tool_count error_count
+  tool_count=$(jq -s '[.[] | select(.type == "tool_execution_end")] | length' "$log" 2>/dev/null || echo 0)
+  error_count=$(jq -s '[.[] | select(.type == "tool_execution_end" and .isError)] | length' "$log" 2>/dev/null || echo 0)
+
+  echo ""
+  echo "  ┌─ Iteration Summary ─────────────────────────────"
+
+  jq -rs '
+    [.[] | select(.type == "turn_end") | .message.usage] |
+    if length > 0 then
+      { turns: length,
+        input: (map(.input // 0) | add),
+        output: (map(.output // 0) | add),
+        cost: (map(.cost.total // 0) | add) } |
+      "  │ Cost: $\(.cost | tostring | .[0:8])  Tokens: \(.input)in / \(.output)out  Turns: \(.turns)"
+    else "  │ Cost: (unavailable)" end
+  ' "$log" 2>/dev/null
+
+  echo "  │ Tools: $tool_count calls, $error_count errors"
+
+  if [ "$error_count" -gt 0 ]; then
+    echo "  │"
+    echo "  │ Errors:"
+    jq -r 'select(.type == "tool_execution_end" and .isError)
+      | "  │   \(.toolName): \(.result.content[0].text[:150] // "unknown")"' "$log" 2>/dev/null
+  fi
+
+  echo "  │ Log: $log"
+  echo "  └─────────────────────────────────────────────────"
+  echo ""
+}
+
+LOGS_DIR="$RALPH_DIR/logs"
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   INCOMPLETE=$(jq '[.userStories[] | select(.passes == false)] | length' "$PRD_FILE")
@@ -222,6 +262,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   fi
 
   NEXT_STORY=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | "\(.id): \(.title)"' "$PRD_FILE")
+  NEXT_STORY_ID=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .id' "$PRD_FILE")
   TASK_TOOL=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .tool // empty' "$PRD_FILE")
   TASK_MODEL=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .model // empty' "$PRD_FILE")
   TASK_PROVIDER=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .provider // empty' "$PRD_FILE")
@@ -237,6 +278,10 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     USE_TOOL="$TOOL"
   fi
 
+  ITER_LOG_DIR="$LOGS_DIR/$(date +%Y-%m-%dT%H%M%S)-iter${i}-${NEXT_STORY_ID}"
+  mkdir -p "$ITER_LOG_DIR"
+  export ITER_LOG_DIR
+
   echo "═══════════════════════════════════════════════════"
   echo " Iteration $i/$MAX_ITERATIONS — Next: $NEXT_STORY"
   if [ -n "$TASK_TOOL" ] || [ -n "$TASK_MODEL" ]; then
@@ -244,7 +289,19 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   fi
   echo "═══════════════════════════════════════════════════"
 
-  OUTPUT=$(run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING") || true
+  if [ "$USE_TOOL" = "omp" ]; then
+    run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING" || true
+
+    OUTPUT=$(jq -rs '
+      [.[] | select(.type == "agent_end") | .messages[]
+       | select(.role == "assistant") | .content[]
+       | select(.type == "text") | .text] | last // ""
+    ' "$ITER_LOG_DIR/events.jsonl" 2>/dev/null)
+
+    print_omp_summary "$ITER_LOG_DIR/events.jsonl"
+  else
+    OUTPUT=$(run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING") || true
+  fi
 
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
     echo ""

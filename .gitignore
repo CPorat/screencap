@@ -1,6 +1,26 @@
+# Build artifacts
+/target/
+web/.svelte-kit/
 
-# Playwright CLI
+# OS
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+
+# Node
+node_modules/
+
+# Playwright CLI (browser verification artifacts)
 .playwright-cli/
 
 # Ralph iteration logs (runtime artifacts)
 .ralph/logs/
+.ralph/.iter-output.log
+
+# Swift build artifacts (menubar)
+.build/
+DerivedData/
+xcuserdata/
+.swiftpm/

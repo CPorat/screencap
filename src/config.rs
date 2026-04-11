@@ -1,9 +1,10 @@
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::pipeline::prompts::DEFAULT_PROMPT_FILES;
@@ -33,7 +34,54 @@ impl AppConfig {
 
     pub fn default_config_path() -> Result<PathBuf> {
         let home = Self::home_dir()?;
-        Ok(default_app_root(&home).join("config.toml"))
+        Ok(Self::default_config_path_for_home(&home))
+    }
+
+    pub fn default_config_path_for_home(home: &Path) -> PathBuf {
+        default_app_root(home).join("config.toml")
+    }
+
+    pub fn ensure_default_config_file(home: &Path) -> Result<PathBuf> {
+        let config_path = Self::default_config_path_for_home(home);
+
+        if config_path.exists() {
+            if config_path.is_file() {
+                return Ok(config_path);
+            }
+            bail!("config path exists but is not a file: {}", config_path.display());
+        }
+
+        let parent = config_path.parent().ok_or_else(|| {
+            anyhow!(
+                "failed to resolve parent directory for {}",
+                config_path.display()
+            )
+        })?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create application root at {}", parent.display()))?;
+
+        let serialized = toml::to_string_pretty(&Self::default())
+            .context("failed to serialize default TOML config")?;
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(config_path);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to create default config file at {}", config_path.display())
+                });
+            }
+        };
+        file.write_all(serialized.as_bytes()).with_context(|| {
+            format!("failed to write default config file at {}", config_path.display())
+        })?;
+
+        Ok(config_path)
     }
 
     pub fn prompts_dir(home: &Path) -> PathBuf {

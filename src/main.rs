@@ -1,6 +1,7 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -121,13 +122,7 @@ async fn main() -> Result<()> {
             let config = AppConfig::load()?;
             daemon::run_foreground(&config).await?;
         }
-        Some(Command::Config) => emit_placeholder(
-            "config",
-            Some(format!(
-                "path={}",
-                AppConfig::default_config_path()?.display()
-            )),
-        ),
+        Some(Command::Config) => handle_config()?,
         Some(Command::Start(args)) => handle_start(args).await?,
         Some(Command::Stop(args)) => handle_stop(args).await?,
         Some(Command::Status) => {
@@ -462,10 +457,95 @@ fn handle_prune(args: PruneArgs) -> Result<()> {
     screencap::storage::prune::run_prune(args.older_than)
 }
 
-fn emit_placeholder(command: &str, details: Option<String>) {
-    match details {
-        Some(details) => println!("{command} is scaffolded but not implemented yet ({details})"),
-        None => println!("{command} is scaffolded but not implemented yet"),
+fn handle_config() -> Result<()> {
+    let home = runtime_home_dir()?;
+    let config_path = AppConfig::ensure_default_config_file(&home)?;
+    let editor = resolve_editor_launcher().with_context(|| {
+        format!(
+            "failed to resolve config editor. Open the file manually at {}",
+            config_path.display()
+        )
+    })?;
+    editor.launch(&config_path).with_context(|| {
+        format!(
+            "failed to launch config editor via {}. Open the file manually at {}",
+            editor.display_name(),
+            config_path.display()
+        )
+    })?;
+    println!("opened config at {}", config_path.display());
+    Ok(())
+}
+
+struct EditorLauncher {
+    program: String,
+    args: Vec<String>,
+    display: String,
+}
+
+impl EditorLauncher {
+    fn from_env(env_name: &'static str, raw: String) -> Result<Self> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            bail!("{env_name} must not be empty");
+        }
+
+        let parts = shell_words::split(raw)
+            .with_context(|| format!("failed to parse {env_name} command `{raw}`"))?;
+        let Some((program, args)) = parts.split_first() else {
+            bail!("{env_name} must not be empty");
+        };
+
+        Ok(Self {
+            program: program.clone(),
+            args: args.to_vec(),
+            display: format!("{env_name} `{raw}`"),
+        })
+    }
+
+    fn fallback() -> Self {
+        Self {
+            program: "open".to_owned(),
+            args: vec!["-t".to_owned()],
+            display: "macOS fallback `open -t`".to_owned(),
+        }
+    }
+
+    fn display_name(&self) -> &str {
+        &self.display
+    }
+
+    fn launch(&self, path: &Path) -> Result<()> {
+        let status = ProcessCommand::new(&self.program)
+            .args(&self.args)
+            .arg(path)
+            .status()
+            .with_context(|| format!("failed to spawn {}", self.display_name()))?;
+        if !status.success() {
+            bail!("{} exited with status {status}", self.display_name());
+        }
+        Ok(())
+    }
+}
+
+fn resolve_editor_launcher() -> Result<EditorLauncher> {
+    if let Some(editor) = configured_editor("VISUAL")? {
+        return Ok(editor);
+    }
+    if let Some(editor) = configured_editor("EDITOR")? {
+        return Ok(editor);
+    }
+    Ok(EditorLauncher::fallback())
+}
+
+fn configured_editor(env_name: &'static str) -> Result<Option<EditorLauncher>> {
+    match env::var(env_name) {
+        Ok(raw) if raw.trim().is_empty() => Ok(None),
+        Ok(raw) => EditorLauncher::from_env(env_name, raw).map(Some),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => {
+            bail!("{env_name} environment variable is not valid UTF-8")
+        }
     }
 }
 

@@ -919,7 +919,7 @@
         "Command is covered by CLI tests (including no-config initial state)"
       ],
       "priority": 39,
-      "passes": false,
+      "passes": true,
       "notes": "Spec CLI includes screencap config to open config in editor.",
       "tool": "omp",
       "model": "gpt-5.4",

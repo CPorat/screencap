@@ -18,6 +18,8 @@ Branch: ralph/v1-implementation
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Menu bar daemon controllers should parse the `state:` line from `screencap status` and track whether the current daemon was launched by the menu bar, so icon state stays truthful and quitting the app only tears down the child it started.
+- CLI config editing should create `~/.screencap/config.toml` on demand, resolve the editor as `$VISUAL` then `$EDITOR` then macOS fallback `open -t`, and include the manual config path in launch errors so first-run setup stays recoverable.
+
 
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
@@ -678,4 +680,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: MCP tool handlers that call async providers should reuse the same candidate-selection helpers as CLI/API surfaces so citations and answer ranking stay consistent across entry points.
   - Gotchas encountered: MCP stdio runtimes need `tokio` `enable_all()` once provider-backed tools land; `enable_io()` alone is too narrow for async HTTP-backed tool execution.
   - Useful context: tool-level provider/config failures are better surfaced as `tools/call` results with `isError: true` and structured JSON payloads, because that keeps the MCP transport alive for follow-up requests.
+---
+
+## [2026-04-11 22:22:26 UTC] - US-039
+- What was implemented: replaced the `screencap config` placeholder with a real config editor flow that bootstraps a default `~/.screencap/config.toml`, resolves the editor from `$VISUAL` then `$EDITOR` then macOS fallback `open -t`, and reports launch failures with the exact manual path.
+- Files changed: AGENTS.md, Cargo.toml, src/config.rs, src/main.rs, tests/daemon_cli.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: first-run config commands should create the default config file before invoking the editor, so the launched tool always receives a real file path instead of an implied future write.
+  - Gotchas encountered: editor environment variables often contain command lines rather than bare executables, so the CLI must parse `$VISUAL`/`$EDITOR` as shell words instead of treating the whole string as one binary path.
+  - Useful context: on macOS, `open -t` is a practical non-GUI-specific fallback for text config editing and can be safely stubbed in CLI tests by shadowing `open` earlier in `PATH`.
 ---

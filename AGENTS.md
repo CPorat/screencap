@@ -55,6 +55,7 @@ Three-layer pipeline:
 - Writable SQLite connections should set a busy timeout and enable WAL mode, because the daemon runs capture, API, and pipeline schedulers with concurrent database connections and should wait briefly instead of failing with `database is locked`.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
 - Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.
+- CLI config editing should bootstrap `config.toml` if it is missing, resolve the editor as `$VISUAL` then `$EDITOR` then macOS fallback `open -t`, and report launch failures with the manual config path so first-run setup stays recoverable.
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
 - Swift bridge build integration should compile sources from `swift/Sources/` via `build.rs`, keep the ABI C-callable, and keep `mock-capture` fallbacks in Rust so tests can emit real JPEGs without macOS permissions.
 - When the Swift bridge spans multiple source files, have `build.rs` invoke `swiftc -emit-library -static` over the full `swift/Sources/` set; `-emit-object -o <single-file>` breaks as soon as a second Swift source is added.

@@ -1,9 +1,10 @@
 mod support;
 
 use std::{
-    fs,
+    env, fs,
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     thread,
@@ -12,11 +13,14 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
-use screencap::storage::{
-    db::StorageDb,
-    models::{
-        ActivityType, HourlyProjectSummary, InsightData, InsightType, NewCapture, NewExtraction,
-        NewExtractionBatch, NewInsight, Sentiment,
+use screencap::{
+    config::AppConfig,
+    storage::{
+        db::StorageDb,
+        models::{
+            ActivityType, HourlyProjectSummary, InsightData, InsightType, NewCapture, NewExtraction,
+            NewExtractionBatch, NewInsight, Sentiment,
+        },
     },
 };
 use uuid::Uuid;
@@ -31,6 +35,14 @@ struct TestHome {
 
 impl TestHome {
     fn new(name: &str) -> Result<Self> {
+        Self::create(name, true)
+    }
+
+    fn new_without_config(name: &str) -> Result<Self> {
+        Self::create(name, false)
+    }
+
+    fn create(name: &str, write_config: bool) -> Result<Self> {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
@@ -38,15 +50,41 @@ impl TestHome {
         let home = Self {
             path: std::env::temp_dir().join(format!("screencap-cli-tests-{name}-{unique}")),
         };
-        let app_root = home.path.join(".screencap");
-        let port = reserve_port()?;
 
-        fs::create_dir_all(&app_root)
-            .with_context(|| format!("failed to create test app root at {}", app_root.display()))?;
-        fs::write(home.config_path(), format!("[server]\nport = {port}\n"))
-            .with_context(|| format!("failed to write test config at {}", app_root.display()))?;
+        if write_config {
+            let app_root = home.path.join(".screencap");
+            let port = reserve_port()?;
+
+            fs::create_dir_all(&app_root).with_context(|| {
+                format!("failed to create test app root at {}", app_root.display())
+            })?;
+            fs::write(home.config_path(), format!("[server]\nport = {port}\n")).with_context(|| {
+                format!("failed to write test config at {}", app_root.display())
+            })?;
+        }
 
         Ok(home)
+    }
+
+    fn write_executable(&self, relative_path: &str, body: &str) -> Result<PathBuf> {
+        let path = self.path.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create executable parent at {}", parent.display())
+            })?;
+        }
+        fs::write(&path, body)
+            .with_context(|| format!("failed to write executable at {}", path.display()))?;
+
+        let mut permissions = fs::metadata(&path)
+            .with_context(|| format!("failed to read metadata for {}", path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).with_context(|| {
+            format!("failed to set executable permissions on {}", path.display())
+        })?;
+
+        Ok(path)
     }
 
     fn path(&self) -> &Path {
@@ -580,6 +618,108 @@ fn now_today_and_search_return_helpful_messages_on_empty_database() -> Result<()
         "unexpected search output: {}",
         String::from_utf8_lossy(&search.stdout),
     );
+
+    Ok(())
+}
+
+#[test]
+fn config_creates_default_file_and_prefers_visual_editor() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new_without_config("config-visual")?;
+    let marker = home.path().join("visual-invocation.txt");
+    let visual_editor = home.write_executable(
+        "bin/visual-editor",
+        &format!(
+            "#!/bin/sh\n[ -f \"$1\" ] || exit 12\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+            marker.display()
+        ),
+    )?;
+    let visual_editor = visual_editor.to_string_lossy().into_owned();
+    let missing_editor = "/definitely/not-used-editor".to_string();
+
+    let output = run_cli_with_env(
+        home.path(),
+        &["config"],
+        &[
+            ("VISUAL", visual_editor.as_str()),
+            ("EDITOR", missing_editor.as_str()),
+        ],
+    )?;
+    assert_success(&output, "config");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("opened config at {}", home.config_path().display())));
+    assert!(
+        !stdout.contains("scaffolded but not implemented"),
+        "unexpected config output: {stdout}",
+    );
+    assert!(home.config_path().exists());
+
+    let opened_path = fs::read_to_string(&marker)?;
+    assert_eq!(opened_path.trim(), home.config_path().display().to_string());
+
+    let raw_config = fs::read_to_string(home.config_path())?;
+    let parsed_config = toml::from_str::<AppConfig>(&raw_config)?;
+    assert_eq!(parsed_config, AppConfig::default());
+
+    Ok(())
+}
+
+#[test]
+fn config_uses_open_fallback_when_editor_env_is_missing() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new_without_config("config-fallback")?;
+    let marker = home.path().join("open-invocation.txt");
+    let fake_open = home.write_executable(
+        "fake-bin/open",
+        &format!(
+            "#!/bin/sh\n[ -f \"$2\" ] || exit 13\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+            marker.display()
+        ),
+    )?;
+    let fake_bin = fake_open
+        .parent()
+        .context("fake open script should have a parent directory")?;
+    let path = format!("{}:{}", fake_bin.display(), env::var("PATH").unwrap_or_default());
+
+    let output = run_cli_with_env(
+        home.path(),
+        &["config"],
+        &[("VISUAL", ""), ("EDITOR", ""), ("PATH", path.as_str())],
+    )?;
+    assert_success(&output, "config fallback");
+
+    let config_path = home.config_path();
+    let config_path_text = config_path.display().to_string();
+    let invocation = fs::read_to_string(&marker)?;
+    let mut args = invocation.lines();
+    assert_eq!(args.next(), Some("-t"));
+    assert_eq!(args.next(), Some(config_path_text.as_str()));
+
+    Ok(())
+}
+
+#[test]
+fn config_reports_launch_failures_helpfully() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new_without_config("config-failure")?;
+    let missing_editor = "/definitely/missing/editor".to_string();
+
+    let output = run_cli_with_env(
+        home.path(),
+        &["config"],
+        &[("VISUAL", ""), ("EDITOR", missing_editor.as_str())],
+    )?;
+    assert!(
+        !output.status.success(),
+        "config unexpectedly succeeded: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failed to launch config editor via EDITOR"));
+    assert!(stderr.contains("Open the file manually at"));
+    assert!(stderr.contains(&home.config_path().display().to_string()));
+    assert!(home.config_path().exists());
 
     Ok(())
 }

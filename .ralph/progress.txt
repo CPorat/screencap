@@ -4,6 +4,7 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
@@ -364,4 +365,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: menu bar lifecycle is most reliable when `NSApplication` runs in accessory mode with explicit `NSStatusItem` menu wiring and periodic daemon-status polling.
   - Gotchas encountered: command discovery for `screencap` must check common install paths plus `which` fallback, otherwise status/start/stop actions silently degrade when PATH differs between shell and GUI launch contexts.
   - Useful context: keep daemon stop handling idempotent on quit (`screencap stop` best-effort) so closing the menu bar app does not leave ambiguous capture state.
+---
+
+## [2026-04-11 11:06:51 UTC] - US-024
+- What was implemented (Menu bar API integration with URLSession): integrated the menu bar app with localhost API polling via `URLSession` for daemon health/status-driven UI updates.
+- Files changed: swift/Menubar/ScreencapApp.swift, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: use a single SwiftUI `ObservableObject` plus periodic `Timer` ticks to drive background API polling and publish menu-state changes on the main thread.
+  - Gotchas encountered: GUI-launched menu bar processes cannot rely on shell environment assumptions, so API calls need explicit base URLs, timeouts, and resilient error states.
+  - Useful context: keep poll cadence short enough for responsive status changes but limit payload scope (health/status first) to avoid unnecessary background overhead.
 ---

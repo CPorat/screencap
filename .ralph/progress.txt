@@ -346,3 +346,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: stored screenshot paths can be absolute, `~/...`, or relative; path resolution must normalize all cases against the storage root and treat missing files as non-fatal during retention runs.
   - Useful context: keep daily insights exempt from retention deletes, and run auto-prune both at daemon startup and once per UTC day so long-running daemons do not accumulate stale data between restarts.
 ---
+
+## [2026-04-11 11:00:31 UTC] - US-022
+- Completed US-022 bookkeeping: verified pruning/retention delivery and confirmed `US-022` is marked passing in `.ralph/prd.json`.
+- Files changed: .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: expose retention windows through a dedicated `prune_older_than` path so CLI and daemon auto-prune share the same pruning semantics.
+  - Gotchas encountered: prune must apply cascading deletes for dependent rows and call `std::fs::remove_file` while ignoring `NotFound` so repeated runs remain idempotent.
+  - Useful context: integration coverage should assert both SQLite row deletion and on-disk screenshot deletion in the same test to prevent DB/filesystem drift.
+---

@@ -3,7 +3,7 @@ mod support;
 use std::{
     fs,
     io::{Read, Write},
-    net::{SocketAddr, TcpListener},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     thread,
@@ -383,8 +383,9 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        let _ = TcpStream::connect(self.address);
         if let Some(handle) = self.handle.take() {
-            handle.join().expect("join server thread");
+            let _ = handle.join();
         }
     }
 }
@@ -595,6 +596,52 @@ fn search_returns_matching_extractions() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn ask_returns_semantic_answer_with_references() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("ask")?;
+    let now = Utc::now();
+    seed_search_data(&home.db_path(), now)?;
+
+    let env_var = "SCREENCAP_TEST_ASK_API_KEY";
+    let server = TestServer::spawn(
+        200,
+        "{\"choices\":[{\"message\":{\"content\":\"{\\\"answer\\\":\\\"You were fixing a JWT refresh token bug in the CLI path.\\\",\\\"capture_ids\\\":[1]}\"}}],\"usage\":{\"prompt_tokens\":90,\"completion_tokens\":30,\"total_tokens\":120,\"cost\":0.22}}",
+    );
+
+    fs::write(
+        home.config_path(),
+        format!(
+            concat!(
+                "[server]\nport = {}\n\n",
+                "[synthesis]\n",
+                "provider = \"openai\"\n",
+                "model = \"mock-synthesis-model\"\n",
+                "api_key_env = \"{}\"\n",
+                "base_url = \"{}\"\n"
+            ),
+            reserve_port()?,
+            env_var,
+            server.base_url(),
+        ),
+    )?;
+
+    let output = run_cli_with_env(
+        home.path(),
+        &["ask", "jwt refresh", "--last", "24h"],
+        &[(env_var, "token")],
+    )?;
+    assert_success(&output, "ask");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("You were fixing a JWT refresh token bug in the CLI path."));
+    assert!(stdout.contains("references:"));
+    assert!(stdout.contains("tokens_used: 120"));
+    assert!(stdout.contains("cost_cents: 0.2200"));
+
+    Ok(())
+}
+
 
 #[test]
 fn projects_show_capture_based_allocations() -> Result<()> {

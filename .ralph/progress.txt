@@ -4,6 +4,7 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
@@ -374,4 +375,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: use a single SwiftUI `ObservableObject` plus periodic `Timer` ticks to drive background API polling and publish menu-state changes on the main thread.
   - Gotchas encountered: GUI-launched menu bar processes cannot rely on shell environment assumptions, so API calls need explicit base URLs, timeouts, and resilient error states.
   - Useful context: keep poll cadence short enough for responsive status changes but limit payload scope (health/status first) to avoid unnecessary background overhead.
+---
+
+## [2026-04-11 11:11:14 UTC] - US-025
+- What was implemented (E2E integration test for capture loop to API): added an end-to-end daemon test that starts `screencap` with an isolated HOME/config, waits for `/api/health`, and verifies `/api/captures` is populated by the live capture loop.
+- Files changed: Cargo.toml, src/api/routes.rs, src/main.rs, src/pipeline/prompts.rs, src/pipeline/synthesis.rs, tests/e2e_capture_api.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: wrap spawned daemon processes in a `Child` Drop guard (`kill` + `wait`) to guarantee cleanup across all test exit paths.
+  - Gotchas encountered: E2E daemon tests need retry loops and explicit timeouts around `/api/health` and `/api/captures` to avoid flake from startup/capture timing variance.
+  - Useful context: use a temporary HOME plus per-test config/port to keep daemon startup deterministic and isolated from developer-local state.
 ---

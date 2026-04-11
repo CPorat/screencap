@@ -617,7 +617,7 @@
         "cargo test passes"
       ],
       "priority": 26,
-      "passes": false,
+      "passes": true,
       "notes": "This is an enhancement on top of the timer-based capture. The system must work without it.",
       "tool": "omp",
       "model": "gpt-5.4",

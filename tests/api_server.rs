@@ -3,9 +3,11 @@ mod support;
 use std::{
     collections::BTreeMap,
     fs,
-    net::TcpListener,
+    io::{Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::fs::symlink,
     path::{Path, PathBuf},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -14,7 +16,7 @@ use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use reqwest::{header::CONTENT_TYPE, Client};
 use screencap::{
     api,
-    config::AppConfig,
+    config::{AiProvider, AppConfig},
     storage::{
         db::StorageDb,
         models::{
@@ -130,6 +132,88 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SemanticSearchReference {
+    capture: ApiCapture,
+    extraction: Extraction,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticSearchResponse {
+    answer: String,
+    references: Vec<SemanticSearchReference>,
+    cost_cents: Option<f64>,
+    tokens_used: Option<u32>,
+}
+
+struct TestServer {
+    address: SocketAddr,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl TestServer {
+    fn spawn(status: u16, body: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let address = listener.local_addr().expect("listener addr");
+        let handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let response = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        Self {
+            address,
+            handle: Some(handle),
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        let _ = TcpStream::connect(self.address);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct TestEnvGuard {
+    key: String,
+    previous: Option<String>,
+}
+
+impl TestEnvGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key: key.to_owned(),
+            previous,
+        }
+    }
+}
+
+impl Drop for TestEnvGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(&self.key, previous);
+        } else {
+            std::env::remove_var(&self.key);
+        }
+    }
+}
+
 fn reserve_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0").context("failed to reserve local tcp port")?;
     listener
@@ -234,6 +318,7 @@ async fn api_server_serves_embedded_ui_and_spa_fallback() -> Result<()> {
     assert!(fallback_html.contains("<html"));
     assert_eq!(fallback_html, root_html);
 
+    drop(client);
     shutdown_tx
         .send(true)
         .expect("server shutdown channel should accept signal");
@@ -246,7 +331,18 @@ async fn api_server_serves_embedded_ui_and_spa_fallback() -> Result<()> {
 async fn api_server_serves_rest_endpoints() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("rest")?;
-    let config = test_config(home.path())?;
+    let mut config = test_config(home.path())?;
+    let semantic_llm = TestServer::spawn(
+        200,
+        "{\"choices\":[{\"message\":{\"content\":\"{\\\"answer\\\":\\\"You were implementing API search filters.\\\",\\\"capture_ids\\\":[1]}\"}}],\"usage\":{\"prompt_tokens\":81,\"completion_tokens\":23,\"total_tokens\":104,\"cost\":0.19}}".to_owned(),
+    );
+    let semantic_api_key_env = "SCREENCAP_TEST_API_SEMANTIC_KEY";
+    config.synthesis.provider = AiProvider::Openai;
+    config.synthesis.model = "mock-synthesis-model".into();
+    config.synthesis.api_key_env = semantic_api_key_env.into();
+    config.synthesis.base_url = semantic_llm.base_url();
+    let _api_key_guard = TestEnvGuard::set(semantic_api_key_env, "token");
+
     let db_path = config.storage_root(home.path()).join("screencap.db");
     let screenshot_path = sample_screenshot_path(&config, home.path());
     fs::create_dir_all(
@@ -671,6 +767,30 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         Some("Added API search and insight endpoints for the daemon.")
     );
     assert!(search_results.results[0].rank.is_finite());
+    let semantic_results: SemanticSearchResponse = client
+        .get(format!("{base_url}/api/search/semantic"))
+        .query(&[
+            ("q", "api filters"),
+            ("from", from.as_str()),
+            ("to", to.as_str()),
+            ("limit", "5"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        semantic_results.answer,
+        "You were implementing API search filters."
+    );
+    assert_eq!(semantic_results.references.len(), 1);
+    assert_eq!(semantic_results.references[0].capture.id, capture.id);
+    assert_eq!(semantic_results.references[0].extraction.id, extraction.id);
+    assert_eq!(semantic_results.tokens_used, Some(104));
+    assert_eq!(semantic_results.cost_cents, Some(0.19));
+
+
     let screenshot_response = client
         .get(format!(
             "{base_url}/api/screenshots/{relative_screenshot_path}"
@@ -750,6 +870,7 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     assert!(html_text.contains("<html"));
     assert!(html_text.contains("</html>"));
 
+    drop(client);
     shutdown_tx
         .send(true)
         .expect("server shutdown channel should accept signal");

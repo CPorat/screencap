@@ -1,3 +1,5 @@
+use crate::storage::models::Extraction;
+
 pub const EXTRACTION_PROMPT_TEMPLATE: &str = r#"You are analyzing a batch of sequential screenshots from a user's computer.
 For each screenshot, extract structured data. Then provide a batch summary.
 
@@ -117,3 +119,104 @@ Return JSON in this exact format:
 Use the exact date provided in the request metadata below.
 Base the summary only on the hourly digests from that date.
 Return JSON only; do not wrap it in markdown or add commentary."#;
+
+
+pub fn build_semantic_search_prompt(query: &str, extractions: &[Extraction]) -> String {
+    let mut prompt = String::with_capacity(1024 + extractions.len() * 320);
+    prompt.push_str(
+        r#"You are an assistant that answers user questions about recent computer activity.
+Use ONLY the provided extraction records as evidence.
+If the answer is not supported by the records, say you do not know.
+
+Return JSON in this exact format:
+{
+  "answer": "Direct answer grounded in the provided records",
+  "capture_ids": [123, 456]
+}
+
+Rules:
+- `capture_ids` must contain only capture IDs from the provided extraction records.
+- Rank `capture_ids` from most relevant to least relevant.
+- Do not include IDs that are not present in the provided records.
+- Return JSON only; no markdown or commentary."#,
+    );
+
+    prompt.push_str("\n\nUser query:\n");
+    prompt.push_str(query.trim());
+    prompt.push_str("\n\nExtraction records:\n");
+
+    if extractions.is_empty() {
+        prompt.push_str("- none\n");
+    }
+
+    for extraction in extractions {
+        prompt.push_str(&format!(
+            concat!(
+                "- capture_id: {capture_id}\n",
+                "  extraction_id: {extraction_id}\n",
+                "  activity_type: {activity_type}\n",
+                "  description: {description}\n",
+                "  app_context: {app_context}\n",
+                "  project: {project}\n",
+                "  topics: {topics}\n",
+                "  people: {people}\n",
+                "  key_content: {key_content}\n",
+                "  sentiment: {sentiment}\n"
+            ),
+            capture_id = extraction.capture_id,
+            extraction_id = extraction.id,
+            activity_type = extraction
+                .activity_type
+                .map(|value| value.as_str())
+                .unwrap_or("unknown"),
+            description = extraction.description.as_deref().unwrap_or(""),
+            app_context = extraction.app_context.as_deref().unwrap_or(""),
+            project = extraction.project.as_deref().unwrap_or("null"),
+            topics = format_string_list(&extraction.topics),
+            people = format_string_list(&extraction.people),
+            key_content = extraction.key_content.as_deref().unwrap_or(""),
+            sentiment = extraction.sentiment.map(|value| value.as_str()).unwrap_or("unknown"),
+        ));
+    }
+
+    prompt
+}
+
+fn format_string_list(values: &[String]) -> String {
+    serde_json::to_string(values).unwrap_or_else(|_| "[]".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn build_semantic_search_prompt_includes_query_and_extractions() {
+        let prompt = build_semantic_search_prompt(
+            "what changed in auth?",
+            &[Extraction {
+                id: 7,
+                capture_id: 42,
+                batch_id: Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap(),
+                activity_type: Some(crate::storage::models::ActivityType::Coding),
+                description: Some("Debugged refresh token flow".into()),
+                app_context: Some("Editing src/auth.rs".into()),
+                project: Some("screencap".into()),
+                topics: vec!["jwt".into(), "auth".into()],
+                people: vec!["@alice".into()],
+                key_content: Some("refresh_session".into()),
+                sentiment: Some(crate::storage::models::Sentiment::Focused),
+                created_at: Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap(),
+            }],
+        );
+
+        assert!(prompt.contains("what changed in auth?"));
+        assert!(prompt.contains("\"capture_ids\": [123, 456]"));
+        assert!(prompt.contains("capture_id: 42"));
+        assert!(prompt.contains("description: Debugged refresh token flow"));
+        assert!(prompt.contains("topics: [\"jwt\",\"auth\"]"));
+    }
+}

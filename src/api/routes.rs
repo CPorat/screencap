@@ -6,7 +6,7 @@ use std::{
 use anyhow::Context;
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, RawQuery, State},
+    extract::{Path as AxumPath, Query, RawQuery, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -18,6 +18,7 @@ use tracing::error;
 
 use crate::{
     config::AppConfig,
+    pipeline::synthesis,
     storage::{
         db::StorageDb,
         metrics,
@@ -34,9 +35,12 @@ const DEFAULT_CAPTURE_LIMIT: usize = 100;
 const MAX_CAPTURE_LIMIT: usize = 500;
 const DEFAULT_SEARCH_LIMIT: usize = 50;
 const MAX_SEARCH_LIMIT: usize = 200;
+const DEFAULT_SEMANTIC_SEARCH_LIMIT: usize = 100;
+const MAX_SEMANTIC_SEARCH_LIMIT: usize = 300;
 
 #[derive(Clone)]
 struct ApiState {
+    config: AppConfig,
     db_path: PathBuf,
     storage_root: PathBuf,
     screenshots_root: PathBuf,
@@ -46,6 +50,7 @@ struct ApiState {
 impl ApiState {
     fn new(config: &AppConfig, home: &Path) -> Self {
         Self {
+            config: config.clone(),
             db_path: config.storage_root(home).join("screencap.db"),
             storage_root: config.storage_root(home),
             screenshots_root: config.screenshots_root(home),
@@ -139,6 +144,20 @@ struct SearchResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct SemanticSearchReference {
+    capture: ApiCapture,
+    extraction: Extraction,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticSearchResponse {
+    answer: String,
+    references: Vec<SemanticSearchReference>,
+    cost_cents: Option<f64>,
+    tokens_used: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
 }
@@ -175,6 +194,14 @@ struct SearchParams {
     q: Option<String>,
     app: Option<String>,
     project: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SemanticSearchParams {
+    q: Option<String>,
     from: Option<String>,
     to: Option<String>,
     limit: Option<usize>,
@@ -238,6 +265,7 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/insights/projects", get(list_project_time_allocations))
         .route("/api/insights/topics", get(list_topic_frequencies))
         .route("/api/search", get(search_extractions))
+        .route("/api/search/semantic", get(handle_semantic_search))
         .route("/", get(static_assets::root_handler))
         .route("/{*path}", get(static_assets::static_handler))
         .with_state(state)
@@ -555,6 +583,51 @@ async fn search_extractions(
         limit: search_query.limit,
     }))
 }
+async fn handle_semantic_search(
+    State(state): State<ApiState>,
+    Query(params): Query<SemanticSearchParams>,
+) -> Result<Json<SemanticSearchResponse>, ApiError> {
+    let from = parse_optional_timestamp("from", params.from.as_deref())?;
+    let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    validate_timestamp_range(from.as_ref(), to.as_ref())?;
+
+    let query = trim_to_option(params.q)
+        .ok_or_else(|| ApiError::bad_request("query parameter `q` is required"))?;
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_SEMANTIC_SEARCH_LIMIT)
+        .min(MAX_SEMANTIC_SEARCH_LIMIT);
+
+    let Some(db) = state.open_db().map_err(ApiError::internal)? else {
+        return Ok(Json(SemanticSearchResponse {
+            answer: "No captures are available yet.".into(),
+            references: Vec::new(),
+            cost_cents: None,
+            tokens_used: None,
+        }));
+    };
+
+    let candidates = synthesis::semantic_search_candidates(&db, &query, from, to, limit)
+        .map_err(ApiError::internal)?;
+    drop(db);
+    let result = synthesis::semantic_search(&state.config, &query, candidates)
+        .await
+        .map_err(ApiError::internal)?;
+    let references = result
+        .references
+        .into_iter()
+        .map(|hit| semantic_search_reference_from_hit(&state, hit))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Json(SemanticSearchResponse {
+        answer: result.answer,
+        references,
+        cost_cents: result.cost_cents,
+        tokens_used: result.tokens_used,
+    }))
+}
+
+
 fn parse_capture_list_params(raw: Option<&str>) -> Result<CaptureListParams, ApiError> {
     parse_query_params(raw, "invalid capture query parameters")
 }
@@ -685,6 +758,17 @@ fn api_search_hit_from_model(
         rank: hit.rank,
     })
 }
+
+fn semantic_search_reference_from_hit(
+    state: &ApiState,
+    hit: ExtractionSearchHit,
+) -> Result<SemanticSearchReference, ApiError> {
+    Ok(SemanticSearchReference {
+        capture: api_capture_from_model(state, hit.capture)?,
+        extraction: hit.extraction,
+    })
+}
+
 
 fn screenshot_url_from_path(state: &ApiState, screenshot_path: &str) -> Option<String> {
     let path = Path::new(screenshot_path);

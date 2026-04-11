@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -23,17 +23,19 @@ use crate::{
     storage::{
         db::StorageDb,
         models::{
-            DailyProjectSummary, ExtractionBatchDetail, FocusBlock, HourlyProjectSummary, Insight,
-            InsightData, InsightType, NewInsight,
+            DailyProjectSummary, ExtractionBatchDetail, ExtractionSearchHit,
+            ExtractionSearchQuery, FocusBlock, HourlyProjectSummary, Insight, InsightData,
+            InsightType, NewInsight,
         },
     },
+
 };
 
 use super::{
     json::extract_json_payload,
     prompts::{
-        DAILY_SUMMARY_PROMPT_TEMPLATE, HOURLY_DIGEST_PROMPT_TEMPLATE,
-        ROLLING_CONTEXT_PROMPT_TEMPLATE,
+        build_semantic_search_prompt, DAILY_SUMMARY_PROMPT_TEMPLATE,
+        HOURLY_DIGEST_PROMPT_TEMPLATE, ROLLING_CONTEXT_PROMPT_TEMPLATE,
     },
 };
 
@@ -41,6 +43,16 @@ const ROLLING_CONTEXT_WINDOW_MINUTES: i64 = 30;
 const HOURLY_DIGEST_WINDOW_HOURS: i64 = 1;
 const HOURLY_DIGEST_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const DAILY_SUMMARY_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
+
+const SEMANTIC_SEARCH_FALLBACK_REFERENCES: usize = 5;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticSearchResult {
+    pub answer: String,
+    pub references: Vec<ExtractionSearchHit>,
+    pub tokens_used: Option<u32>,
+    pub cost_cents: Option<f64>,
+}
 
 pub struct RollingContextScheduler {
     config: AppConfig,
@@ -417,6 +429,141 @@ pub async fn get_or_generate_today_summary_at_home(
     scheduler.run_once_at(now).await
 }
 
+pub fn semantic_search_candidates(
+    db: &StorageDb,
+    query: &str,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    limit: usize,
+) -> Result<Vec<ExtractionSearchHit>> {
+    let query = query.trim();
+    ensure!(!query.is_empty(), "semantic search query must not be empty");
+
+    let base_query = ExtractionSearchQuery {
+        query: query.to_owned(),
+        app_name: None,
+        project: None,
+        from,
+        to,
+        limit,
+    };
+    let direct_hits = db.search_extractions_filtered(&base_query)?;
+    if !direct_hits.is_empty() {
+        return Ok(direct_hits);
+    }
+
+    let mut hits = Vec::new();
+    let mut seen_extraction_ids = HashSet::new();
+    for term in semantic_search_fallback_terms(query) {
+        let term_hits = db.search_extractions_filtered(&ExtractionSearchQuery {
+            query: term,
+            ..base_query.clone()
+        })?;
+        for hit in term_hits {
+            if seen_extraction_ids.insert(hit.extraction.id) {
+                hits.push(hit);
+                if hits.len() >= limit {
+                    return Ok(hits);
+                }
+            }
+        }
+    }
+
+    Ok(hits)
+}
+
+fn semantic_search_fallback_terms(query: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "for",
+        "from", "how", "i", "in", "into", "is", "it", "of", "on", "or", "that",
+        "the", "to", "was", "were", "what", "when", "where", "which", "who", "why",
+        "with", "you", "your",
+    ];
+
+    let mut terms = query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter_map(|segment| {
+            let lowered = segment.to_ascii_lowercase();
+            if lowered.len() < 3 || STOP_WORDS.contains(&lowered.as_str()) {
+                None
+            } else {
+                Some(lowered)
+            }
+        })
+        .collect::<Vec<_>>();
+    terms.sort_by_key(|term| std::cmp::Reverse(term.len()));
+    terms.dedup();
+    terms
+}
+
+pub async fn semantic_search(
+    config: &AppConfig,
+    query: &str,
+    candidates: Vec<ExtractionSearchHit>,
+) -> Result<SemanticSearchResult> {
+    let provider = open_synthesis_provider(config)?;
+    semantic_search_with_provider(provider.as_ref(), query, candidates).await
+}
+
+pub async fn semantic_search_with_provider(
+    provider: &dyn LlmProvider,
+    query: &str,
+    candidates: Vec<ExtractionSearchHit>,
+) -> Result<SemanticSearchResult> {
+    let query = query.trim();
+    ensure!(!query.is_empty(), "semantic search query must not be empty");
+
+    semantic_search_from_candidates(provider, query, candidates).await
+}
+
+async fn semantic_search_from_candidates(
+    provider: &dyn LlmProvider,
+    query: &str,
+    candidates: Vec<ExtractionSearchHit>,
+) -> Result<SemanticSearchResult> {
+    if candidates.is_empty() {
+        return Ok(SemanticSearchResult {
+            answer: "No relevant captures were found for that query in the selected range.".into(),
+            references: Vec::new(),
+            tokens_used: None,
+            cost_cents: None,
+        });
+    }
+
+    let prompt = build_semantic_search_prompt(
+        query,
+        &candidates
+            .iter()
+            .map(|candidate| candidate.extraction.clone())
+            .collect::<Vec<_>>(),
+    );
+    let response = provider
+        .complete_text(&prompt)
+        .await
+        .context("semantic search request failed")?;
+    let tokens_used = response
+        .usage
+        .and_then(|usage| u32::try_from(usage.total_tokens).ok());
+
+    match parse_semantic_search_response(&response.content) {
+        Ok(parsed) => Ok(SemanticSearchResult {
+            answer: parsed.answer,
+            references: rank_semantic_references(candidates, &parsed.capture_ids),
+            tokens_used,
+            cost_cents: response.cost_cents,
+        }),
+        Err(_) => Ok(SemanticSearchResult {
+            answer: response.content,
+            references: candidates
+                .into_iter()
+                .take(SEMANTIC_SEARCH_FALLBACK_REFERENCES)
+                .collect(),
+            tokens_used,
+            cost_cents: response.cost_cents,
+        }),
+    }
+}
+
 pub fn build_rolling_context_prompt(
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
@@ -471,6 +618,13 @@ pub fn build_daily_summary_prompt(
     append_prompt_footer(&mut prompt);
     prompt
 }
+
+pub fn parse_semantic_search_response(json_str: &str) -> Result<SemanticSearchPayload> {
+    let payload = extract_json_payload(json_str);
+    serde_json::from_str::<SemanticSearchPayload>(payload)
+        .context("failed to parse semantic search response JSON")
+}
+
 
 pub fn parse_rolling_context_response(json_str: &str) -> Result<InsightData> {
     let payload = extract_json_payload(json_str);
@@ -537,6 +691,32 @@ pub fn parse_daily_summary_response(json_str: &str) -> Result<InsightData> {
         narrative: parsed.narrative,
     })
 }
+
+fn rank_semantic_references(
+    mut candidates: Vec<ExtractionSearchHit>,
+    capture_ids: &[i64],
+) -> Vec<ExtractionSearchHit> {
+    let mut ranked = Vec::new();
+
+    for capture_id in capture_ids {
+        if let Some(index) = candidates
+            .iter()
+            .position(|candidate| candidate.capture.id == *capture_id)
+        {
+            ranked.push(candidates.remove(index));
+        }
+    }
+
+    if ranked.is_empty() {
+        return candidates
+            .into_iter()
+            .take(SEMANTIC_SEARCH_FALLBACK_REFERENCES)
+            .collect();
+    }
+
+    ranked
+}
+
 
 fn open_synthesis_provider(config: &AppConfig) -> Result<Arc<dyn LlmProvider>> {
     let provider_config = LlmProviderConfig::from(&config.synthesis);
@@ -870,6 +1050,15 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SemanticSearchPayload {
+    pub answer: String,
+    #[serde(default)]
+    pub capture_ids: Vec<i64>,
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RollingContextPayload {
     #[serde(rename = "type")]
     insight_type: InsightType,
@@ -995,6 +1184,18 @@ mod tests {
         assert!(prompt.contains("projects: [{\"name\":\"screencap\""));
         assert!(prompt.contains("people_interacted: [\"@alice\"]"));
         assert!(prompt.contains("narrative: Productive coding hour"));
+
+    }
+
+    #[test]
+    fn parse_semantic_search_response_accepts_fenced_json() {
+        let parsed = parse_semantic_search_response(
+            "```json\n{\n  \"answer\": \"You were debugging JWT refresh handling.\",\n  \"capture_ids\": [2, 1]\n}\n```",
+        )
+        .expect("parse semantic search response");
+
+        assert_eq!(parsed.answer, "You were debugging JWT refresh handling.");
+        assert_eq!(parsed.capture_ids, vec![2, 1]);
     }
 
     #[test]
@@ -1109,6 +1310,97 @@ mod tests {
         assert!(error
             .to_string()
             .contains("failed to parse daily summary response JSON"));
+    }
+    #[test]
+    fn parse_semantic_search_response_rejects_malformed_json() {
+        let error = parse_semantic_search_response(
+            "```json\n{\"answer\":\"bad\",\"capture_ids\":}\n```",
+        )
+        .expect_err("malformed semantic json should fail");
+        assert!(error
+            .to_string()
+            .contains("failed to parse semantic search response JSON"));
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_provider_returns_ranked_references() -> Result<()> {
+        let home = temp_home_root("semantic-ranked");
+        let config = test_config(&home);
+        let mut db = open_synthesis_db(&config, &home)?;
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
+        seed_recent_extractions(&mut db, window_end)?;
+
+        let provider = MockLlmProvider::new();
+        provider.push_response(Ok(LlmResponse::with_usage_and_cost(
+            "```json\n{\"answer\":\"You were fixing JWT refresh logic and validating it with tests.\",\"capture_ids\":[2,1]}\n```",
+            TokenUsage {
+                prompt_tokens: 140,
+                completion_tokens: 60,
+                total_tokens: 200,
+            },
+            0.17,
+        )));
+
+        let candidates = semantic_search_candidates(
+            &db,
+            "what was I doing around jwt refresh?",
+            None,
+            None,
+            10,
+        )?;
+        let result = semantic_search_with_provider(
+            &provider,
+            "what was I doing around jwt refresh?",
+            candidates,
+        )
+        .await?;
+
+        assert_eq!(
+            result.answer,
+            "You were fixing JWT refresh logic and validating it with tests."
+        );
+        assert_eq!(result.tokens_used, Some(200));
+        assert_eq!(result.cost_cents, Some(0.17));
+        assert_eq!(
+            result
+                .references
+                .iter()
+                .map(|reference| reference.capture.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].kind, MockCallKind::Text);
+        assert!(calls[0].prompt.contains("what was I doing around jwt refresh?"));
+        assert!(calls[0].prompt.contains("capture_id: 1"));
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn semantic_search_with_provider_falls_back_to_raw_answer() -> Result<()> {
+        let home = temp_home_root("semantic-fallback");
+        let config = test_config(&home);
+        let mut db = open_synthesis_db(&config, &home)?;
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
+        seed_recent_extractions(&mut db, window_end)?;
+
+        let provider = MockLlmProvider::new();
+        provider.push_text_response("Raw non-JSON fallback answer");
+
+        let candidates = semantic_search_candidates(&db, "jwt refresh", None, None, 10)?;
+        let result = semantic_search_with_provider(&provider, "jwt refresh", candidates).await?;
+
+        assert_eq!(result.answer, "Raw non-JSON fallback answer");
+        assert_eq!(result.tokens_used, None);
+        assert!(result.cost_cents.is_none());
+        assert!(!result.references.is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
     }
 
     #[test]

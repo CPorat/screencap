@@ -22,6 +22,7 @@ use screencap::{
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_SEARCH_LIMIT: usize = 20;
+const DEFAULT_SEMANTIC_SEARCH_LIMIT: usize = 100;
 
 #[derive(Debug, Parser)]
 #[command(name = "screencap", version, about = "Lightweight screen memory for macOS", long_about = None)]
@@ -43,6 +44,7 @@ enum Command {
     Week,
     Search(SearchArgs),
     Projects(ProjectsArgs),
+    Ask(AskArgs),
     Mcp,
     Config,
     Costs,
@@ -60,6 +62,14 @@ struct SearchArgs {
     #[arg(long)]
     last: Option<String>,
 }
+
+#[derive(Debug, Args)]
+struct AskArgs {
+    query: String,
+    #[arg(long)]
+    last: Option<String>,
+}
+
 
 #[derive(Debug, Args)]
 struct ProjectsArgs {
@@ -120,6 +130,7 @@ async fn main() -> Result<()> {
         Some(Command::Week) => handle_week()?,
         Some(Command::Search(args)) => handle_search(args)?,
         Some(Command::Projects(args)) => handle_projects(args)?,
+        Some(Command::Ask(args)) => handle_ask(args).await?,
         Some(Command::Export(args)) => markdown::run_export(args.date, args.last, args.output).await?,
         Some(Command::Costs) => handle_costs()?,
         Some(Command::Prune(args)) => handle_prune(args)?,
@@ -255,6 +266,64 @@ fn handle_search(args: SearchArgs) -> Result<()> {
 
     Ok(())
 }
+
+async fn handle_ask(args: AskArgs) -> Result<()> {
+    let query = args.query.trim();
+    if query.is_empty() {
+        bail!("ask query must not be empty");
+    }
+
+    let (config, home) = load_config_and_home()?;
+    let Some(db) = open_read_db(&config, &home)? else {
+        println!("no captures are available yet");
+        return Ok(());
+    };
+
+    let from = parse_optional_lookback_start(args.last.as_deref(), Utc::now())?;
+    let candidates = synthesis::semantic_search_candidates(
+        &db,
+        query,
+        from,
+        None,
+        DEFAULT_SEMANTIC_SEARCH_LIMIT,
+    )?;
+    let result = synthesis::semantic_search(&config, query, candidates).await?;
+
+    let answer = result.answer.trim();
+    if answer.is_empty() {
+        println!("(no answer returned)");
+    } else {
+        println!("{answer}");
+    }
+
+    if !result.references.is_empty() {
+        println!();
+        println!("references:");
+        for reference in result.references {
+            println!(
+                "- #{} {} — {}",
+                reference.capture.id,
+                format_timestamp(&reference.capture.timestamp),
+                reference
+                    .extraction
+                    .description
+                    .as_deref()
+                    .unwrap_or("no description available")
+            );
+        }
+    }
+
+    if let Some(tokens_used) = result.tokens_used {
+        println!();
+        println!("tokens_used: {tokens_used}");
+    }
+    if let Some(cost_cents) = result.cost_cents {
+        println!("cost_cents: {cost_cents:.4}");
+    }
+
+    Ok(())
+}
+
 
 fn handle_projects(args: ProjectsArgs) -> Result<()> {
     let (config, home) = load_config_and_home()?;

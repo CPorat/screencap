@@ -611,3 +611,11 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - Svelte static-adapter app handles the embedded routing and responsive layout perfectly. Sentinels/hydration states hold up cleanly under e2e constraints.
 ---
+## 2026-04-11 - US-034
+- Wrote README.md with project description, build instructions, configuration guide, and CLI usage examples based on actual CLI and config.
+- Verified cargo check, clippy (-D warnings), cargo test (--features mock-capture), and build --release all pass successfully.
+- Verified no TODO or FIXME comments exist in src/.
+- **Learnings for future iterations:**
+  - `cargo test --features mock-capture` is required to pass integration tests that hit capture logic on machines without Screen Recording permission.
+  - The Svelte web UI build is already well-integrated via `rust-embed` and works cleanly.
+---

@@ -296,3 +296,13 @@ Branch: ralph/v1-implementation
   - Keep fallback calculations centralized at the view-model boundary so Chart.js components stay deterministic under missing endpoint fields.
   - Seeded SQLite fixtures plus Puppeteer flows are the fastest reliable regression signal for dashboard-style routes with temporal aggregation logic.
 ---
+## 2026-04-11 10:17:18 UTC - US-020
+- Implemented MCP stdio transport support for `screencap mcp`, including JSON-RPC request/response handling and MCP tool registration for context, history search, recent activity, screenshot retrieval, daily summary, project activity, and app usage.
+- Hardened stdio protocol behavior by handling framed JSON-RPC input/output correctly while keeping tracing/log output on stderr so stdout stays protocol-clean for MCP clients.
+- Added child-process integration coverage with `assert_cmd` to spawn the MCP server, send initialize/tools/list/tool-call flows, and verify deterministic response shapes against seeded storage data.
+- Files changed: src/mcp/server.rs, src/mcp/mod.rs, src/main.rs, tests/mcp_server.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - MCP over stdio must treat stdout as protocol-only; any diagnostics should go to stderr or they will corrupt JSON-RPC streams.
+  - Message framing and line-delimited handling both need explicit tests because clients differ in how they chunk/write requests to child processes.
+  - `assert_cmd` is a practical way to exercise real child-process stdio flows end-to-end without mocking transport semantics.
+---

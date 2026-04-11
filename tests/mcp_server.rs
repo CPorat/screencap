@@ -12,11 +12,8 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use assert_cmd::cargo::CommandCargoExt;
 use serde_json::{json, Value};
-
-fn binary_path() -> &'static str {
-    env!("CARGO_BIN_EXE_screencap")
-}
 
 struct TestHome {
     path: PathBuf,
@@ -46,7 +43,7 @@ impl Drop for TestHome {
 }
 
 fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, String>>)> {
-    let mut child = Command::new(binary_path())
+    let mut child = Command::cargo_bin("screencap")?
         .arg("mcp")
         .env("HOME", home)
         .stdin(Stdio::piped())

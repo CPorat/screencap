@@ -45,7 +45,6 @@ declare module '$env/static/private' {
 	export const STARSHIP_SHELL: string;
 	export const PNPM_UPDATE_NOTIFIER: string;
 	export const VSCODE_CRASH_REPORTER_PROCESS_TYPE: string;
-	export const CLIPPY_TERMINAL_WIDTH: string;
 	export const NODE: string;
 	export const npm_config_audit: string;
 	export const XDG_DATA_HOME: string;
@@ -87,7 +86,6 @@ declare module '$env/static/private' {
 	export const NVM_DIR: string;
 	export const CARGO_CFG_TARGET_FEATURE: string;
 	export const CARGO_CFG_TARGET_ABI: string;
-	export const RUSTC_WORKSPACE_WRAPPER: string;
 	export const COMMAND_MODE: string;
 	export const npm_config_globalconfig: string;
 	export const CARGO_MANIFEST_DIR: string;
@@ -100,7 +98,6 @@ declare module '$env/static/private' {
 	export const SYSTEMD_PAGER: string;
 	export const PAGER: string;
 	export const FZF_DEFAULT_OPTS: string;
-	export const CLIPPY_ARGS: string;
 	export const DOTFILES: string;
 	export const CARGO_PKG_REPOSITORY: string;
 	export const CARGO_PKG_AUTHORS: string;
@@ -300,7 +297,6 @@ declare module '$env/dynamic/private' {
 		STARSHIP_SHELL: string;
 		PNPM_UPDATE_NOTIFIER: string;
 		VSCODE_CRASH_REPORTER_PROCESS_TYPE: string;
-		CLIPPY_TERMINAL_WIDTH: string;
 		NODE: string;
 		npm_config_audit: string;
 		XDG_DATA_HOME: string;
@@ -342,7 +338,6 @@ declare module '$env/dynamic/private' {
 		NVM_DIR: string;
 		CARGO_CFG_TARGET_FEATURE: string;
 		CARGO_CFG_TARGET_ABI: string;
-		RUSTC_WORKSPACE_WRAPPER: string;
 		COMMAND_MODE: string;
 		npm_config_globalconfig: string;
 		CARGO_MANIFEST_DIR: string;
@@ -355,7 +350,6 @@ declare module '$env/dynamic/private' {
 		SYSTEMD_PAGER: string;
 		PAGER: string;
 		FZF_DEFAULT_OPTS: string;
-		CLIPPY_ARGS: string;
 		DOTFILES: string;
 		CARGO_PKG_REPOSITORY: string;
 		CARGO_PKG_AUTHORS: string;

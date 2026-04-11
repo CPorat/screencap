@@ -39,7 +39,7 @@ Branch: ralph/v1-implementation
 - Search route UIs should debounce query typing, gate stale async responses with request IDs, and keep app/project/time chips wired to server-side `/api/search` filters so relevance ranking remains authoritative.
 - Settings route UIs should derive daemon liveness from `/api/health`, pair it with `/api/stats` telemetry for storage/capture panels, and always provide a first-class disconnected state with explicit CLI recovery steps.
 - Markdown export commands should treat `--output` as a file for single-day exports but require a directory for multi-day `--last` ranges; generate `{date}.md` files per day and keep stdout export as the default only when no custom daily export path is configured.
-- Capture exclusion should keep `excluded_apps` as exact app-name matches while treating `excluded_window_titles` as substring patterns (e.g., `Private`) so one rule covers browser-specific private/incognito title variants.
+- Prompt templates should load from `~/.screencap/prompts/*.txt` with default templates seeded once and existing custom files preserved, so prompt behavior is operator-tunable without recompiling.
 
 
 
@@ -437,11 +437,11 @@ Branch: ralph/v1-implementation
   - Useful context: keeping pause/resume as daemon RPC (`localhost` API) avoids PID signaling complexity and keeps command behavior identical for foreground and background daemon modes.
 ---
 
-## [2026-04-11 12:47:30 UTC] - US-028
-- What was implemented (App and Window Title Exclusion logic): tightened capture exclusions so app filtering stays exact-match while window-title filtering uses substring patterns, updated default excluded window title patterns, and added capture-loop test coverage proving excluded title patterns skip persistence.
-- Files changed: src/config.rs, src/daemon.rs, .ralph/prd.json, .ralph/progress.txt
+## [2026-04-11 12:48:27 UTC] - US-028
+- What was implemented (Refactor prompt templates to disk): moved extraction/rolling/hourly/daily/semantic prompt templates to disk-backed files under `~/.screencap/prompts`, seeded defaults during config/runtime initialization, and updated prompt builders to load from disk with in-code fallback defaults.
+- Files changed: src/config.rs, src/pipeline/prompts.rs, src/pipeline/extraction.rs, src/pipeline/synthesis.rs, src/daemon.rs, .ralph/prd.json, .ralph/progress.txt
 - **Learnings for future iterations:**
-  - Patterns discovered: app exclusions are safest as exact-name membership checks, while title exclusions should use substring matching to capture variants like "Private Browsing" and "Private Window" without enumerating each full title.
-  - Gotchas encountered: exact title equality silently misses common private/incognito variants; relying on strict matches under-filters sensitive windows.
-  - Useful context: keep exclusion behavior validated with capture-loop tests that assert excluded contexts do not create pending capture rows.
+  - Patterns discovered: seed default prompt files once and keep code constants as fallback templates so users can customize prompts without recompiling.
+  - Gotchas encountered: startup prompt initialization must never overwrite existing files, or custom prompt tuning is lost silently.
+  - Useful context: tests remain stable when prompt loading resolves under custom HOME roots and explicitly verifies both default seeding and custom-template persistence.
 ---

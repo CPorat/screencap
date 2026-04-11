@@ -41,6 +41,8 @@ Branch: ralph/v1-implementation
 - Markdown export commands should treat `--output` as a file for single-day exports but require a directory for multi-day `--last` ranges; generate `{date}.md` files per day and keep stdout export as the default only when no custom daily export path is configured.
 - Prompt templates should load from `~/.screencap/prompts/*.txt` with default templates seeded once and existing custom files preserved, so prompt behavior is operator-tunable without recompiling.
 - Capture persistence should treat each multi-display timestamp as one atomic unit: track JPEGs created in that cycle and remove them if any transactional DB write fails, so retries cannot inherit orphaned files.
+- Timeline pagination fetch loops should maintain explicit `nextOffset` and `hasMore` state derived from each `/api/captures` page size, so infinite loading remains deterministic without relying on separate total-count queries.
+
 
 
 
@@ -463,4 +465,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: compile exclusion regexes once during daemon startup and reuse compiled matchers in the capture loop to avoid per-cycle compile overhead.
   - Gotchas encountered: invalid regex patterns should fail fast with explicit config errors instead of silently disabling exclusion behavior.
   - Useful context: evaluate title exclusions before capture writes so matched windows never create screenshot files or capture rows.
+---
+## [2026-04-11 12:59:46 UTC] - US-030
+- What was implemented (Svelte Web UI Timeline optimization - Pagination): finalized delivery bookkeeping for the completed timeline pagination optimization and marked the story passing in `.ralph/prd.json`.
+- Files changed: .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: timeline pagination stays robust when page advancement is driven by explicit offset/has-more state derived from API page length.
+  - Gotchas encountered: running `npm run build` can churn tracked `.svelte-kit` artifacts even without source edits, so verify and avoid committing generated drift when story scope is bookkeeping-only.
+  - Useful context: this checkpoint validated `npm run build`, `cargo clippy`, and `cargo test --features mock-capture` before commit to keep UI embed and Rust quality gates aligned.
 ---

@@ -722,7 +722,7 @@
         "cargo test --test e2e_pipeline passes"
       ],
       "priority": 31,
-      "passes": false,
+      "passes": true,
       "notes": "This is the most important story. If this passes, the core loop works. Use the same MockLlmProvider from US-009b tests.",
       "tool": "omp",
       "model": "gpt-5.4",

@@ -1,43 +1,86 @@
-# screencap
+# Screencap
 
-## Project description
+Screencap is a lightweight, macOS-only screen memory tool written in Rust with Swift bridges for native Apple APIs. It captures screenshots locally, extracts structured context with a vision LLM, synthesizes rolling/hourly/daily summaries, and exposes the results through a CLI, REST API, embedded web UI, and MCP server.
 
-`screencap` is a lightweight screen-memory tool for macOS.
+The capture layer is offline-only: it writes screenshots plus window metadata to local storage and never touches the network.
 
-Based on the current codebase and spec, it captures screenshots and active-window metadata, stores data locally in SQLite, runs AI extraction/synthesis pipelines, and exposes results through CLI commands (plus MCP mode).
+## What it includes
+
+- Continuous screenshot capture with timer and event-driven triggers
+- Swift bridges for ScreenCaptureKit, frontmost window metadata, and native event hooks
+- SQLite storage with FTS search
+- Extraction pipeline for batch screenshot understanding
+- Rolling, hourly, and daily synthesis pipelines
+- Local REST API on `127.0.0.1:7878`
+- Embedded Svelte web UI
+- MCP stdio server via `screencap mcp`
+- Menu bar app under `menubar/`
+
+## Requirements
+
+- macOS
+- Rust toolchain
+- Xcode Command Line Tools / Swift toolchain
+- Node.js and npm for building the embedded web UI
 
 ## Build instructions
 
-### Prerequisites
-
-- Rust toolchain (Cargo, rustc)
-- macOS development tools (`xcrun`, `swiftc`) for the Swift bridge used by capture on macOS
-- Node.js + npm for embedding the full web UI at build time (when npm is missing, the build embeds a placeholder UI)
-
-### Build
+### Debug build
 
 ```bash
 cargo build
+```
+
+`build.rs` compiles the Swift bridge and builds the embedded web UI from `web/`.
+
+### Release build
+
+```bash
 cargo build --release
 ```
 
-### Verify locally
+### Web-only checks
+
+```bash
+cd web
+npm run check
+npm run build
+```
+
+### Rust quality checks
 
 ```bash
 cargo check
 cargo clippy -- -D warnings
-cargo test
+cargo test --features mock-capture
 ```
+
+Use `--features mock-capture` for tests when Screen Recording or Accessibility permissions are unavailable. The mock path generates synthetic JPEGs and fake window metadata so the integration tests still exercise the real pipeline shape.
+
+### Skipping web rebuilds during local Rust iteration
+
+If you already have a valid `web/dist/` and want Rust builds to reuse it:
+
+```bash
+SCREENCAP_WEB_DEV=1 cargo build
+```
+
+## Runtime layout
+
+By default Screencap stores data under `~/.screencap/`:
+
+- `config.toml` — main configuration file
+- `screencap.db` — SQLite database
+- `screenshots/YYYY/MM/DD/` — captured JPEGs
+- `daily/` — markdown daily exports
+- `prompts/` — disk-backed prompt templates seeded on first run
+- `screencap.pid` — daemon lifecycle file
 
 ## Configuration guide
 
-Runtime state is stored under `~/.screencap` by default.
+Screencap reads `~/.screencap/config.toml`. If the file does not exist, the app uses built-in defaults and creates the runtime directories on first run.
 
-- Config file path: `~/.screencap/config.toml`
-- If `config.toml` is missing, built-in defaults are used.
-- Paths that start with `~/` are expanded to your home directory.
-
-### Default config template
+Example configuration:
 
 ```toml
 [capture]
@@ -50,7 +93,7 @@ excluded_window_titles = []
 [extraction]
 enabled = true
 interval_secs = 600
-provider = "openrouter" # openrouter | openai | anthropic | google | lmstudio | ollama
+provider = "openrouter"
 model = "google/gemini-2.0-flash"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = ""
@@ -80,49 +123,100 @@ obsidian_vault = ""
 markdown_template = "default"
 ```
 
-## CLI usage examples
+Notes:
 
-Run `screencap` with no subcommand to start the daemon in the foreground.
+- `storage.path` is the runtime root; screenshots and the database live under it.
+- `provider` supports `openrouter`, `openai`, `anthropic`, `google`, `lmstudio`, and `ollama`.
+- `api_key_env` names the environment variable to read; Screencap does not hardcode secrets.
+- Prompt templates are seeded to `~/.screencap/prompts/` once and can be edited in place afterward.
+
+## Running Screencap
+
+### Foreground daemon
 
 ```bash
-# Daemon lifecycle
-screencap start
-screencap status
-screencap stop
-
-# Temporarily pause/resume capture
-screencap pause
-screencap resume
-
-# Context and summaries
-screencap now
-screencap today
-screencap yesterday
-screencap week
-
-# Text search with optional filters
-screencap search "jwt refresh"
-screencap search "jwt" --project screencap --app Code --last 24h
-
-# Semantic Q&A over captured history
-screencap ask "what was I doing this morning?" --last 8h
-
-# Project/cost reporting
-screencap projects --last 7d
-screencap costs
-
-# Retention cleanup
-screencap prune --older-than 90d
-
-# Export daily summaries
-screencap export --date 2026-04-10
-screencap export --last 7d --output ./exports
-
-# Start MCP server (stdio transport)
-screencap mcp
-
-# Print config path (command is scaffolded)
-screencap config
+cargo run
 ```
 
-`--last` accepts positive durations with units: `m`, `h`, `d`, `w` (for example `30m`, `24h`, `7d`).
+Running without a subcommand starts the daemon in the foreground.
+
+### Background daemon
+
+```bash
+cargo run -- start
+cargo run -- status
+cargo run -- stop
+```
+
+### LaunchAgent install/uninstall
+
+```bash
+cargo run -- start --install
+cargo run -- stop --uninstall
+```
+
+## CLI usage examples
+
+These commands are implemented by the current CLI surface:
+
+```bash
+cargo run -- now
+cargo run -- today
+cargo run -- yesterday
+cargo run -- week
+cargo run -- search "jwt refresh" --project screencap --last 7d
+cargo run -- projects --last 7d
+cargo run -- ask "What was I working on this afternoon?" --last 4h
+cargo run -- costs
+cargo run -- prune --older-than 30d
+cargo run -- export --date 2026-04-11 --output ~/Desktop/2026-04-11.md
+cargo run -- export --last 7d --output ~/Desktop/screencap-exports/
+cargo run -- pause
+cargo run -- resume
+cargo run -- mcp
+```
+
+To see the installed CLI help text:
+
+```bash
+cargo run -- --help
+```
+
+## Web UI
+
+Once the daemon is running, open:
+
+- `http://127.0.0.1:7878/` — Timeline
+- `http://127.0.0.1:7878/insights`
+- `http://127.0.0.1:7878/search`
+- `http://127.0.0.1:7878/settings`
+- `http://127.0.0.1:7878/stats`
+
+The Rust server embeds `web/dist/` and falls back to `index.html` for non-API routes so direct navigation to those pages works.
+
+## REST API
+
+The daemon exposes a localhost API on the configured port. Common endpoints include:
+
+- `GET /api/health`
+- `GET /api/stats`
+- `GET /api/captures`
+- `GET /api/captures/:id`
+- `GET /api/search`
+- `GET /api/insights/current`
+- `GET /api/insights/daily?date=YYYY-MM-DD`
+
+## MCP server
+
+Screencap can also run as an MCP stdio server:
+
+```bash
+cargo run -- mcp
+```
+
+## Development notes
+
+- This project is macOS-only by design.
+- The capture layer must remain network-free.
+- The embedded frontend is built from `web/` into `web/dist/` and then served by the Rust binary.
+- The Swift bridge is compiled from `swift/Sources/` by `build.rs`.

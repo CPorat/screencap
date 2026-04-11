@@ -819,7 +819,7 @@
         "README.md exists with: project description, build instructions, configuration guide, CLI usage examples"
       ],
       "priority": 35,
-      "passes": false,
+      "passes": true,
       "notes": "This is the final gate. If this passes, the project is shippable.",
       "tool": "omp",
       "model": "gpt-5.4",

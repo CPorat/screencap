@@ -619,3 +619,13 @@ Branch: ralph/v1-implementation
   - `cargo test --features mock-capture` is required to pass integration tests that hit capture logic on machines without Screen Recording permission.
   - The Svelte web UI build is already well-integrated via `rust-embed` and works cleanly.
 ---
+
+
+## [2026-04-11 17:45:05 UTC] - US-034
+- What was implemented: added a top-level `README.md` covering the project overview, build/release steps, config defaults and runtime layout, web/API/MCP entry points, and concrete CLI usage examples so the final ship gate has operator-facing documentation.
+- Files changed: README.md, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: the release gate should require a repo-root README that documents both the Rust daemon workflow and the embedded web build, because `web/README.md` alone does not describe how the shipped binary is built or operated.
+  - Gotchas encountered: a clean codebase can still fail the final acceptance gate on missing top-level documentation even when `cargo check`, `clippy`, tests, release build, and web checks are already green.
+  - Useful context: `cargo build` and `cargo build --release` already invoke `build.rs`, so README build instructions should describe the embedded web and Swift bridge steps as part of the normal Rust build rather than as a separate manual packaging flow.
+---

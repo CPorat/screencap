@@ -507,8 +507,8 @@
         "cargo test passes"
       ],
       "priority": 21,
-      "passes": false,
-      "notes": "AUDIT: Stdio transport works but only 2 tools (screencap.search, screencap.stats) instead of the 7 specified. tools.rs is empty. Integration test only covers 2 tools.",
+      "passes": true,
+      "notes": "Completed: MCP stdio transport now exposes the 7 required tools with typed handlers in src/mcp/tools.rs and integration coverage for initialize, tools/list, and get_current_context.",
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

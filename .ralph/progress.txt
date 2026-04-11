@@ -14,6 +14,9 @@ Branch: ralph/v1-implementation
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
 - MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
+- MCP implementations should keep stdio/JSON-RPC framing in `src/mcp/server.rs` and move tool schemas, typed argument parsing, and storage-backed handlers into `src/mcp/tools.rs`, so protocol concerns stay separate from business logic.
+- Any feature that reads stored screenshots should normalize stored paths back to sanitized paths relative to the screenshots root and reuse one shared `openat(..., O_NOFOLLOW)` walker, so HTTP and MCP surfaces enforce the same filesystem boundary.
+
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
 - When FTS search text is assembled from multiple tables, use a standalone FTS index keyed by the primary row id and rebuild it from storage writes instead of relying on an external-content FTS table tied to a single base table.
 - For Swift capture bridges, keep enumeration and capture on the same native backend, expose C-callable functions from `swift/Sources/`, and keep `mock-capture` JPEG generation in Rust so permissionless tests exercise real files.
@@ -496,4 +499,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: writable SQLite connections need WAL mode plus a busy timeout once the daemon owns concurrent capture/API/pipeline connections, or scheduler writes can fail under brief lock contention.
   - Gotchas encountered: rolling synthesis windows sourced from `Utc::now()` must be truncated to whole seconds before prompt construction and response validation, because the prompt/response contract serializes timestamps without subsecond precision.
   - Useful context: daemon scheduler wiring is easiest to verify with an end-to-end test that seeds SQLite, boots the real binary with isolated HOME/config, and waits for generated insight rows plus API visibility from the same process.
+---
+## [2026-04-11 14:34:41 UTC] - US-020
+- What was implemented: completed the MCP stdio surface with the 7 required tools (`get_current_context`, `search_screen_history`, `get_recent_activity`, `get_screenshot`, `get_daily_summary`, `get_project_activity`, `get_app_usage`), moved tool metadata/handlers into `src/mcp/tools.rs`, added shared screenshot-reading helpers for MCP + HTTP, and added storage helpers for activity queries plus time-ranged app usage.
+- Files changed: AGENTS.md, src/api/routes.rs, src/mcp/server.rs, src/mcp/tools.rs, src/storage/db.rs, src/storage/mod.rs, src/storage/models.rs, src/storage/screenshots.rs, tests/mcp_server.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep MCP transport and tool execution separate so tests can exercise JSON-RPC framing independently from storage-backed tool logic.
+  - Gotchas encountered: cargo-based verification can churn tracked `web/.svelte-kit/` artifacts through `build.rs`; restore that generated drift before committing a Rust-only story.
+  - Useful context: `get_screenshot` must treat stored screenshot paths as untrusted and reuse the same sanitized `openat(..., O_NOFOLLOW)` walker as the HTTP screenshot endpoint.
 ---

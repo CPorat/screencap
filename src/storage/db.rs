@@ -20,12 +20,12 @@ use uuid::Uuid;
 use crate::config::AppConfig;
 
 use super::models::{
-    decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityType,
-    AppCaptureCount, Capture, CaptureDetail, CaptureQuery, CostBreakdown, CostSummary,
-    DailyCostSummary, Extraction, ExtractionBatch, ExtractionBatchDetail, ExtractionFrameDetail,
-    ExtractionSearchHit, ExtractionSearchQuery, ExtractionStatus, Insight, InsightData,
-    InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, ProjectTimeAllocation,
-    Sentiment, TopicFrequency,
+    decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityQuery,
+    ActivityType, AppCaptureCount, Capture, CaptureDetail, CaptureQuery, CostBreakdown,
+    CostSummary, DailyCostSummary, Extraction, ExtractionBatch, ExtractionBatchDetail,
+    ExtractionFrameDetail, ExtractionSearchHit, ExtractionSearchQuery, ExtractionStatus, Insight,
+    InsightData, InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight,
+    ProjectTimeAllocation, Sentiment, TopicFrequency,
 };
 
 const SCHEMA: &str = r#"
@@ -485,6 +485,90 @@ impl StorageDb {
         Ok(detail)
     }
 
+    pub fn list_activity_details(&self, query: &ActivityQuery) -> Result<Vec<CaptureDetail>> {
+        if query.limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut sql = String::from(
+            "SELECT
+                captures.id,
+                captures.timestamp,
+                captures.app_name,
+                captures.window_title,
+                captures.bundle_id,
+                captures.display_id,
+                captures.screenshot_path,
+                captures.extraction_status,
+                captures.extraction_id,
+                captures.created_at,
+                extractions.id AS detail_extraction_id,
+                extractions.capture_id AS detail_extraction_capture_id,
+                extractions.batch_id AS detail_extraction_batch_id,
+                extractions.activity_type AS detail_extraction_activity_type,
+                extractions.description AS detail_extraction_description,
+                extractions.app_context AS detail_extraction_app_context,
+                extractions.project AS detail_extraction_project,
+                extractions.topics AS detail_extraction_topics,
+                extractions.people AS detail_extraction_people,
+                extractions.key_content AS detail_extraction_key_content,
+                extractions.sentiment AS detail_extraction_sentiment,
+                extractions.created_at AS detail_extraction_created_at
+             FROM captures
+             JOIN extractions ON extractions.capture_id = captures.id",
+        );
+        let mut filters = Vec::new();
+        let mut params = Vec::new();
+
+        if let Some(from) = query.from.as_ref() {
+            filters.push("captures.timestamp >= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = query.to.as_ref() {
+            filters.push("captures.timestamp <= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        if let Some(app_name) = query.app_name.as_ref() {
+            filters.push("captures.app_name = ?".to_string());
+            params.push(Value::Text(app_name.clone()));
+        }
+
+        if let Some(project) = query.project.as_ref() {
+            filters.push("extractions.project = ?".to_string());
+            params.push(Value::Text(project.clone()));
+        }
+
+        if !filters.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&filters.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY captures.timestamp ASC, captures.id ASC LIMIT ?");
+        params.push(Value::Integer(
+            i64::try_from(query.limit).context("activity query limit exceeds sqlite range")?,
+        ));
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed to prepare activity detail query")?;
+
+        let details = stmt
+            .query_map(params_from_iter(params.iter()), |row| {
+                Ok(CaptureDetail {
+                    capture: map_capture_row(row)?,
+                    extraction: map_optional_detail_extraction_row(row)?,
+                })
+            })
+            .context("failed to query activity details")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map activity details")?;
+
+        Ok(details)
+    }
+
     pub fn list_extraction_batch_details_in_range(
         &self,
         start: DateTime<Utc>,
@@ -585,21 +669,44 @@ impl StorageDb {
     }
 
     pub fn list_app_capture_counts(&self) -> Result<Vec<AppCaptureCount>> {
+        self.list_app_capture_counts_in_range(None, None)
+    }
+
+    pub fn list_app_capture_counts_in_range(
+        &self,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+    ) -> Result<Vec<AppCaptureCount>> {
+        let mut sql = String::from(
+            "SELECT
+                app_name,
+                COUNT(*) AS capture_count
+             FROM captures
+             WHERE app_name IS NOT NULL AND trim(app_name) <> ''",
+        );
+        let mut params = Vec::new();
+
+        if from.is_some() || to.is_some() {
+            if let Some(from) = from.as_ref() {
+                sql.push_str(" AND timestamp >= ?");
+                params.push(Value::Text(format_db_timestamp(from)));
+            }
+
+            if let Some(to) = to.as_ref() {
+                sql.push_str(" AND timestamp <= ?");
+                params.push(Value::Text(format_db_timestamp(to)));
+            }
+        }
+
+        sql.push_str(" GROUP BY app_name ORDER BY capture_count DESC, app_name ASC");
+
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT
-                    app_name,
-                    COUNT(*) AS capture_count
-                 FROM captures
-                 WHERE app_name IS NOT NULL AND trim(app_name) <> ''
-                 GROUP BY app_name
-                 ORDER BY capture_count DESC, app_name ASC",
-            )
+            .prepare(&sql)
             .context("failed to prepare app capture count query")?;
 
         let app_counts = stmt
-            .query_map([], |row| {
+            .query_map(params_from_iter(params.iter()), |row| {
                 let capture_count: i64 = row.get("capture_count")?;
                 Ok(AppCaptureCount {
                     app_name: row.get("app_name")?,
@@ -2535,6 +2642,25 @@ mod tests {
             Some("Reading Screencap API docs")
         );
 
+        let activities = db
+            .list_activity_details(&ActivityQuery {
+                from: Some(second_time),
+                to: Some(third_time),
+                app_name: Some("Safari".into()),
+                project: Some("screencap".into()),
+                limit: 10,
+            })
+            .expect("activity details should query");
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].capture.id, second.id);
+        assert_eq!(
+            activities[0]
+                .extraction
+                .as_ref()
+                .and_then(|value| value.project.as_deref()),
+            Some("screencap")
+        );
+
         let apps = db
             .list_app_capture_counts()
             .expect("app capture counts should query");
@@ -2544,6 +2670,13 @@ mod tests {
         assert!(apps
             .iter()
             .any(|app| app.app_name == "Safari" && app.capture_count == 2));
+
+        let filtered_apps = db
+            .list_app_capture_counts_in_range(Some(second_time), Some(third_time))
+            .expect("filtered app capture counts should query");
+        assert_eq!(filtered_apps.len(), 1);
+        assert_eq!(filtered_apps[0].app_name, "Safari");
+        assert_eq!(filtered_apps[0].capture_count, 2);
         assert_eq!(first.id, 1);
     }
 

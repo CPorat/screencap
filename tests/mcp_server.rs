@@ -1,7 +1,7 @@
 mod support;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -13,6 +13,11 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use assert_cmd::cargo::CommandCargoExt;
+use chrono::{TimeZone, Utc};
+use screencap::storage::{
+    db::StorageDb,
+    models::{InsightData, InsightType, NewInsight},
+};
 use serde_json::{json, Value};
 
 struct TestHome {
@@ -42,7 +47,27 @@ impl Drop for TestHome {
     }
 }
 
-fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, String>>)> {
+struct ChildGuard {
+    child: Child,
+}
+
+impl ChildGuard {
+    fn stdin_mut(&mut self) -> Result<&mut std::process::ChildStdin> {
+        self.child
+            .stdin
+            .as_mut()
+            .context("mcp stdin pipe is unavailable")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn spawn_mcp_server(home: &Path) -> Result<(ChildGuard, mpsc::Receiver<Result<Value, String>>)> {
     let mut child = Command::cargo_bin("screencap")?
         .arg("mcp")
         .env("HOME", home)
@@ -74,14 +99,11 @@ fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, 
         }
     });
 
-    Ok((child, rx))
+    Ok((ChildGuard { child }, rx))
 }
 
-fn send_request(child: &mut Child, request: Value) -> Result<()> {
-    let stdin = child
-        .stdin
-        .as_mut()
-        .context("mcp stdin pipe is unavailable")?;
+fn send_request(child: &mut ChildGuard, request: Value) -> Result<()> {
+    let stdin = child.stdin_mut()?;
     writeln!(stdin, "{}", serde_json::to_string(&request)?).context("failed to write request")?;
     stdin.flush().context("failed to flush request")?;
     Ok(())
@@ -95,10 +117,49 @@ fn recv_response(rx: &mpsc::Receiver<Result<Value, String>>, timeout: Duration) 
     }
 }
 
+fn seed_rolling_context(home: &Path) -> Result<()> {
+    let storage_root = home.join(".screencap");
+    fs::create_dir_all(&storage_root).with_context(|| {
+        format!(
+            "failed to create storage root at {}",
+            storage_root.display()
+        )
+    })?;
+    let db_path = storage_root.join("screencap.db");
+    let mut db = StorageDb::open_at_path(&db_path)
+        .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
+
+    let window_start = Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+    let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
+    db.insert_insight(&NewInsight {
+        insight_type: InsightType::Rolling,
+        window_start,
+        window_end,
+        data: InsightData::Rolling {
+            window_start,
+            window_end,
+            current_focus: "Debugging the MCP transport".into(),
+            active_project: Some("screencap".into()),
+            apps_used: BTreeMap::from([("Terminal".to_string(), "18 min".to_string())]),
+            context_switches: 2,
+            mood: "focused".into(),
+            summary: "Implementing the full MCP tool surface and validating stdio responses."
+                .into(),
+        },
+        model_used: Some("mock-model".into()),
+        tokens_used: Some(64),
+        cost_cents: Some(0.42),
+    })
+    .context("failed to seed rolling insight")?;
+
+    Ok(())
+}
+
 #[test]
-fn mcp_server_handles_initialize_and_tools_list() -> Result<()> {
+fn mcp_server_handles_initialize_tools_list_and_current_context() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
-    let home = TestHome::new("initialize-tools-list")?;
+    let home = TestHome::new("initialize-tools-current-context")?;
+    seed_rolling_context(home.path())?;
 
     let (mut child, rx) = spawn_mcp_server(home.path())?;
 
@@ -118,7 +179,10 @@ fn mcp_server_handles_initialize_and_tools_list() -> Result<()> {
         Some(&Value::String("2.0".into()))
     );
     assert_eq!(initialize_response.get("id"), Some(&json!(1)));
-    assert!(initialize_response["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(
+        initialize_response["result"]["capabilities"],
+        json!({ "tools": { "listChanged": false } })
+    );
 
     send_request(
         &mut child,
@@ -145,17 +209,52 @@ fn mcp_server_handles_initialize_and_tools_list() -> Result<()> {
     let tools = tools_list_response["result"]["tools"]
         .as_array()
         .context("tools/list response missing tools array")?;
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 7);
 
     let tool_names = tools
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let expected_names = BTreeSet::from(["screencap.search", "screencap.stats"]);
+    let expected_names = BTreeSet::from([
+        "get_current_context",
+        "search_screen_history",
+        "get_recent_activity",
+        "get_screenshot",
+        "get_daily_summary",
+        "get_project_activity",
+        "get_app_usage",
+    ]);
     assert_eq!(tool_names, expected_names);
 
-    let _ = child.kill();
-    let _ = child.wait();
+    send_request(
+        &mut child,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "get_current_context",
+                "arguments": {},
+            },
+        }),
+    )?;
+
+    let tool_call_response = recv_response(&rx, Duration::from_secs(3))?;
+    assert_eq!(tool_call_response.get("id"), Some(&json!(3)));
+    assert_eq!(tool_call_response["result"]["isError"], Value::Bool(false));
+
+    let payload = tool_call_response["result"]["content"][0]["text"]
+        .as_str()
+        .context("tool result should include text content")?;
+    let parsed: Value = serde_json::from_str(payload).context("tool text should be valid JSON")?;
+
+    assert_eq!(parsed["available"], Value::Bool(true));
+    assert_eq!(parsed["context"]["insight_type"], "rolling");
+    assert_eq!(
+        parsed["context"]["data"]["current_focus"],
+        "Debugging the MCP transport"
+    );
+    assert_eq!(parsed["context"]["data"]["active_project"], "screencap");
 
     Ok(())
 }

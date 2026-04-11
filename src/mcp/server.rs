@@ -1,20 +1,21 @@
 use std::{env, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
 use serde_json::{json, Map, Value};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::{
-    config::AppConfig,
-    storage::{db::StorageDb, metrics},
-};
+use crate::config::AppConfig;
+
+use super::tools::{self, ToolExecutionContext};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 pub async fn run_mcp_server(config: AppConfig) -> Result<()> {
     let home = runtime_home_dir()?;
-    let server = McpServer::new(config.storage_root(&home).join("screencap.db"));
+    let server = McpServer::new(
+        config.storage_root(&home).join("screencap.db"),
+        config.screenshots_root(&home),
+    );
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -65,12 +66,14 @@ impl RpcError {
 
 #[derive(Debug)]
 struct McpServer {
-    db_path: PathBuf,
+    tools: ToolExecutionContext,
 }
 
 impl McpServer {
-    fn new(db_path: PathBuf) -> Self {
-        Self { db_path }
+    fn new(db_path: PathBuf, screenshots_root: PathBuf) -> Self {
+        Self {
+            tools: ToolExecutionContext::new(db_path, screenshots_root),
+        }
     }
 
     fn handle_payload(&self, payload: &str) -> Option<Value> {
@@ -113,7 +116,6 @@ impl McpServer {
         }
 
         let id = request_object.get("id").cloned()?;
-
         let params = request_object.get("params");
 
         let result = match method {
@@ -143,36 +145,16 @@ impl McpServer {
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "capabilities": {
-                "tools": {}
+                "tools": {
+                    "listChanged": false,
+                }
             }
         })
     }
 
     fn handle_tools_list(&self) -> Value {
         json!({
-            "tools": [
-                {
-                    "name": "screencap.search",
-                    "description": "Search extracted screen activity by query text.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "query": { "type": "string" }
-                        },
-                        "required": ["query"],
-                        "additionalProperties": false
-                    }
-                },
-                {
-                    "name": "screencap.stats",
-                    "description": "Return aggregate capture statistics from local storage.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": false
-                    }
-                }
-            ]
+            "tools": tools::tool_definitions(),
         })
     }
 
@@ -193,76 +175,8 @@ impl McpServer {
             }
         };
 
-        let output = match name {
-            "screencap.search" => self.call_search(&arguments),
-            "screencap.stats" => self.call_stats(),
-            _ => Err(anyhow!("unknown tool `{name}`")),
-        }
-        .map_err(|error| RpcError::new(-32000, error.to_string()))?;
-
-        tool_text_result(output).map_err(|error| RpcError::new(-32000, error.to_string()))
-    }
-
-    fn call_search(&self, arguments: &Map<String, Value>) -> Result<Value> {
-        let query = arguments
-            .get("query")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|query| !query.is_empty())
-            .ok_or_else(|| anyhow!("screencap.search requires a non-empty `query`"))?;
-
-        let Some(db) = self.open_db_read_only()? else {
-            return Ok(json!({
-                "query": query,
-                "count": 0,
-                "results": []
-            }));
-        };
-
-        let hits = db
-            .search_extractions(query)?
-            .into_iter()
-            .map(|hit| {
-                json!({
-                    "capture": hit.capture,
-                    "extraction": hit.extraction,
-                    "batch_narrative": hit.batch_narrative,
-                    "rank": hit.rank,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Ok(json!({
-            "query": query,
-            "count": hits.len(),
-            "results": hits,
-        }))
-    }
-
-    fn call_stats(&self) -> Result<Value> {
-        let Some(db) = self.open_db_read_only()? else {
-            return Ok(json!({
-                "capture_count": 0,
-                "captures_today": 0,
-            }));
-        };
-
-        let capture_count = db.count_captures()?;
-        let captures_today = metrics::count_captures_today(&db, Utc::now())?;
-
-        Ok(json!({
-            "capture_count": capture_count,
-            "captures_today": captures_today,
-        }))
-    }
-
-    fn open_db_read_only(&self) -> Result<Option<StorageDb>> {
-        StorageDb::open_existing_at_path(&self.db_path).with_context(|| {
-            format!(
-                "failed to open sqlite database at {}",
-                self.db_path.display()
-            )
-        })
+        tools::call_tool(&self.tools, name, &arguments)
+            .map_err(|error| RpcError::new(-32000, error.to_string()))
     }
 }
 
@@ -283,18 +197,6 @@ fn error_response(id: Value, code: i64, message: impl Into<String>) -> Value {
             "message": message.into(),
         }
     })
-}
-
-fn tool_text_result(value: Value) -> Result<Value> {
-    let text = serde_json::to_string(&value).context("failed to serialize tool output")?;
-    Ok(json!({
-        "content": [
-            {
-                "type": "text",
-                "text": text,
-            }
-        ]
-    }))
 }
 
 async fn write_response(writer: &mut io::Stdout, response: &Value) -> Result<()> {
@@ -324,19 +226,12 @@ fn runtime_home_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::{
-        env, fs,
+        env,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use chrono::Utc;
-    use serde_json::json;
-    use uuid::Uuid;
-
-    use crate::storage::{
-        db::StorageDb,
-        models::{NewCapture, NewExtraction},
-    };
+    use serde_json::{json, Value};
 
     use super::McpServer;
 
@@ -350,7 +245,8 @@ mod tests {
 
     #[test]
     fn initialize_returns_server_capabilities() {
-        let server = McpServer::new(temp_path("initialize").join("screencap.db"));
+        let root = temp_path("initialize");
+        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
 
         let response = server
             .handle_payload(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#)
@@ -359,72 +255,53 @@ mod tests {
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], 1);
         assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
-        assert_eq!(response["result"]["capabilities"], json!({ "tools": {} }));
+        assert_eq!(
+            response["result"]["capabilities"],
+            json!({ "tools": { "listChanged": false } })
+        );
     }
 
     #[test]
     fn invalid_json_returns_parse_error() {
-        let server = McpServer::new(temp_path("parse-error").join("screencap.db"));
+        let root = temp_path("parse-error");
+        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
 
         let response = server
             .handle_payload("not-json")
             .expect("invalid payload should return response");
 
         assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(response["id"], serde_json::Value::Null);
+        assert_eq!(response["id"], Value::Null);
         assert_eq!(response["error"]["code"], -32700);
     }
 
     #[test]
-    fn tools_call_search_returns_text_response() {
-        let root = temp_path("search-tool");
-        fs::create_dir_all(&root).expect("create temp directory");
-        let db_path = root.join("screencap.db");
+    fn tools_list_exposes_story_tool_names() {
+        let root = temp_path("tools-list");
+        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
 
-        {
-            let mut db = StorageDb::open_at_path(&db_path).expect("open sqlite db");
-            let capture = db
-                .insert_capture(&NewCapture {
-                    timestamp: Utc::now(),
-                    app_name: Some("Terminal".to_string()),
-                    window_title: Some("mcp test".to_string()),
-                    bundle_id: Some("com.apple.Terminal".to_string()),
-                    display_id: Some(1),
-                    screenshot_path: "screenshots/test.jpg".to_string(),
-                })
-                .expect("insert capture");
-
-            db.insert_extraction(&NewExtraction {
-                capture_id: capture.id,
-                batch_id: Uuid::new_v4(),
-                activity_type: None,
-                description: Some("debugging json rpc mcp server".to_string()),
-                app_context: None,
-                project: None,
-                topics: vec!["mcp".to_string()],
-                people: Vec::new(),
-                key_content: Some("json-rpc search".to_string()),
-                sentiment: None,
-            })
-            .expect("insert extraction");
-        }
-
-        let server = McpServer::new(db_path);
         let response = server
-            .handle_payload(
-                r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"screencap.search","arguments":{"query":"debugging"}}}"#,
-            )
-            .expect("search call should return response");
+            .handle_payload(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
+            .expect("tools/list should return response");
+        let tools = response["result"]["tools"]
+            .as_array()
+            .expect("tools/list response should include tools");
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
 
-        let text = response["result"]["content"][0]["text"]
-            .as_str()
-            .expect("tool response should be text");
-        let parsed: serde_json::Value =
-            serde_json::from_str(text).expect("tool response text should be JSON");
-
-        assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(response["id"], 7);
-        assert_eq!(parsed["query"], "debugging");
-        assert_eq!(parsed["count"], 1);
+        assert_eq!(
+            names,
+            vec![
+                "get_current_context",
+                "search_screen_history",
+                "get_recent_activity",
+                "get_screenshot",
+                "get_daily_summary",
+                "get_project_activity",
+                "get_app_usage",
+            ]
+        );
     }
 }

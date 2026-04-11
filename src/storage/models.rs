@@ -371,6 +371,15 @@ pub struct CaptureQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityQuery {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub app_name: Option<String>,
+    pub project: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractionSearchQuery {
     pub query: String,
     pub app_name: Option<String>,
@@ -413,7 +422,7 @@ pub struct CostBreakdown {
     pub by_day: Vec<DailyCostSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtractionSearchHit {
     pub capture: Capture,
     pub extraction: Extraction,

@@ -1,5 +1,5 @@
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::atomic::Ordering,
     time::Instant,
 };
@@ -28,6 +28,9 @@ use crate::{
             AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionSearchHit,
             ExtractionSearchQuery, ExtractionStatus, Insight, InsightType, ProjectTimeAllocation,
             TopicFrequency,
+        },
+        screenshots::{
+            read_screenshot_file, relative_screenshot_path, sanitize_relative_screenshot_path,
         },
     },
 };
@@ -721,23 +724,13 @@ fn trim_to_option(raw: Option<String>) -> Option<String> {
 }
 
 fn sanitize_screenshot_path(raw: &str) -> Result<PathBuf, ApiError> {
-    if raw.trim().is_empty() {
-        return Err(ApiError::bad_request("screenshot path cannot be empty"));
-    }
-
-    let mut sanitized = PathBuf::new();
-    for component in Path::new(raw).components() {
-        match component {
-            Component::Normal(part) => sanitized.push(part),
-            _ => return Err(ApiError::bad_request("invalid screenshot path")),
+    sanitize_relative_screenshot_path(raw).ok_or_else(|| {
+        if raw.trim().is_empty() {
+            ApiError::bad_request("screenshot path cannot be empty")
+        } else {
+            ApiError::bad_request("invalid screenshot path")
         }
-    }
-
-    if sanitized.as_os_str().is_empty() {
-        return Err(ApiError::bad_request("screenshot path cannot be empty"));
-    }
-
-    Ok(sanitized)
+    })
 }
 
 fn api_capture_from_model(state: &ApiState, capture: Capture) -> Result<ApiCapture, ApiError> {
@@ -788,107 +781,14 @@ fn semantic_search_reference_from_hit(
 }
 
 fn screenshot_url_from_path(state: &ApiState, screenshot_path: &str) -> Option<String> {
-    let path = Path::new(screenshot_path);
-    let relative_path = if path.is_absolute() {
-        path.strip_prefix(&state.screenshots_root)
-            .ok()?
-            .to_path_buf()
-    } else {
-        path.to_path_buf()
-    };
-
-    let mut sanitized = PathBuf::new();
-    for component in relative_path.components() {
-        match component {
-            Component::Normal(part) => sanitized.push(part),
-            _ => return None,
-        }
-    }
-    if sanitized.as_os_str().is_empty() {
-        return None;
-    }
+    let relative_path = relative_screenshot_path(&state.screenshots_root, screenshot_path)?;
 
     Some(format!(
         "/api/screenshots/{}",
-        sanitized
+        relative_path
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/")
     ))
-}
-
-fn read_screenshot_file(root: &Path, relative_path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::{
-        ffi::CString,
-        fs::File,
-        io::{Error, ErrorKind, Read},
-        os::{
-            fd::{AsRawFd, FromRawFd},
-            unix::ffi::OsStrExt,
-        },
-    };
-
-    fn open_path(path: &Path, flags: i32) -> std::io::Result<File> {
-        let path = CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| Error::new(ErrorKind::InvalidInput, "path contains NUL byte"))?;
-        let fd = unsafe { libc::open(path.as_ptr(), flags) };
-        if fd == -1 {
-            return Err(Error::last_os_error());
-        }
-
-        Ok(unsafe { File::from_raw_fd(fd) })
-    }
-
-    fn open_at(directory: &File, name: &std::ffi::OsStr, flags: i32) -> std::io::Result<File> {
-        let name = CString::new(name.as_bytes())
-            .map_err(|_| Error::new(ErrorKind::InvalidInput, "path contains NUL byte"))?;
-        let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-        if fd == -1 {
-            return Err(Error::last_os_error());
-        }
-
-        Ok(unsafe { File::from_raw_fd(fd) })
-    }
-
-    let mut current = open_path(root, libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY)?;
-    let mut components = relative_path.components().peekable();
-    while let Some(component) = components.next() {
-        let Component::Normal(name) = component else {
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                "invalid screenshot path",
-            ));
-        };
-
-        let is_last = components.peek().is_none();
-        let next = if is_last {
-            open_at(
-                &current,
-                name,
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-            )?
-        } else {
-            open_at(
-                &current,
-                name,
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-            )?
-        };
-
-        if is_last {
-            if !next.metadata()?.is_file() {
-                return Err(Error::from(ErrorKind::NotFound));
-            }
-
-            let mut bytes = Vec::new();
-            let mut next = next;
-            next.read_to_end(&mut bytes)?;
-            return Ok(bytes);
-        }
-
-        current = next;
-    }
-
-    Err(Error::from(ErrorKind::NotFound))
 }
 
 fn map_screenshot_io_error(path: &str, error: std::io::Error) -> ApiError {

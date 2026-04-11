@@ -711,3 +711,11 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: enabling launch-at-login via `start --install` will also start the daemon, so a menu toggle that should preserve a stopped state needs an immediate `stop` follow-up after installation.
   - Useful context: pushing the latest rolling insight summary into `screencap status` keeps the menu bar tooltip on the same read-only status channel it already trusts for liveness and ownership decisions.
 ---
+## [2026-04-11 22:57:07 UTC] - US-042
+- What was implemented: upgraded the Search workspace with an explicit keyword/semantic mode toggle, wired semantic mode to `/api/search/semantic` (query + window bounds), and moved activity chips to server-side filtering by sending `activity_type` to `/api/search` instead of client-side post-filtering.
+- Files changed: AGENTS.md, web/src/lib/components/Search/SearchWorkspace.svelte, web/src/lib/components/Search/search-client.ts, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: mode-specific search contracts are clearest when the UI makes mode explicit and each mode calls exactly one API surface (`/api/search` for FTS filters, `/api/search/semantic` for grounded answers).
+  - Gotchas encountered: client-side activity filtering can drift from server-ranked relevance; chip state should be translated into API query params so ranking/filter logic stays authoritative in one place.
+  - Useful context: semantic responses can be rendered through existing extraction cards by normalizing references into the shared `SearchResult` shape while surfacing the model answer/tokens/cost separately.
+---

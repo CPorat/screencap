@@ -47,11 +47,30 @@ interface SearchApiResponse {
   results: SearchApiHit[];
 }
 
+interface SemanticSearchReference {
+  capture: CaptureRecord;
+  extraction: SearchApiExtraction;
+}
+
+interface SemanticSearchApiResponse {
+  answer: string;
+  references: SemanticSearchReference[];
+  cost_cents: number | null;
+  tokens_used: number | null;
+}
+
 export interface SearchRequest {
   query: string;
   app?: string | null;
   project?: string | null;
   activityType?: string | null;
+  from?: string | null;
+  to?: string | null;
+  limit?: number;
+}
+
+export interface SemanticSearchRequest {
+  query: string;
   from?: string | null;
   to?: string | null;
   limit?: number;
@@ -71,8 +90,14 @@ export interface SearchResult {
   insight: SearchApiInsight | null;
 }
 
-type SearchResultBase = Omit<SearchResult, 'relevance'>;
+export interface SemanticSearchResult {
+  answer: string;
+  references: SearchResult[];
+  costCents: number | null;
+  tokensUsed: number | null;
+}
 
+type SearchResultBase = Omit<SearchResult, 'relevance'>;
 
 interface ProjectsResponse {
   projects: Array<{
@@ -90,6 +115,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringOrNull(value: unknown): value is string | null {
   return typeof value === 'string' || value === null;
+}
+
+function isFiniteNumberOrNull(value: unknown): value is number | null {
+  return (typeof value === 'number' && Number.isFinite(value)) || value === null;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -145,7 +174,12 @@ function isSearchApiInsight(value: unknown): value is SearchApiInsight {
 }
 
 function isSearchApiHit(value: unknown): value is SearchApiHit {
-  if (!isRecord(value) || typeof value.source_type !== 'string' || typeof value.timestamp !== 'string' || typeof value.rank !== 'number') {
+  if (
+    !isRecord(value) ||
+    typeof value.source_type !== 'string' ||
+    typeof value.timestamp !== 'string' ||
+    typeof value.rank !== 'number'
+  ) {
     return false;
   }
 
@@ -174,6 +208,28 @@ function isSearchApiResponse(value: unknown): value is SearchApiResponse {
   }
 
   return Array.isArray(value.results) && value.results.every((result) => isSearchApiHit(result));
+}
+
+function isSemanticSearchReference(value: unknown): value is SemanticSearchReference {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isCaptureRecord(value.capture) && isSearchApiExtraction(value.extraction);
+}
+
+function isSemanticSearchApiResponse(value: unknown): value is SemanticSearchApiResponse {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.answer === 'string' &&
+    Array.isArray(value.references) &&
+    value.references.every((reference) => isSemanticSearchReference(reference)) &&
+    isFiniteNumberOrNull(value.cost_cents) &&
+    isFiniteNumberOrNull(value.tokens_used)
+  );
 }
 
 function normalizeLimit(limit: number | undefined): number {
@@ -215,6 +271,21 @@ function normalizeHit(hit: SearchApiHit): SearchResultBase {
     capture: null,
     extraction: null,
     insight: hit.insight,
+  };
+}
+
+function normalizeSemanticReference(reference: SemanticSearchReference, rank: number): SearchResultBase {
+  return {
+    sourceType: 'extraction',
+    timestamp: reference.capture.timestamp || reference.extraction.created_at,
+    rank,
+    primaryProject: reference.extraction.project?.trim() || null,
+    primaryActivityType: reference.extraction.activity_type?.trim() || null,
+    narrative: reference.extraction.description?.trim() || reference.extraction.key_content?.trim() || null,
+    batchNarrative: null,
+    capture: reference.capture,
+    extraction: reference.extraction,
+    insight: null,
   };
 }
 
@@ -270,6 +341,7 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
   if (request.to?.trim()) {
     params.set('to', request.to.trim());
   }
+
   const response = await fetch(`/api/search?${params.toString()}`, {
     headers: {
       Accept: 'application/json',
@@ -298,6 +370,59 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
     });
 
   return computeRelevance(sorted);
+}
+
+export async function searchSemanticCaptures(
+  request: SemanticSearchRequest
+): Promise<SemanticSearchResult> {
+  const query = request.query.trim();
+  if (!query) {
+    return {
+      answer: '',
+      references: [],
+      costCents: null,
+      tokensUsed: null,
+    };
+  }
+
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(normalizeLimit(request.limit)),
+  });
+
+  if (request.from?.trim()) {
+    params.set('from', request.from.trim());
+  }
+
+  if (request.to?.trim()) {
+    params.set('to', request.to.trim());
+  }
+
+  const response = await fetch(`/api/search/semantic?${params.toString()}`, {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`semantic search request failed (${response.status})`);
+  }
+
+  const payload: unknown = await response.json();
+  if (!isSemanticSearchApiResponse(payload)) {
+    throw new Error('Unexpected semantic search payload shape');
+  }
+
+  const references = computeRelevance(
+    payload.references.map((reference, index) => normalizeSemanticReference(reference, index + 1))
+  );
+
+  return {
+    answer: payload.answer.trim(),
+    references,
+    costCents: payload.cost_cents,
+    tokensUsed: payload.tokens_used,
+  };
 }
 
 export function collectFacetValues(results: SearchResult[]): { apps: string[]; projects: string[] } {

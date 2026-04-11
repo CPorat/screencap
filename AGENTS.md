@@ -35,7 +35,7 @@ Three-layer pipeline:
 
 - Insights Svelte views should normalize raw `/api/insights/*` payloads into typed view models before rendering; parse optional/missing fields at the boundary so cards can show meaningful empty states instead of throwing on shape drift.
 
-- Search Svelte views should debounce query input, cancel stale requests, and pass app/project/from filters directly to `/api/search` so chips reflect server-ranked FTS results instead of client-side post-filtering.
+- Search Svelte views should debounce query input, cancel stale requests, drive keyword-mode chips through server-side `/api/search` filters (including `activity_type`), and call `/api/search/semantic` for semantic mode so ranking/filter semantics stay authoritative server-side.
 - Settings Svelte views should treat `/api/health` as the daemon liveness source, pair it with `/api/stats` telemetry for storage/capture metrics, and render an explicit disconnected state with actionable CLI recovery guidance when the backend is unavailable.
 - Menu bar daemon controls should parse `screencap status` stdout for the reported `state:` instead of inferring liveness from the command exit code, and they should only stop daemons the menu bar launched itself so quitting the app cannot kill an externally managed session.
 - Menu bar preferences and launch-at-login toggles should treat the `screencap` CLI as the source of truth: use `screencap config` for Preferences, parse `launchd_installed` plus `rolling_summary` from `screencap status`, and if enabling launch-at-login while capture is currently stopped, pair `start --install` with a follow-up `stop` so the setting change does not silently change the current daemon run state or ownership.

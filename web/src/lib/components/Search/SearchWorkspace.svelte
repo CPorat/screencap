@@ -5,9 +5,16 @@
   import CaptureDetailsModal from '$lib/components/CaptureDetailsModal.svelte';
 
   import SearchResultCard from './SearchResultCard.svelte';
-  import { collectFacetValues, listProjectFilters, searchCaptures, type SearchResult } from './search-client';
+  import {
+    collectFacetValues,
+    listProjectFilters,
+    searchCaptures,
+    searchSemanticCaptures,
+    type SearchResult,
+  } from './search-client';
 
   type DatePreset = 'all' | '24h' | '7d' | '30d' | 'custom';
+  type SearchMode = 'keyword' | 'semantic';
 
   interface DatePresetOption {
     id: Exclude<DatePreset, 'custom'>;
@@ -15,11 +22,30 @@
     hours: number | null;
   }
 
+  interface SearchModeOption {
+    id: SearchMode;
+    label: string;
+    description: string;
+  }
+
   const datePresetOptions: DatePresetOption[] = [
     { id: 'all', label: 'All time', hours: null },
     { id: '24h', label: '24h', hours: 24 },
     { id: '7d', label: '7d', hours: 168 },
     { id: '30d', label: '30d', hours: 720 },
+  ];
+
+  const searchModeOptions: SearchModeOption[] = [
+    {
+      id: 'keyword',
+      label: 'Keyword',
+      description: 'FTS-ranked results with app/project/activity filters.',
+    },
+    {
+      id: 'semantic',
+      label: 'Semantic',
+      description: 'LLM-grounded answer plus capture references.',
+    },
   ];
 
   const quickPrompts = ['sprint planning', 'incident follow-up', 'debugging', 'PR review'];
@@ -31,6 +57,7 @@
   let hasSearched = false;
   let errorMessage = '';
 
+  let searchMode: SearchMode = 'keyword';
   let selectedApp: string | null = null;
   let selectedProject: string | null = null;
   let selectedActivity: string | null = null;
@@ -40,6 +67,10 @@
   let toDate = '';
 
   let results: SearchResult[] = [];
+  let semanticAnswer: string | null = null;
+  let semanticTokensUsed: number | null = null;
+  let semanticCostCents: number | null = null;
+
   let appSuggestions: string[] = [];
   let projectSuggestions: string[] = [];
 
@@ -56,27 +87,25 @@
   let detailLoading = false;
   let detailRequestCounter = 0;
 
+  $: keywordMode = searchMode === 'keyword';
   $: facets = collectFacetValues(results);
   $: activityChips = collectActivityTypes(results);
   $: appChips = mergeFacetSuggestions(facets.apps, appSuggestions, selectedApp);
   $: projectChips = mergeFacetSuggestions(facets.projects, projectSuggestions, selectedProject);
-
   $: queryPreview = query.trim();
-  $: normalizedSelectedActivity = selectedActivity?.trim().toLowerCase() ?? '';
+  $: semanticCostLabel = formatSemanticCost(semanticCostCents);
+  $: visibleResults = results.slice(0, visibleLimit);
+  $: hasMoreResults = visibleResults.length < results.length;
 
-  $: filteredResults = results.filter((result) => {
-    if (!normalizedSelectedActivity) {
-      return true;
-    }
-
-    const activityType = result.primaryActivityType?.trim().toLowerCase() ?? '';
-    return activityType === normalizedSelectedActivity;
-  });
-
-  $: visibleResults = filteredResults.slice(0, visibleLimit);
-  $: hasMoreResults = visibleResults.length < filteredResults.length;
-
-  $: fingerprint = [queryPreview, selectedApp ?? '', selectedProject ?? '', fromDate, toDate].join('::');
+  $: fingerprint = [
+    queryPreview,
+    searchMode,
+    keywordMode ? selectedApp ?? '' : '',
+    keywordMode ? selectedProject ?? '' : '',
+    keywordMode ? selectedActivity ?? '' : '',
+    fromDate,
+    toDate,
+  ].join('::');
   $: if (mounted && fingerprint !== currentFingerprint) {
     currentFingerprint = fingerprint;
     queueSearch();
@@ -85,9 +114,10 @@
   $: {
     const nextPaginationFingerprint = [
       queryPreview,
-      selectedApp ?? '',
-      selectedProject ?? '',
-      selectedActivity ?? '',
+      searchMode,
+      keywordMode ? selectedApp ?? '' : '',
+      keywordMode ? selectedProject ?? '' : '',
+      keywordMode ? selectedActivity ?? '' : '',
       fromDate,
       toDate,
       String(results.length),
@@ -266,7 +296,9 @@
       hasSearched = false;
       errorMessage = '';
       results = [];
-      selectedActivity = null;
+      semanticAnswer = null;
+      semanticTokensUsed = null;
+      semanticCostCents = null;
       return;
     }
 
@@ -287,6 +319,9 @@
       hasSearched = true;
       errorMessage = dateRange.error;
       results = [];
+      semanticAnswer = null;
+      semanticTokensUsed = null;
+      semanticCostCents = null;
       return;
     }
 
@@ -297,10 +332,31 @@
     const requestId = ++requestCounter;
 
     try {
+      if (searchMode === 'semantic') {
+        const semanticResult = await searchSemanticCaptures({
+          query: trimmedQuery,
+          from: dateRange.from,
+          to: dateRange.to,
+          limit: 120,
+        });
+
+        if (requestId !== requestCounter) {
+          return;
+        }
+
+        results = semanticResult.references;
+        semanticAnswer = semanticResult.answer || null;
+        semanticTokensUsed = semanticResult.tokensUsed;
+        semanticCostCents = semanticResult.costCents;
+        selectedActivity = null;
+        return;
+      }
+
       const nextResults = await searchCaptures({
         query: trimmedQuery,
         app: selectedApp,
         project: selectedProject,
+        activityType: selectedActivity,
         from: dateRange.from,
         to: dateRange.to,
         limit: 120,
@@ -311,10 +367,9 @@
       }
 
       results = nextResults;
-
-      if (selectedActivity && !collectActivityTypes(nextResults).includes(selectedActivity)) {
-        selectedActivity = null;
-      }
+      semanticAnswer = null;
+      semanticTokensUsed = null;
+      semanticCostCents = null;
     } catch (error) {
       if (requestId !== requestCounter) {
         return;
@@ -322,6 +377,9 @@
 
       console.error('Failed to search captures', error);
       results = [];
+      semanticAnswer = null;
+      semanticTokensUsed = null;
+      semanticCostCents = null;
       errorMessage = 'Could not load search results. Please try again.';
     } finally {
       if (requestId === requestCounter) {
@@ -330,21 +388,54 @@
     }
   }
 
+  function setSearchMode(mode: SearchMode): void {
+    if (mode === searchMode) {
+      return;
+    }
+
+    searchMode = mode;
+    errorMessage = '';
+    results = [];
+    semanticAnswer = null;
+    semanticTokensUsed = null;
+    semanticCostCents = null;
+
+    if (mode === 'semantic') {
+      selectedApp = null;
+      selectedProject = null;
+      selectedActivity = null;
+    }
+  }
+
   function toggleApp(appName: string): void {
+    if (!keywordMode) {
+      return;
+    }
+
     selectedApp = selectedApp === appName ? null : appName;
   }
 
   function toggleProject(projectName: string): void {
+    if (!keywordMode) {
+      return;
+    }
+
     selectedProject = selectedProject === projectName ? null : projectName;
   }
 
   function toggleActivity(activity: string): void {
+    if (!keywordMode) {
+      return;
+    }
+
     selectedActivity = selectedActivity === activity ? null : activity;
   }
 
   function applyQuickPrompt(prompt: string): void {
     query = prompt;
-    selectedActivity = null;
+    if (keywordMode) {
+      selectedActivity = null;
+    }
   }
 
   function updateFromDate(value: string): void {
@@ -359,6 +450,14 @@
 
   function loadMore(): void {
     visibleLimit += RESULTS_STEP;
+  }
+
+  function formatSemanticCost(costCents: number | null): string | null {
+    if (costCents === null || !Number.isFinite(costCents)) {
+      return null;
+    }
+
+    return `${costCents.toFixed(2)}¢`;
   }
 
   async function openResultDetails(result: SearchResult): Promise<void> {
@@ -406,8 +505,7 @@
     <p class="panel__section">Search</p>
     <h2>Memory retrieval deck</h2>
     <p class="panel__summary">
-      Full-text query across indexed capture extractions and synthesized insight narratives. Refine by app, project, activity type,
-      and date range.
+      Switch between ranked keyword search and semantic Q&A, then refine by date and keyword-mode facets.
     </p>
   </header>
 
@@ -426,6 +524,28 @@
   </label>
 
   <section class="chip-stack" aria-label="Search filters">
+    <article class="chip-group">
+      <header>
+        <h3>Mode</h3>
+        <p>Keyword search uses FTS ranking; semantic mode asks the model and returns grounded references.</p>
+      </header>
+      <div class="chips">
+        {#each searchModeOptions as option (option.id)}
+          <button
+            type="button"
+            class="chip"
+            class:chip--active={searchMode === option.id}
+            on:click={() => setSearchMode(option.id)}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
+      <p class="chip-note">
+        {searchModeOptions.find((option) => option.id === searchMode)?.description}
+      </p>
+    </article>
+
     <article class="chip-group">
       <header>
         <h3>Date range</h3>
@@ -468,28 +588,43 @@
     <article class="chip-group">
       <header>
         <h3>Apps</h3>
-        <p>Refine by frontmost application.</p>
+        <p>Refine keyword mode by frontmost application.</p>
       </header>
       <div class="chips">
-        <button type="button" class="chip" class:chip--active={!selectedApp} on:click={() => (selectedApp = null)}>
+        <button
+          type="button"
+          class="chip"
+          class:chip--active={!selectedApp}
+          on:click={() => (selectedApp = null)}
+          disabled={!keywordMode}
+        >
           All apps
         </button>
         {#if appChips.length === 0}
           <span class="chip-empty">No app facets yet</span>
         {:else}
           {#each appChips as appName (appName)}
-            <button type="button" class="chip" class:chip--active={selectedApp === appName} on:click={() => toggleApp(appName)}>
+            <button
+              type="button"
+              class="chip"
+              class:chip--active={selectedApp === appName}
+              on:click={() => toggleApp(appName)}
+              disabled={!keywordMode}
+            >
               {appName}
             </button>
           {/each}
         {/if}
       </div>
+      {#if !keywordMode}
+        <p class="chip-note">App filters are available in keyword mode only.</p>
+      {/if}
     </article>
 
     <article class="chip-group">
       <header>
         <h3>Projects</h3>
-        <p>Limit retrieval to project context.</p>
+        <p>Limit keyword retrieval to project context.</p>
       </header>
       <div class="chips">
         <button
@@ -497,6 +632,7 @@
           class="chip"
           class:chip--active={!selectedProject}
           on:click={() => (selectedProject = null)}
+          disabled={!keywordMode}
         >
           All projects
         </button>
@@ -509,18 +645,22 @@
               class="chip"
               class:chip--active={selectedProject === projectName}
               on:click={() => toggleProject(projectName)}
+              disabled={!keywordMode}
             >
               {projectName}
             </button>
           {/each}
         {/if}
       </div>
+      {#if !keywordMode}
+        <p class="chip-note">Project filters are available in keyword mode only.</p>
+      {/if}
     </article>
 
     <article class="chip-group">
       <header>
         <h3>Activity</h3>
-        <p>Narrow the currently loaded results by extracted activity type.</p>
+        <p>Send activity type to the keyword API for server-side filtering.</p>
       </header>
       <div class="chips">
         <button
@@ -528,6 +668,7 @@
           class="chip"
           class:chip--active={!selectedActivity}
           on:click={() => (selectedActivity = null)}
+          disabled={!keywordMode}
         >
           All activities
         </button>
@@ -540,28 +681,53 @@
               class="chip"
               class:chip--active={selectedActivity === activity}
               on:click={() => toggleActivity(activity)}
+              disabled={!keywordMode}
             >
               {activity.replaceAll('_', ' ')}
             </button>
           {/each}
         {/if}
       </div>
+      {#if !keywordMode}
+        <p class="chip-note">Semantic mode does not apply activity chips.</p>
+      {/if}
     </article>
   </section>
 
   {#if queryPreview}
     <p class="result-summary">
       {#if loading}
-        Searching “{queryPreview}”…
+        {searchMode === 'semantic' ? `Analyzing “${queryPreview}”…` : `Searching “${queryPreview}”…`}
+      {:else if searchMode === 'semantic'}
+        Showing {visibleResults.length} of {results.length} grounded reference{results.length === 1 ? '' : 's'} for “{queryPreview}”.
       {:else}
-        Showing {visibleResults.length} of {filteredResults.length} result{filteredResults.length === 1 ? '' : 's'} for
-        “{queryPreview}”.
+        Showing {visibleResults.length} of {results.length} result{results.length === 1 ? '' : 's'} for “{queryPreview}”.
       {/if}
     </p>
   {/if}
 
   {#if errorMessage}
     <p class="panel__error" role="alert">{errorMessage}</p>
+  {/if}
+
+  {#if searchMode === 'semantic' && semanticAnswer && !loading}
+    <section class="semantic-answer" aria-label="Semantic answer">
+      <h3>Semantic answer</h3>
+      <p>{semanticAnswer}</p>
+      {#if semanticTokensUsed !== null || semanticCostLabel}
+        <p class="semantic-answer__meta">
+          {#if semanticTokensUsed !== null}
+            Tokens: {semanticTokensUsed}
+          {/if}
+          {#if semanticTokensUsed !== null && semanticCostLabel}
+            ·
+          {/if}
+          {#if semanticCostLabel}
+            Cost: {semanticCostLabel}
+          {/if}
+        </p>
+      {/if}
+    </section>
   {/if}
 
   {#if !queryPreview}
@@ -577,11 +743,15 @@
       </div>
     </section>
   {:else if loading}
-    <p class="panel__state">Searching indexed history…</p>
-  {:else if hasSearched && filteredResults.length === 0}
+    <p class="panel__state">{searchMode === 'semantic' ? 'Analyzing activity context…' : 'Searching indexed history…'}</p>
+  {:else if hasSearched && results.length === 0}
     <section class="empty-state" aria-label="No search results">
       <h3>No matches for this filter set</h3>
-      <p>Try broadening date bounds or clearing app/project/activity chips.</p>
+      <p>
+        {searchMode === 'semantic'
+          ? 'Try broadening date bounds or switching to keyword mode.'
+          : 'Try broadening date bounds or clearing app/project/activity chips.'}
+      </p>
     </section>
   {:else}
     <div class="results-grid" aria-live="polite">
@@ -725,6 +895,12 @@
     color: var(--paper-200);
   }
 
+  .chip-note {
+    font-size: 0.68rem;
+    color: var(--paper-200);
+    letter-spacing: 0.08em;
+  }
+
   .chips {
     display: flex;
     flex-wrap: wrap;
@@ -744,7 +920,7 @@
     transition: transform 130ms ease, border-color 130ms ease, background 130ms ease;
   }
 
-  .chip:hover {
+  .chip:hover:not(:disabled) {
     transform: translateY(-1px);
     border-color: rgb(246 241 231 / 58%);
   }
@@ -753,6 +929,12 @@
     border-color: rgb(112 255 227 / 74%);
     background: rgb(112 255 227 / 14%);
     color: var(--pulse);
+  }
+
+  .chip:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+    transform: none;
   }
 
   .chip-empty {
@@ -811,6 +993,36 @@
     padding: 0.55rem 0.8rem;
     background: rgb(69 18 21 / 56%);
     font-size: 0.85rem;
+  }
+
+  .semantic-answer {
+    border: 1px solid rgb(112 255 227 / 38%);
+    border-radius: 0.86rem;
+    padding: 0.8rem 0.9rem;
+    background: rgb(10 17 25 / 78%);
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .semantic-answer h3 {
+    font-size: 0.82rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--pulse);
+  }
+
+  .semantic-answer p {
+    color: var(--paper-100);
+    font-size: 0.88rem;
+    line-height: 1.45;
+    margin: 0;
+  }
+
+  .semantic-answer__meta {
+    color: var(--paper-200);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .empty-state {

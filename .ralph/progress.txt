@@ -23,6 +23,8 @@ Branch: ralph/v1-implementation
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
 - MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
 - MCP implementations should keep stdio/JSON-RPC framing in `src/mcp/server.rs` and move tool schemas, typed argument parsing, and storage-backed handlers into `src/mcp/tools.rs`, so protocol concerns stay separate from business logic.
+- MCP tools that need async provider calls should gather SQLite-backed evidence before the first `.await`, keep the stdio runtime on `tokio` `enable_all()`, and return `tools/call` results with `isError: true` for provider/config failures so one bad request does not kill the whole session.
+
 - Any feature that reads stored screenshots should normalize stored paths back to sanitized paths relative to the screenshots root and reuse one shared `openat(..., O_NOFOLLOW)` walker, so HTTP and MCP surfaces enforce the same filesystem boundary.
 
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
@@ -667,4 +669,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: when search combines multiple FTS tables, keep each source ranked independently in SQL and fuse the typed rows in Rust; cross-table `bm25()` values are not a shared scale.
   - Gotchas encountered: server-side activity filters can exclude synthesized insight hits that do not carry that activity dimension (for example rolling summaries), so the API/UI must model source-specific metadata truthfully instead of coercing everything into extraction-shaped results.
   - Useful context: insight search is practical with the existing `insights_fts` table if time/project/app/activity filtering happens after typed insight payloads are loaded, which keeps cross-table SQL contained in `StorageDb` without inventing lossy denormalized columns.
+---
+
+## [2026-04-11 22:11:29 UTC] - US-038
+- What was implemented: added the MCP `ask_about_activity` tool with a free-form question schema plus optional `from`/`to` filters, wired it through the existing semantic-search/synthesis path, and returned grounded capture references with token/cost metadata on success.
+- Files changed: AGENTS.md, src/api/routes.rs, src/main.rs, src/mcp/server.rs, src/mcp/tools.rs, src/pipeline/synthesis.rs, tests/mcp_server.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: MCP tool handlers that call async providers should reuse the same candidate-selection helpers as CLI/API surfaces so citations and answer ranking stay consistent across entry points.
+  - Gotchas encountered: MCP stdio runtimes need `tokio` `enable_all()` once provider-backed tools land; `enable_io()` alone is too narrow for async HTTP-backed tool execution.
+  - Useful context: tool-level provider/config failures are better surfaced as `tools/call` results with `isError: true` and structured JSON payloads, because that keeps the MCP transport alive for follow-up requests.
 ---

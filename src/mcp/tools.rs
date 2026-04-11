@@ -6,25 +6,37 @@ use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Utc};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::storage::{
-    db::StorageDb,
-    models::{ActivityQuery, AppCaptureCount, CaptureDetail, InsightType, SearchHit, SearchQuery},
-    screenshots::{read_screenshot_file, relative_screenshot_path},
+use crate::{
+    config::AppConfig,
+    pipeline::synthesis,
+    storage::{
+        db::StorageDb,
+        models::{
+            ActivityQuery, AppCaptureCount, CaptureDetail, ExtractionSearchHit, InsightType,
+            SearchHit, SearchQuery,
+        },
+        screenshots::{read_screenshot_file, relative_screenshot_path},
+    },
 };
 
 const DEFAULT_SEARCH_LIMIT: usize = 25;
 const MAX_SEARCH_LIMIT: usize = 200;
 const MAX_ACTIVITY_RESULTS: usize = 500;
+const DEFAULT_ACTIVITY_QUESTION_LIMIT: usize = 100;
+const NO_RELEVANT_ACTIVITY_ANSWER: &str =
+    "No relevant captures were found for that query in the selected range.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolExecutionContext {
+    config: AppConfig,
     db_path: PathBuf,
     screenshots_root: PathBuf,
 }
 
 impl ToolExecutionContext {
-    pub(crate) fn new(db_path: PathBuf, screenshots_root: PathBuf) -> Self {
+    pub(crate) fn new(config: AppConfig, db_path: PathBuf, screenshots_root: PathBuf) -> Self {
         Self {
+            config,
             db_path,
             screenshots_root,
         }
@@ -79,6 +91,14 @@ struct ProjectActivityArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AppUsageArgs {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskAboutActivityArgs {
+    question: String,
     from: Option<String>,
     to: Option<String>,
 }
@@ -172,10 +192,24 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false,
             }
         }),
+        json!({
+            "name": "ask_about_activity",
+            "description": "Answer a free-form question about activity with grounded capture references.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": { "type": "string", "description": "Free-form question about the user's activity." },
+                    "from": { "type": "string", "format": "date-time", "description": "Inclusive UTC start timestamp." },
+                    "to": { "type": "string", "format": "date-time", "description": "Inclusive UTC end timestamp." }
+                },
+                "required": ["question"],
+                "additionalProperties": false,
+            }
+        }),
     ]
 }
 
-pub(crate) fn call_tool(
+pub(crate) async fn call_tool(
     context: &ToolExecutionContext,
     name: &str,
     arguments: &Map<String, Value>,
@@ -205,6 +239,10 @@ pub(crate) fn call_tool(
         "get_app_usage" => {
             let args = parse_args::<AppUsageArgs>(arguments, name)?;
             call_get_app_usage(context, args)
+        }
+        "ask_about_activity" => {
+            let args = parse_args::<AskAboutActivityArgs>(arguments, name)?;
+            call_ask_about_activity(context, args).await
         }
         _ => bail!("unknown tool `{name}`"),
     }
@@ -423,6 +461,91 @@ fn call_get_app_usage(context: &ToolExecutionContext, args: AppUsageArgs) -> Res
     }))
 }
 
+async fn call_ask_about_activity(
+    context: &ToolExecutionContext,
+    args: AskAboutActivityArgs,
+) -> Result<Value> {
+    let question = required_non_empty(args.question, "question", "ask_about_activity")?;
+    let from = parse_optional_timestamp(args.from.as_deref(), "from", "ask_about_activity")?;
+    let to = parse_optional_timestamp(args.to.as_deref(), "to", "ask_about_activity")?;
+    validate_time_range(from.as_ref(), to.as_ref(), "ask_about_activity")?;
+
+    let Some(db) = context.open_db_read_only()? else {
+        return tool_json_result(json!({
+            "question": question,
+            "from": from,
+            "to": to,
+            "analyzed_capture_count": 0,
+            "answer": NO_RELEVANT_ACTIVITY_ANSWER,
+            "references": Vec::<Value>::new(),
+            "tokens_used": Value::Null,
+            "cost_cents": Value::Null,
+        }));
+    };
+
+    let candidates = synthesis::semantic_search_candidates(
+        &db,
+        &question,
+        from,
+        to,
+        DEFAULT_ACTIVITY_QUESTION_LIMIT,
+    )?;
+    drop(db);
+
+    match synthesis::answer_activity_question(&context.config, &question, candidates).await {
+        Ok(answer) => {
+            let synthesis::ActivityQuestionAnswer {
+                analyzed_capture_count,
+                result,
+            } = answer;
+            let synthesis::SemanticSearchResult {
+                answer,
+                references,
+                tokens_used,
+                cost_cents,
+            } = result;
+            let references = references
+                .into_iter()
+                .map(activity_reference_from_hit)
+                .collect::<Vec<_>>();
+
+            tool_json_result(json!({
+                "question": question,
+                "from": from,
+                "to": to,
+                "analyzed_capture_count": analyzed_capture_count,
+                "answer": answer,
+                "references": references,
+                "tokens_used": tokens_used,
+                "cost_cents": cost_cents,
+            }))
+        }
+        Err(error) => tool_error_result(json!({
+            "tool": "ask_about_activity",
+            "question": question,
+            "from": from,
+            "to": to,
+            "error": {
+                "code": "activity_analysis_failed",
+                "message": error.to_string(),
+            }
+        })),
+    }
+}
+
+fn activity_reference_from_hit(hit: ExtractionSearchHit) -> Value {
+    json!({
+        "capture_id": hit.capture.id,
+        "timestamp": hit.capture.timestamp,
+        "app_name": hit.capture.app_name,
+        "window_title": hit.capture.window_title,
+        "project": hit.extraction.project,
+        "description": hit.extraction.description,
+        "key_content": hit.extraction.key_content,
+        "batch_narrative": hit.batch_narrative,
+    })
+}
+
 fn load_activity_window(
     context: &ToolExecutionContext,
     mut query: ActivityQuery,
@@ -528,6 +651,19 @@ fn tool_json_result(value: Value) -> Result<Value> {
     }))
 }
 
+fn tool_error_result(value: Value) -> Result<Value> {
+    let text = serde_json::to_string(&value).context("failed to serialize tool error")?;
+    Ok(json!({
+        "content": [
+            {
+                "type": "text",
+                "text": text,
+            }
+        ],
+        "isError": true,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -539,8 +675,11 @@ mod tests {
     use chrono::TimeZone;
     use uuid::Uuid;
 
-    use crate::storage::models::{
-        ActivityType, ExtractionStatus, InsightData, NewCapture, NewExtraction, NewInsight,
+    use crate::{
+        config::AppConfig,
+        storage::models::{
+            ActivityType, ExtractionStatus, InsightData, NewCapture, NewExtraction, NewInsight,
+        },
     };
 
     use super::*;
@@ -553,8 +692,8 @@ mod tests {
         env::temp_dir().join(format!("screencap-mcp-tools-tests-{name}-{unique}"))
     }
 
-    #[test]
-    fn get_current_context_returns_latest_rolling_insight() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_current_context_returns_latest_rolling_insight() {
         let root = temp_path("rolling-context");
         fs::create_dir_all(&root).expect("create temp directory");
         let db_path = root.join("screencap.db");
@@ -589,10 +728,11 @@ mod tests {
         }
 
         let response = call_tool(
-            &ToolExecutionContext::new(db_path, screenshots_root),
+            &ToolExecutionContext::new(AppConfig::default(), db_path, screenshots_root),
             "get_current_context",
             &Map::new(),
         )
+        .await
         .expect("tool call should succeed");
 
         let payload: Value = serde_json::from_str(
@@ -609,8 +749,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn get_screenshot_returns_base64_payload() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_screenshot_returns_base64_payload() {
         let root = temp_path("screenshot");
         let screenshots_root = root.join("screenshots");
         fs::create_dir_all(&screenshots_root).expect("create screenshots root");
@@ -635,10 +775,11 @@ mod tests {
         };
 
         let response = call_tool(
-            &ToolExecutionContext::new(db_path, screenshots_root),
+            &ToolExecutionContext::new(AppConfig::default(), db_path, screenshots_root),
             "get_screenshot",
             &Map::from_iter([(String::from("id"), json!(capture_id))]),
         )
+        .await
         .expect("tool call should succeed");
 
         let payload: Value = serde_json::from_str(
@@ -653,8 +794,8 @@ mod tests {
         assert_eq!(payload["data_base64"], BASE64_STANDARD.encode("fake-jpeg"));
     }
 
-    #[test]
-    fn get_project_activity_filters_by_project() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn get_project_activity_filters_by_project() {
         let root = temp_path("project-activity");
         fs::create_dir_all(&root).expect("create temp directory");
         let db_path = root.join("screencap.db");
@@ -696,10 +837,11 @@ mod tests {
         }
 
         let response = call_tool(
-            &ToolExecutionContext::new(db_path, screenshots_root),
+            &ToolExecutionContext::new(AppConfig::default(), db_path, screenshots_root),
             "get_project_activity",
             &Map::from_iter([(String::from("project"), json!("screencap"))]),
         )
+        .await
         .expect("tool call should succeed");
 
         let payload: Value = serde_json::from_str(

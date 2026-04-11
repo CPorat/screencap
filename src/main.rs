@@ -364,7 +364,9 @@ async fn handle_ask(args: AskArgs) -> Result<()> {
         None,
         DEFAULT_SEMANTIC_SEARCH_LIMIT,
     )?;
-    let result = synthesis::semantic_search(&config, query, candidates).await?;
+    let result = synthesis::answer_activity_question(&config, query, candidates)
+        .await?
+        .result;
 
     let answer = result.answer.trim();
     if answer.is_empty() {

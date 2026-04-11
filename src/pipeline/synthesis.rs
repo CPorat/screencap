@@ -53,6 +53,12 @@ pub struct SemanticSearchResult {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ActivityQuestionAnswer {
+    pub analyzed_capture_count: usize,
+    pub result: SemanticSearchResult,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TimeRangeAnalysisResult {
     pub window_start: DateTime<Utc>,
     pub window_end: DateTime<Utc>,
@@ -523,14 +529,7 @@ pub async fn answer_time_range_query(
         window_end
     );
 
-    let analyzed_capture_count = candidates.len();
-    let result = if analyzed_capture_count == 0 {
-        empty_semantic_search_result()
-    } else {
-        ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
-        let provider = open_synthesis_provider(config)?;
-        semantic_search_with_provider(provider.as_ref(), &query, candidates).await?
-    };
+    let answer = answer_activity_question(config, &query, candidates).await?;
 
     Ok(TimeRangeAnalysisResult {
         window_start,
@@ -538,9 +537,32 @@ pub async fn answer_time_range_query(
         capture_count,
         analysis_query: Some(query),
         analysis: TimeRangeAnalysis::QuestionAnswer {
-            analyzed_capture_count,
-            result,
+            analyzed_capture_count: answer.analyzed_capture_count,
+            result: answer.result,
         },
+    })
+}
+
+pub async fn answer_activity_question(
+    config: &AppConfig,
+    query: &str,
+    candidates: Vec<ExtractionSearchHit>,
+) -> Result<ActivityQuestionAnswer> {
+    let query = query.trim();
+    ensure!(!query.is_empty(), "semantic search query must not be empty");
+
+    let analyzed_capture_count = candidates.len();
+    let result = if analyzed_capture_count == 0 {
+        empty_semantic_search_result()
+    } else {
+        ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
+        let provider = open_synthesis_provider(config)?;
+        semantic_search_with_provider(provider.as_ref(), query, candidates).await?
+    };
+
+    Ok(ActivityQuestionAnswer {
+        analyzed_capture_count,
+        result,
     })
 }
 

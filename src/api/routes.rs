@@ -698,9 +698,10 @@ async fn handle_semantic_search(
     let candidates = synthesis::semantic_search_candidates(&db, &query, from, to, limit)
         .map_err(ApiError::internal)?;
     drop(db);
-    let result = synthesis::semantic_search(&state.config, &query, candidates)
+    let result = synthesis::answer_activity_question(&state.config, &query, candidates)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+        .result;
     let references = result
         .references
         .into_iter()

@@ -13,6 +13,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 pub async fn run_mcp_server(config: AppConfig) -> Result<()> {
     let home = runtime_home_dir()?;
     let server = McpServer::new(
+        config.clone(),
         config.storage_root(&home).join("screencap.db"),
         config.screenshots_root(&home),
     );
@@ -32,7 +33,7 @@ pub async fn run_mcp_server(config: AppConfig) -> Result<()> {
             continue;
         }
 
-        if let Some(response) = server.handle_payload(payload) {
+        if let Some(response) = server.handle_payload(payload).await {
             write_response(&mut writer, &response).await?;
         }
     }
@@ -42,7 +43,7 @@ pub async fn run_mcp_server(config: AppConfig) -> Result<()> {
 
 pub fn run_stdio_server(config: AppConfig) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
+        .enable_all()
         .build()
         .context("failed to build tokio runtime for MCP server")?;
 
@@ -70,13 +71,13 @@ struct McpServer {
 }
 
 impl McpServer {
-    fn new(db_path: PathBuf, screenshots_root: PathBuf) -> Self {
+    fn new(config: AppConfig, db_path: PathBuf, screenshots_root: PathBuf) -> Self {
         Self {
-            tools: ToolExecutionContext::new(db_path, screenshots_root),
+            tools: ToolExecutionContext::new(config, db_path, screenshots_root),
         }
     }
 
-    fn handle_payload(&self, payload: &str) -> Option<Value> {
+    async fn handle_payload(&self, payload: &str) -> Option<Value> {
         let request = match serde_json::from_str::<Value>(payload) {
             Ok(request) => request,
             Err(error) => {
@@ -88,10 +89,10 @@ impl McpServer {
             }
         };
 
-        self.handle_request(&request)
+        self.handle_request(&request).await
     }
 
-    fn handle_request(&self, request: &Value) -> Option<Value> {
+    async fn handle_request(&self, request: &Value) -> Option<Value> {
         let request_object = match request.as_object() {
             Some(request_object) => request_object,
             None => {
@@ -122,7 +123,7 @@ impl McpServer {
             "initialize" => Ok(self.handle_initialize()),
             "tools/list" => Ok(self.handle_tools_list()),
             "tools/call" => match params.and_then(Value::as_object) {
-                Some(params) => self.handle_tools_call(params),
+                Some(params) => self.handle_tools_call(params).await,
                 None => Err(RpcError::new(-32602, "tools/call requires params object")),
             },
             _ => Err(RpcError::new(
@@ -158,7 +159,7 @@ impl McpServer {
         })
     }
 
-    fn handle_tools_call(&self, params: &Map<String, Value>) -> Result<Value, RpcError> {
+    async fn handle_tools_call(&self, params: &Map<String, Value>) -> Result<Value, RpcError> {
         let name = params
             .get("name")
             .and_then(Value::as_str)
@@ -176,6 +177,7 @@ impl McpServer {
         };
 
         tools::call_tool(&self.tools, name, &arguments)
+            .await
             .map_err(|error| RpcError::new(-32000, error.to_string()))
     }
 }
@@ -233,6 +235,8 @@ mod tests {
 
     use serde_json::{json, Value};
 
+    use crate::config::AppConfig;
+
     use super::McpServer;
 
     fn temp_path(name: &str) -> PathBuf {
@@ -243,13 +247,18 @@ mod tests {
         env::temp_dir().join(format!("screencap-mcp-tests-{name}-{unique}"))
     }
 
-    #[test]
-    fn initialize_returns_server_capabilities() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn initialize_returns_server_capabilities() {
         let root = temp_path("initialize");
-        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
+        let server = McpServer::new(
+            AppConfig::default(),
+            root.join("screencap.db"),
+            root.join("screenshots"),
+        );
 
         let response = server
             .handle_payload(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#)
+            .await
             .expect("initialize should return response");
 
         assert_eq!(response["jsonrpc"], "2.0");
@@ -261,13 +270,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn invalid_json_returns_parse_error() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn invalid_json_returns_parse_error() {
         let root = temp_path("parse-error");
-        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
+        let server = McpServer::new(
+            AppConfig::default(),
+            root.join("screencap.db"),
+            root.join("screenshots"),
+        );
 
         let response = server
             .handle_payload("not-json")
+            .await
             .expect("invalid payload should return response");
 
         assert_eq!(response["jsonrpc"], "2.0");
@@ -275,13 +289,18 @@ mod tests {
         assert_eq!(response["error"]["code"], -32700);
     }
 
-    #[test]
-    fn tools_list_exposes_story_tool_names() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn tools_list_exposes_story_tool_names() {
         let root = temp_path("tools-list");
-        let server = McpServer::new(root.join("screencap.db"), root.join("screenshots"));
+        let server = McpServer::new(
+            AppConfig::default(),
+            root.join("screencap.db"),
+            root.join("screenshots"),
+        );
 
         let response = server
             .handle_payload(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
+            .await
             .expect("tools/list should return response");
         let tools = response["result"]["tools"]
             .as_array()
@@ -301,6 +320,7 @@ mod tests {
                 "get_daily_summary",
                 "get_project_activity",
                 "get_app_usage",
+                "ask_about_activity",
             ]
         );
     }

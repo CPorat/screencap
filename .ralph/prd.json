@@ -900,7 +900,7 @@
         "MCP integration tests cover happy path and missing-provider behavior"
       ],
       "priority": 38,
-      "passes": false,
+      "passes": true,
       "notes": "Spec tool surface lists ask_about_activity as a first-class MCP tool.",
       "tool": "omp",
       "model": "gpt-5.4",

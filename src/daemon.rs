@@ -4,7 +4,10 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{self, Child, Command, Stdio},
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, OnceLock,
+    },
     time::Duration,
 };
 
@@ -37,6 +40,8 @@ const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const DAILY_PRUNE_HOUR_UTC: u32 = 2;
+
+pub static CAPTURE_PAUSED: AtomicBool = AtomicBool::new(false);
 
 static APP_CHANGE_TRIGGER_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
 
@@ -287,7 +292,9 @@ async fn run_capture_loop(
             }
         }
 
-        if let Err(err) = capture_loop.capture_once() {
+        if CAPTURE_PAUSED.load(Ordering::SeqCst) {
+            debug!("capture is paused; skipping capture cycle");
+        } else if let Err(err) = capture_loop.capture_once() {
             error!(error = %err, "capture cycle failed");
         }
 

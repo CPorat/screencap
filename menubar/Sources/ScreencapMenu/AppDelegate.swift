@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        screencapCommand = resolveScreencapCommand()
+        refreshScreencapCommand()
         configureStatusItem()
         refreshStatus()
 
@@ -78,6 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func startCapture() {
+        guard hasScreencapCommand() else {
+            NSSound.beep()
+            refreshStatus()
+            return
+        }
+
         let result = runScreencap(["start"])
         if result?.exitCode != 0 {
             NSSound.beep()
@@ -107,21 +113,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshStatus() {
         let state: CaptureState
-        if screencapCommand == nil {
+        if !hasScreencapCommand() {
             state = .unavailable
-        } else if runScreencap(["status"])?.exitCode == 0 {
-            state = .running
         } else {
-            state = .stopped
+            let statusResult = runScreencap(["status"])
+            if statusResult?.exitCode == 0 {
+                state = .running
+            } else if statusResult?.exitCode == 127 {
+                state = .unavailable
+            } else {
+                state = .stopped
+            }
         }
 
         switch state {
         case .running:
             statusItem.button?.contentTintColor = .systemGreen
+            statusItem.button?.toolTip = nil
             startItem.isEnabled = false
             stopItem.isEnabled = true
         case .stopped:
             statusItem.button?.contentTintColor = .systemRed
+            statusItem.button?.toolTip = nil
             startItem.isEnabled = true
             stopItem.isEnabled = false
         case .unavailable:
@@ -132,13 +145,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func hasScreencapCommand() -> Bool {
+        refreshScreencapCommand()
+        return screencapCommand != nil
+    }
+
+    private func refreshScreencapCommand() {
+        if let command = screencapCommand, FileManager.default.isExecutableFile(atPath: command.executable) {
+            return
+        }
+
+        screencapCommand = resolveScreencapCommand()
+    }
+
+
     private func stopIfPossible() {
         _ = runScreencap(["stop"])
     }
 
     private func runScreencap(_ arguments: [String]) -> CommandResult? {
-        guard let command = screencapCommand else { return nil }
-        return runProcess(executable: command.executable, arguments: command.prefixArguments + arguments)
+        guard hasScreencapCommand(), let command = screencapCommand else { return nil }
+
+        let result = runProcess(executable: command.executable, arguments: command.prefixArguments + arguments)
+        if result.exitCode == 127 {
+            screencapCommand = nil
+        }
+        return result
     }
 
     private func resolveScreencapCommand() -> Command? {

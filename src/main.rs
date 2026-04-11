@@ -6,6 +6,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, Days, Duration as ChronoDuration, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 use screencap::{
     config::AppConfig,
     daemon,
@@ -36,6 +37,8 @@ enum Command {
     Start,
     Stop,
     Status,
+    Pause,
+    Resume,
     #[command(name = "__daemon-child", hide = true)]
     DaemonChild,
     Now,
@@ -92,6 +95,10 @@ struct ExportArgs {
     #[arg(long)]
     output: Option<String>,
 }
+#[derive(Debug, Deserialize)]
+struct CapturePausedResponse {
+    paused: bool,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -124,6 +131,8 @@ async fn main() -> Result<()> {
             let config = AppConfig::load()?;
             print_daemon_status(&daemon::status(&config)?);
         }
+        Some(Command::Pause) => handle_capture_pause(true).await?,
+        Some(Command::Resume) => handle_capture_pause(false).await?,
         Some(Command::Now) => handle_now()?,
         Some(Command::Today) => handle_today().await?,
         Some(Command::Yesterday) => handle_yesterday()?,
@@ -356,6 +365,34 @@ fn handle_costs() -> Result<()> {
 
 
 
+
+async fn handle_capture_pause(paused: bool) -> Result<()> {
+    let config = AppConfig::load()?;
+    let endpoint = if paused { "pause" } else { "resume" };
+    let url = format!("http://127.0.0.1:{}/api/{endpoint}", config.server.port);
+
+    let response = reqwest::Client::new()
+        .post(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to call daemon endpoint at {url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read response body>".to_string());
+        bail!("daemon request to {url} failed with status {status}: {body}");
+    }
+
+    let state: CapturePausedResponse = response
+        .json()
+        .await
+        .with_context(|| format!("failed to parse daemon response from {url}"))?;
+    println!("paused: {}", state.paused);
+    Ok(())
+}
 
 fn handle_prune(args: PruneArgs) -> Result<()> {
     screencap::storage::prune::run_prune(args.older_than)

@@ -1,5 +1,6 @@
 use std::{
     path::{Component, Path, PathBuf},
+    sync::atomic::Ordering,
     time::Instant,
 };
 
@@ -9,7 +10,7 @@ use axum::{
     extract::{Path as AxumPath, Query, RawQuery, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -18,6 +19,7 @@ use tracing::error;
 
 use crate::{
     config::AppConfig,
+    daemon::CAPTURE_PAUSED,
     pipeline::synthesis,
     storage::{
         db::StorageDb,
@@ -80,6 +82,11 @@ struct StatsResponse {
     captures_today: u64,
     storage_bytes: u64,
     uptime_secs: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct CapturePausedResponse {
+    paused: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -255,6 +262,8 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/stats", get(stats))
+        .route("/api/pause", post(pause_capture))
+        .route("/api/resume", post(resume_capture))
         .route("/api/captures", get(list_captures))
         .route("/api/captures/{id}", get(get_capture))
         .route("/api/screenshots/{*path}", get(get_screenshot))
@@ -269,6 +278,16 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/", get(static_assets::root_handler))
         .route("/{*path}", get(static_assets::static_handler))
         .with_state(state)
+}
+
+async fn pause_capture() -> Json<CapturePausedResponse> {
+    CAPTURE_PAUSED.store(true, Ordering::SeqCst);
+    Json(CapturePausedResponse { paused: true })
+}
+
+async fn resume_capture() -> Json<CapturePausedResponse> {
+    CAPTURE_PAUSED.store(false, Ordering::SeqCst);
+    Json(CapturePausedResponse { paused: false })
 }
 
 async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {

@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{ensure, Context, Result};
 use chrono::{
@@ -14,6 +19,7 @@ use tracing::{error, info};
 use crate::{
     ai::provider::{create_provider, LlmProvider, LlmProviderConfig, LlmResponse},
     config::AppConfig,
+    export::markdown::export_daily,
     storage::{
         db::StorageDb,
         models::{
@@ -244,6 +250,7 @@ pub struct DailySummaryScheduler {
     config: AppConfig,
     db: StorageDb,
     provider: Arc<dyn LlmProvider>,
+    home: PathBuf,
 }
 
 impl DailySummaryScheduler {
@@ -260,12 +267,14 @@ impl DailySummaryScheduler {
         ensure!(config.synthesis.enabled, "synthesis pipeline is disabled");
         parse_daily_summary_time(&config.synthesis.daily_summary_time)?;
 
-        let db = open_synthesis_db(&config, home.as_ref())?;
+        let home = home.as_ref().to_path_buf();
+        let db = open_synthesis_db(&config, &home)?;
 
         Ok(Self {
             config,
             db,
             provider,
+            home,
         })
     }
 
@@ -314,6 +323,9 @@ impl DailySummaryScheduler {
     async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
         let date = window_end.date_naive();
         if let Some(existing) = self.db.get_latest_daily_insight_for_date(date)? {
+            if self.config.synthesis.daily_export_markdown {
+                export_daily(&existing, None, &self.config, &self.home).await?;
+            }
             return Ok(Some(existing));
         }
 
@@ -345,6 +357,9 @@ impl DailySummaryScheduler {
             &response,
         )?;
         let persisted = self.db.insert_insight(&insight)?;
+        if self.config.synthesis.daily_export_markdown {
+            export_daily(&persisted, None, &self.config, &self.home).await?;
+        }
 
         Ok(Some(persisted))
     }
@@ -1398,6 +1413,11 @@ mod tests {
         assert!(calls[0].images.is_empty());
         assert!(calls[0].prompt.contains("date: 2026-04-10"));
         assert!(calls[0].prompt.contains("insight_id:"));
+        let exported_markdown_path = home.join(".screencap/daily/2026-04-10.md");
+        assert!(exported_markdown_path.exists());
+        let exported_markdown = fs::read_to_string(&exported_markdown_path)?;
+        assert!(exported_markdown.contains("# Screencap: 2026-04-10"));
+        assert!(exported_markdown.contains("## Open Threads"));
 
         fs::remove_dir_all(&home)?;
         Ok(())

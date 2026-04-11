@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use screencap::{
     config::AppConfig,
     daemon,
+    export::markdown,
     pipeline::synthesis,
     storage::{
         db::StorageDb,
@@ -78,10 +79,8 @@ struct ExportArgs {
     date: Option<String>,
     #[arg(long)]
     last: Option<String>,
-    #[arg(long, default_value = "md")]
-    format: String,
     #[arg(long)]
-    output: Option<PathBuf>,
+    output: Option<String>,
 }
 
 #[tokio::main]
@@ -121,6 +120,7 @@ async fn main() -> Result<()> {
         Some(Command::Week) => handle_week()?,
         Some(Command::Search(args)) => handle_search(args)?,
         Some(Command::Projects(args)) => handle_projects(args)?,
+        Some(Command::Export(args)) => markdown::run_export(args.date, args.last, args.output).await?,
         Some(Command::Costs) => handle_costs()?,
         Some(Command::Mcp) => {
             let config = AppConfig::load()?;
@@ -286,6 +286,9 @@ fn handle_costs() -> Result<()> {
     Ok(())
 }
 
+
+
+
 fn emit_placeholder(command: &str, details: Option<String>) {
     match details {
         Some(details) => println!("{command} is scaffolded but not implemented yet ({details})"),
@@ -298,13 +301,6 @@ fn handle_scaffolded_command(command: Command) {
         Command::Prune(args) => {
             emit_placeholder("prune", Some(format!("older_than={}", args.older_than)))
         }
-        Command::Export(args) => emit_placeholder(
-            "export",
-            Some(format!(
-                "date={:?}, last={:?}, format={}, output={:?}",
-                args.date, args.last, args.format, args.output
-            )),
-        ),
         Command::Start
         | Command::Stop
         | Command::Status
@@ -317,6 +313,7 @@ fn handle_scaffolded_command(command: Command) {
         | Command::Search(_)
         | Command::Projects(_)
         | Command::Costs
+        | Command::Export(_)
         | Command::Mcp => unreachable!("handled before scaffolding dispatch"),
     }
 }

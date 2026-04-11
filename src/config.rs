@@ -6,6 +6,8 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_DAILY_EXPORT_PATH: &str = "~/.screencap/daily/";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AppConfig {
@@ -69,12 +71,29 @@ impl AppConfig {
         expand_home_path(&self.synthesis.daily_export_path, home)
     }
 
+    pub fn obsidian_vault_root(&self, home: &Path) -> Option<PathBuf> {
+        let raw = self.export.obsidian_vault.trim();
+        if raw.is_empty() {
+            None
+        } else {
+            Some(expand_home_path(raw, home))
+        }
+    }
+
+    pub fn ensure_daily_export_root(&self, home: &Path) -> Result<PathBuf> {
+        let root = self.daily_export_root(home);
+        fs::create_dir_all(&root)
+            .with_context(|| format!("failed to create runtime directory at {}", root.display()))?;
+        Ok(root)
+    }
+
+    pub fn has_custom_daily_export_path(&self) -> bool {
+        normalize_path_for_compare(&self.synthesis.daily_export_path)
+            != normalize_path_for_compare(DEFAULT_DAILY_EXPORT_PATH)
+    }
+
     fn ensure_runtime_dirs(&self, home: &Path) -> Result<()> {
-        let paths = [
-            self.storage_root(home),
-            self.screenshots_root(home),
-            self.daily_export_root(home),
-        ];
+        let paths = [self.storage_root(home), self.screenshots_root(home)];
 
         for path in paths {
             fs::create_dir_all(&path).with_context(|| {
@@ -82,6 +101,7 @@ impl AppConfig {
             })?;
         }
 
+        self.ensure_daily_export_root(home)?;
         Ok(())
     }
 }
@@ -243,6 +263,15 @@ fn expand_home_path(raw: &str, home: &Path) -> PathBuf {
     }
 }
 
+fn normalize_path_for_compare(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        return "~".to_string();
+    }
+
+    trimmed.trim_end_matches('/').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -271,6 +300,8 @@ mod tests {
         assert!(app_root.exists());
         assert!(config.screenshots_root(&home).exists());
         assert!(config.daily_export_root(&home).exists());
+        assert!(!config.has_custom_daily_export_path());
+        assert!(config.obsidian_vault_root(&home).is_none());
 
         fs::remove_dir_all(&home).expect("cleanup temp home");
     }
@@ -341,6 +372,8 @@ markdown_template = "compact"
         );
         assert!(config.screenshots_root(&home).exists());
         assert!(config.daily_export_root(&home).exists());
+        assert!(config.has_custom_daily_export_path());
+        assert_eq!(config.obsidian_vault_root(&home), Some(home.join("Notes")));
 
         fs::remove_dir_all(&home).expect("cleanup temp home");
     }

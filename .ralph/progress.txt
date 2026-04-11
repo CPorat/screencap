@@ -30,6 +30,7 @@ Branch: ralph/v1-implementation
 - Insights route components should normalize polymorphic synthesis payloads (`data` shape drift, missing fields, alternate key casing) into strict UI view-models before rendering, so empty/error states stay deliberate and the UI remains resilient to API evolution.
 - Search route UIs should debounce query typing, gate stale async responses with request IDs, and keep app/project/time chips wired to server-side `/api/search` filters so relevance ranking remains authoritative.
 - Settings route UIs should derive daemon liveness from `/api/health`, pair it with `/api/stats` telemetry for storage/capture panels, and always provide a first-class disconnected state with explicit CLI recovery steps.
+- Markdown export commands should treat `--output` as a file for single-day exports but require a directory for multi-day `--last` ranges; generate `{date}.md` files per day and keep stdout export as the default only when no custom daily export path is configured.
 
 
 
@@ -316,4 +317,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: manual JSON-RPC 2.0 framing over tokio `Lines` streams stays predictable when each message is serialized and flushed as one newline-delimited frame.
   - Gotchas encountered: any stdout logging corrupts stdio protocol streams; keep tracing and diagnostics on stderr only.
   - Useful context: child-process integration tests with `assert_cmd` catch transport-level regressions that unit tests miss.
+---
+
+## [2026-04-11 10:41:10 UTC] - US-021
+- Implemented Markdown Export CLI and logic: added `screencap export` support for `--date` and `--last`, markdown generation/writes, configured daily export path handling, and optional Obsidian vault copy behavior.
+- Files changed: src/config.rs, src/export/markdown.rs, src/export/mod.rs, src/main.rs, src/pipeline/synthesis.rs, tests/export.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep multi-day exports deterministic by deriving per-day output filenames and validating that `--output` is a directory when exporting ranges.
+  - Gotchas encountered: optional screenshot-copy behavior should stay explicit and report copy counts/paths so export summaries remain truthful.
+  - Useful context: defaulting to stdout is convenient for ad-hoc use, but honoring configured daily export roots avoids surprising file placement in automated runs.
 ---

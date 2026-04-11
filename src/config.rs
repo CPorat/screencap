@@ -48,7 +48,10 @@ impl AppConfig {
             if config_path.is_file() {
                 return Ok(config_path);
             }
-            bail!("config path exists but is not a file: {}", config_path.display());
+            bail!(
+                "config path exists but is not a file: {}",
+                config_path.display()
+            );
         }
 
         let parent = config_path.parent().ok_or_else(|| {
@@ -57,8 +60,9 @@ impl AppConfig {
                 config_path.display()
             )
         })?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create application root at {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!("failed to create application root at {}", parent.display())
+        })?;
 
         let serialized = toml::to_string_pretty(&Self::default())
             .context("failed to serialize default TOML config")?;
@@ -73,12 +77,18 @@ impl AppConfig {
             }
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("failed to create default config file at {}", config_path.display())
+                    format!(
+                        "failed to create default config file at {}",
+                        config_path.display()
+                    )
                 });
             }
         };
         file.write_all(serialized.as_bytes()).with_context(|| {
-            format!("failed to write default config file at {}", config_path.display())
+            format!(
+                "failed to write default config file at {}",
+                config_path.display()
+            )
         })?;
 
         Ok(config_path)

@@ -3,9 +3,13 @@ mod support;
 use std::{
     fs,
     io::{Read, Write},
-    net::{SocketAddr, TcpListener},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -131,16 +135,40 @@ impl Drop for ForegroundDaemon {
 
 struct SynthesisProviderServer {
     address: SocketAddr,
+    shutdown: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl SynthesisProviderServer {
     fn spawn() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind synthesis listener");
+        listener
+            .set_nonblocking(true)
+            .expect("set synthesis listener nonblocking");
         let address = listener.local_addr().expect("synthesis listener addr");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
         let handle = thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().expect("accept synthesis request");
+            let mut served_requests = 0;
+            loop {
+                if thread_shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let (mut stream, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(error) => panic!("accept synthesis request failed: {error}"),
+                };
+                if thread_shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+                stream
+                    .set_nonblocking(false)
+                    .expect("set synthesis stream blocking");
                 let mut buffer = [0_u8; 65_536];
                 let bytes_read = stream.read(&mut buffer).expect("read synthesis request");
                 let request = String::from_utf8_lossy(&buffer[..bytes_read]);
@@ -168,11 +196,16 @@ impl SynthesisProviderServer {
                 stream
                     .write_all(response.as_bytes())
                     .expect("write synthesis response");
+                served_requests += 1;
+                if served_requests == 2 {
+                    return;
+                }
             }
         });
 
         Self {
             address,
+            shutdown,
             handle: Some(handle),
         }
     }
@@ -184,8 +217,12 @@ impl SynthesisProviderServer {
 
 impl Drop for SynthesisProviderServer {
     fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.address);
         if let Some(handle) = self.handle.take() {
-            handle.join().expect("join synthesis server");
+            handle.join().unwrap_or_else(|panic| {
+                panic!("synthesis server thread panicked during shutdown: {panic:?}")
+            });
         }
     }
 }

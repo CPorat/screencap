@@ -3,9 +3,13 @@ mod support;
 use std::{
     fs,
     io::{Read, Write},
-    net::{SocketAddr, TcpListener},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -122,15 +126,38 @@ impl Drop for ForegroundDaemon {
 
 struct VisionProviderServer {
     address: SocketAddr,
+    shutdown: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
 impl VisionProviderServer {
     fn spawn() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind vision listener");
+        listener
+            .set_nonblocking(true)
+            .expect("set vision listener nonblocking");
         let address = listener.local_addr().expect("vision listener addr");
-        let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept vision request");
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let handle = thread::spawn(move || loop {
+            if thread_shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("accept vision request failed: {error}"),
+            };
+            if thread_shutdown.load(Ordering::Relaxed) {
+                return;
+            }
+            stream
+                .set_nonblocking(false)
+                .expect("set vision stream blocking");
             let mut buffer = [0_u8; 8192];
             let _ = stream.read(&mut buffer).expect("read vision request");
 
@@ -175,17 +202,19 @@ impl VisionProviderServer {
             })
             .to_string();
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
             stream
                 .write_all(response.as_bytes())
                 .expect("write vision response");
+            return;
         });
 
         Self {
             address,
+            shutdown,
             handle: Some(handle),
         }
     }
@@ -197,8 +226,12 @@ impl VisionProviderServer {
 
 impl Drop for VisionProviderServer {
     fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = TcpStream::connect(self.address);
         if let Some(handle) = self.handle.take() {
-            handle.join().expect("join vision server");
+            handle.join().unwrap_or_else(|panic| {
+                panic!("vision server thread panicked during shutdown: {panic:?}")
+            });
         }
     }
 }

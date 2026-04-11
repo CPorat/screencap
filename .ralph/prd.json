@@ -979,7 +979,7 @@
         "Browser verification confirms both modes and filter chips behave correctly"
       ],
       "priority": 42,
-      "passes": false,
+      "passes": true,
       "notes": "Spec search view requires semantic option and activity-type filters that reflect server-ranked results.",
       "tool": "omp",
       "model": "gemini-3.1-pro-preview",

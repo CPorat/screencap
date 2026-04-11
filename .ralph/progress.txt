@@ -719,3 +719,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: client-side activity filtering can drift from server-ranked relevance; chip state should be translated into API query params so ranking/filter logic stays authoritative in one place.
   - Useful context: semantic responses can be rendered through existing extraction cards by normalizing references into the shared `SearchResult` shape while surfacing the model answer/tokens/cost separately.
 ---
+## [2026-04-11 23:01:40 UTC] - US-043
+- What was implemented: fixed e2e harness shutdown deadlocks by making mock provider listener threads cancellation-aware in `tests/e2e_capture_api.rs` and `tests/e2e_daemon_ui_api.rs`. Both servers now set listeners to nonblocking mode, check an `AtomicBool` shutdown flag, wake blocked `accept()` with a loopback connect in `Drop`, then join with explicit panic diagnostics instead of hanging indefinitely.
+- Files changed: tests/e2e_capture_api.rs, tests/e2e_daemon_ui_api.rs, .ralph/progress.txt
+- Verification: `cargo test` now runs through all unit/integration/e2e capture+daemon UI/API suites without hang; the run still fails at pre-existing `tests/e2e_pipeline.rs::full_pipeline_persists_and_serves_processed_results` due `Swift bridge failed to capture display 0` (unrelated to Drop deadlock behavior).
+- **Learnings for future iterations:**
+  - Patterns discovered: thread-backed test harnesses that block on `TcpListener::accept()` need an explicit cancellation path (shutdown flag + wake-up connection) before `join()`, otherwise Drop can deadlock when no request arrives.
+  - Gotchas encountered: joining test helper threads without first unblocking `accept()` hides failures as process hangs; emitting explicit panic context during join gives actionable diagnostics when the helper thread fails.
+  - Useful context: child-process Drop guards (`kill` + `wait`) remain appropriate for daemon teardown in these suites; the deadlock risk came from mock HTTP provider threads waiting on `accept()` forever.
+---

@@ -1110,17 +1110,14 @@ impl CaptureLoop {
             });
         }
 
-        let display_count =
-            screenshot::get_display_count().context("failed to enumerate displays")?;
-        ensure!(display_count > 0, "capture bridge returned no displays");
+        let display_ids = screenshot::display_ids().context("failed to enumerate display ids")?;
+        ensure!(!display_ids.is_empty(), "capture bridge returned no displays");
 
-        let mut screenshot_paths = Vec::with_capacity(display_count);
-        let mut captures = Vec::with_capacity(display_count);
+        let mut screenshot_paths = Vec::with_capacity(display_ids.len());
+        let mut captures = Vec::with_capacity(display_ids.len());
         let mut failed_displays = Vec::new();
 
-        for display_index in 0..display_count {
-            let display_id =
-                u32::try_from(display_index).context("display index overflowed u32")?;
+        for display_id in display_ids {
             let screenshot_path = self.screenshot_path(timestamp, display_id);
             match screenshot::capture_screenshot(
                 display_id,
@@ -1353,7 +1350,7 @@ mod tests {
         uninstall_launch_agent_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord,
         INTERNAL_DAEMON_SUBCOMMAND, LAUNCHD_AGENT_LABEL,
     };
-    use crate::config::AppConfig;
+    use crate::{capture::screenshot, config::AppConfig};
 
     fn temp_home_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1510,40 +1507,97 @@ mod tests {
     }
 
     #[test]
-    fn persisted_capture_uses_partitioned_screenshot_path() -> Result<()> {
-        let home = temp_home_root("path");
-        let config = test_config(&home);
-        let timestamp = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 6).unwrap();
-        let expected_path = home
-            .join(".screencap")
-            .join("screenshots")
-            .join("2026")
-            .join("04")
-            .join("10")
-            .join("140506-0.jpg");
+    fn persisted_capture_uses_bridge_display_id_in_path_and_record() -> Result<()> {
+        screenshot::with_mock_display_ids_for_tests(vec![42], || -> Result<()> {
+            let home = temp_home_root("path");
+            let config = test_config(&home);
+            let timestamp = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 6).unwrap();
+            let expected_path = home
+                .join(".screencap")
+                .join("screenshots")
+                .join("2026")
+                .join("04")
+                .join("10")
+                .join("140506-42.jpg");
 
-        let mut capture_loop = CaptureLoop::open(config, home.clone())?;
-        let outcome = capture_loop.capture_once_at(timestamp)?;
-        assert!(matches!(
-            outcome,
-            CaptureCycleOutcome::Captured {
-                capture_count: 1,
-                ..
+            let mut capture_loop = CaptureLoop::open(config, home.clone())?;
+            let outcome = capture_loop.capture_once_at(timestamp)?;
+            assert!(matches!(
+                outcome,
+                CaptureCycleOutcome::Captured {
+                    capture_count: 1,
+                    ..
+                }
+            ));
+
+            let captures = capture_loop.db.get_pending_captures()?;
+            assert_eq!(captures.len(), 1);
+            assert_eq!(PathBuf::from(&captures[0].screenshot_path), expected_path);
+            assert_eq!(captures[0].display_id, Some(42));
+            assert_eq!(captures[0].app_name.as_deref(), Some("MockApp"));
+            assert_eq!(captures[0].window_title.as_deref(), Some("Mock Window"));
+            assert!(expected_path.exists());
+            assert_eq!(captures[0].extraction_status.as_str(), "pending");
+
+            drop(capture_loop);
+            fs::remove_dir_all(&home)?;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn multi_display_capture_uses_each_bridge_display_id() -> Result<()> {
+        screenshot::with_mock_display_ids_for_tests(vec![42, 84], || -> Result<()> {
+            let home = temp_home_root("multi-display");
+            let config = test_config(&home);
+            let timestamp = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 6).unwrap();
+            let expected_paths = vec![
+                home.join(".screencap")
+                    .join("screenshots")
+                    .join("2026")
+                    .join("04")
+                    .join("10")
+                    .join("140506-42.jpg"),
+                home.join(".screencap")
+                    .join("screenshots")
+                    .join("2026")
+                    .join("04")
+                    .join("10")
+                    .join("140506-84.jpg"),
+            ];
+
+            let mut capture_loop = CaptureLoop::open(config, home.clone())?;
+            let outcome = capture_loop.capture_once_at(timestamp)?;
+            assert!(matches!(
+                outcome,
+                CaptureCycleOutcome::Captured {
+                    capture_count: 2,
+                    ..
+                }
+            ));
+
+            let mut captures = capture_loop.db.get_pending_captures()?;
+            captures.sort_by_key(|capture| capture.display_id);
+            assert_eq!(captures.len(), 2);
+            assert_eq!(
+                captures.iter().map(|capture| capture.display_id).collect::<Vec<_>>(),
+                vec![Some(42), Some(84)]
+            );
+            assert_eq!(
+                captures
+                    .iter()
+                    .map(|capture| PathBuf::from(&capture.screenshot_path))
+                    .collect::<Vec<_>>(),
+                expected_paths
+            );
+            for path in &expected_paths {
+                assert!(path.exists(), "expected screenshot at {}", path.display());
             }
-        ));
 
-        let captures = capture_loop.db.get_pending_captures()?;
-        assert_eq!(captures.len(), 1);
-        assert_eq!(PathBuf::from(&captures[0].screenshot_path), expected_path);
-        assert_eq!(captures[0].display_id, Some(0));
-        assert_eq!(captures[0].app_name.as_deref(), Some("MockApp"));
-        assert_eq!(captures[0].window_title.as_deref(), Some("Mock Window"));
-        assert!(expected_path.exists());
-        assert_eq!(captures[0].extraction_status.as_str(), "pending");
-
-        drop(capture_loop);
-        fs::remove_dir_all(&home)?;
-        Ok(())
+            drop(capture_loop);
+            fs::remove_dir_all(&home)?;
+            Ok(())
+        })
     }
 
     #[test]

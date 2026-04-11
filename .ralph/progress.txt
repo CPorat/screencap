@@ -31,6 +31,7 @@ Branch: ralph/v1-implementation
 - When the Swift bridge spans multiple source files, build the archive directly with `swiftc -emit-library -static` over all `swift/Sources/*.swift` inputs; `-emit-object -o` only works for a single Swift source.
 - When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
+- Capture loops should enumerate displays from the bridge-provided `display_ids()` list and persist those exact IDs into filenames and `captures.display_id`; deriving IDs from `0..display_count` can misaddress ScreenCaptureKit displays because capture resolves by `CGDirectDisplayID`.
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
 - LaunchAgents should point at the current `screencap` executable with the hidden `__daemon-child` subcommand and set `HOME` explicitly, so login autostart reuses the same runtime root without recursively invoking the backgrounding `start` command.
 
@@ -637,4 +638,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: the final verification story should explicitly cover both Rust and web build pipelines, because `build.rs` couples the Swift bridge and embedded UI into the release artifact.
   - Gotchas encountered: `cargo test --features mock-capture` is the truthful project-wide test command on developer machines without macOS capture permissions; documenting plain `cargo test` understates the real gate.
   - Useful context: a release README should document runtime layout, embedded web serving, and localhost API/MCP entry points, not just compile commands, or the final ship check remains incomplete.
+---
+
+## [2026-04-11 21:03:50 UTC] - US-035
+- What was implemented: updated the daemon capture loop to enumerate bridge-provided display IDs via `screenshot::display_ids()` instead of deriving indices from a display count, so screenshot capture, filenames, and persisted `captures.display_id` values all stay aligned with the Swift bridge’s `CGDirectDisplayID` lookup.
+- Files changed: AGENTS.md, src/capture/screenshot.rs, src/daemon.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: capture paths must propagate the exact display IDs returned by the native bridge all the way through filename generation and SQLite persistence; display counts are only for sizing, not addressing.
+  - Gotchas encountered: a mock backend that only exposes display `0` can hide index-vs-ID bugs, so mock-capture tests should be able to exercise non-zero and multi-display ID sets.
+  - Useful context: the Swift bridge already exposes true `SCDisplay.displayID` values through `copy_display_ids`, and `capture_screenshot` resolves strictly by that ID, so the Rust daemon must never synthesize substitute IDs.
 ---

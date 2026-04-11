@@ -10,6 +10,14 @@ pub fn get_display_count() -> Result<usize> {
     native::get_display_count()
 }
 
+#[cfg(all(test, feature = "mock-capture"))]
+pub(crate) fn with_mock_display_ids_for_tests<T>(
+    display_ids: Vec<u32>,
+    callback: impl FnOnce() -> T,
+) -> T {
+    native::with_mock_display_ids_for_tests(display_ids, callback)
+}
+
 pub fn capture_screenshot(
     display_id: u32,
     output_path: impl AsRef<Path>,
@@ -104,17 +112,25 @@ mod native {
 
 #[cfg(feature = "mock-capture")]
 mod native {
-    use std::{fs::File, path::Path};
+    use std::{cell::RefCell, fs::File, path::Path};
 
     use anyhow::{Context, Result};
     use image::{codecs::jpeg::JpegEncoder, ImageBuffer, Rgb};
 
+    thread_local! {
+        static MOCK_DISPLAY_IDS: RefCell<Vec<u32>> = RefCell::new(vec![0]);
+    }
+
+    fn configured_display_ids() -> Vec<u32> {
+        MOCK_DISPLAY_IDS.with(|display_ids| display_ids.borrow().clone())
+    }
+
     pub(super) fn display_ids() -> Result<Vec<u32>> {
-        Ok(vec![0])
+        Ok(configured_display_ids())
     }
 
     pub(super) fn get_display_count() -> Result<usize> {
-        Ok(display_ids()?.len())
+        Ok(configured_display_ids().len())
     }
 
     pub(super) fn capture_screenshot(
@@ -122,8 +138,12 @@ mod native {
         output_path: &Path,
         quality: u8,
     ) -> Result<()> {
-        if display_id != 0 {
-            anyhow::bail!("mock capture only exposes display 0, got {display_id}");
+        let available_display_ids = configured_display_ids();
+        if !available_display_ids.contains(&display_id) {
+            anyhow::bail!(
+                "mock capture only exposes display ids {:?}, got {display_id}",
+                available_display_ids
+            );
         }
 
         let mut encoder = JpegEncoder::new_with_quality(
@@ -141,6 +161,35 @@ mod native {
         encoder
             .encode_image(&image)
             .with_context(|| format!("failed to encode mock JPEG at {}", output_path.display()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_mock_display_ids_for_tests<T>(
+        display_ids: Vec<u32>,
+        callback: impl FnOnce() -> T,
+    ) -> T {
+        assert!(!display_ids.is_empty(), "mock display ids must not be empty");
+
+        struct ResetGuard<'a> {
+            display_ids: &'a RefCell<Vec<u32>>,
+            previous: Option<Vec<u32>>,
+        }
+
+        impl Drop for ResetGuard<'_> {
+            fn drop(&mut self) {
+                let previous = self.previous.take().expect("previous mock display ids");
+                self.display_ids.replace(previous);
+            }
+        }
+
+        MOCK_DISPLAY_IDS.with(|configured_display_ids| {
+            let previous = configured_display_ids.replace(display_ids);
+            let _reset = ResetGuard {
+                display_ids: configured_display_ids,
+                previous: Some(previous),
+            };
+            callback()
+        })
     }
 }
 
@@ -191,7 +240,7 @@ mod tests {
     fn rejects_invalid_display_id() {
         let path = unique_path("invalid-display");
         let error = capture_screenshot(1, &path, 75).expect_err("invalid display id should fail");
-        assert!(error.to_string().contains("display 0"));
+        assert!(error.to_string().contains("display ids [0]"));
         assert!(!path.exists());
     }
 

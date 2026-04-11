@@ -42,7 +42,7 @@
   let errorMessage: string | null = null;
 
   let insightsRequestId = 0;
-  let expandedHourlyIds = new Set<number>();
+  let expandedHourlyIds: number[] = [];
 
   let selectedDateLabel = '';
   let currentAppsUsed: Array<[string, string]> = [];
@@ -92,9 +92,7 @@
       dailyInsight = daily;
 
       const availableHourlyIds = new Set(hourlyInsights.map((insight) => insight.id));
-      expandedHourlyIds = new Set(
-        [...expandedHourlyIds].filter((insightId) => availableHourlyIds.has(insightId)),
-      );
+      expandedHourlyIds = expandedHourlyIds.filter((insightId) => availableHourlyIds.has(insightId));
     } catch (error) {
       if (currentRequestId !== insightsRequestId) {
         return;
@@ -104,7 +102,7 @@
       currentInsight = null;
       hourlyInsights = [];
       dailyInsight = null;
-      expandedHourlyIds = new Set();
+      expandedHourlyIds = [];
     } finally {
       if (currentRequestId === insightsRequestId) {
         isLoading = false;
@@ -113,19 +111,11 @@
   }
 
   function toggleHourlyDetails(insightId: number): void {
-    const nextExpanded = new Set(expandedHourlyIds);
-
-    if (nextExpanded.has(insightId)) {
-      nextExpanded.delete(insightId);
+    if (expandedHourlyIds.includes(insightId)) {
+      expandedHourlyIds = expandedHourlyIds.filter((id) => id !== insightId);
     } else {
-      nextExpanded.add(insightId);
+      expandedHourlyIds = [...expandedHourlyIds, insightId];
     }
-
-    expandedHourlyIds = nextExpanded;
-  }
-
-  function isHourlyExpanded(insightId: number): boolean {
-    return expandedHourlyIds.has(insightId);
   }
 
   function toInputDate(value: Date): string {
@@ -343,11 +333,11 @@
       {:else}
         <div class="hourly-digests__list">
           {#each hourlyInsights as insight (insight.id)}
-            <article class="hourly-card" class:hourly-card--expanded={isHourlyExpanded(insight.id)}>
+            <article class="hourly-card" class:hourly-card--expanded={expandedHourlyIds.includes(insight.id)}>
               <button
                 class="hourly-card__toggle"
                 type="button"
-                aria-expanded={isHourlyExpanded(insight.id)}
+                aria-expanded={expandedHourlyIds.includes(insight.id)}
                 on:click={() => toggleHourlyDetails(insight.id)}
               >
                 <div>
@@ -357,7 +347,7 @@
                 <p class="hourly-card__score">Focus {formatFocusScore(insight.data.focus_score)}</p>
               </button>
 
-              {#if isHourlyExpanded(insight.id)}
+              {#if expandedHourlyIds.includes(insight.id)}
                 <div class="hourly-card__details">
                   <section>
                     <h4>Projects</h4>

@@ -182,20 +182,20 @@ run_agent() {
 
   case "$use_tool" in
     claude)
-      claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1 | tee /dev/stderr
+      claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1
       ;;
     codex)
-      codex exec --full-auto -C "$PROJECT_DIR" "$prompt_content" 2>&1 | tee /dev/stderr
+      codex exec --full-auto -C "$PROJECT_DIR" "$prompt_content" 2>&1
       ;;
     opencode)
-      opencode run "$prompt_content" 2>&1 | tee /dev/stderr
+      opencode run "$prompt_content" 2>&1
       ;;
     omp)
       local omp_args=(-p)
       [ -n "$use_provider" ] && omp_args+=(--provider "$use_provider")
       [ -n "$use_model" ] && omp_args+=(--model "$use_model")
       [ -n "$use_thinking" ] && omp_args+=(--thinking "$use_thinking")
-      omp "${omp_args[@]}" @"$prompt_file" 2>&1 | tee /dev/stderr
+      omp "${omp_args[@]}" @"$prompt_file" 2>&1
       ;;
   esac
 }
@@ -235,13 +235,16 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   fi
   echo "═══════════════════════════════════════════════════"
 
-  OUTPUT=$(run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING") || true
+  ITER_LOG="$RALPH_DIR/.iter-output.log"
+  run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING" | tee "$ITER_LOG" || true
 
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+  if grep -q "<promise>COMPLETE</promise>" "$ITER_LOG" 2>/dev/null; then
     echo ""
-    echo "Ralph completed all tasks after $i iterations!"
+    echo "All tasks completed after $i iterations!"
+    rm -f "$ITER_LOG"
     exit 0
   fi
+  rm -f "$ITER_LOG"
 
   echo ""
   echo "Iteration $i complete. Continuing..."

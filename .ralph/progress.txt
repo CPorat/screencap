@@ -267,3 +267,13 @@ Branch: ralph/v1-implementation
   - Keep Timeline grouping and API normalization close to the view boundary so modal/detail components can stay presentation-focused and reusable.
   - Seeded SQLite fixtures plus browser automation provide reliable verification for grouped timeline flows and expanded detail UX regressions.
 ---
+
+## 2026-04-11 07:34:11 UTC - US-017
+- Implemented the Svelte Insights view with rolling-context and daily-summary sections, plus Search/Stats placeholders preserved as non-goal scaffolding while `/api/*` integration stayed focused on Insights.
+- Added route-level multi-fetch orchestration for current rolling context, date-scoped daily insight payloads, and graceful empty/error states with structured daily summary rendering for projects, time allocation, and key moments.
+- Verified behavior with Puppeteer against seeded SQLite insight data, covering populated and empty dates plus stable rendering across repeated fetches.
+- Files changed: web/src/routes/insights/+page.svelte, web/src/lib/api.ts, web/src/lib/components/Insights/types.ts, web/src/lib/components/Insights/RollingContextCard.svelte, web/src/lib/components/Insights/DailySummaryCard.svelte, web/src/lib/components/Insights/InsightsDashboard.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Route-level dashboards that compose multiple `/api/*` calls should normalize payload shape once at the boundary so component trees remain deterministic under partial/missing fields.
+  - Seeded SQLite fixtures plus Puppeteer route checks are the fastest reliable signal for regression-proofing summary-heavy Svelte views backed by evolving synthesis payloads.
+---

@@ -36,9 +36,16 @@ function isAppsResponse(value) {
 	if (!isRecord(value)) return false;
 	return Array.isArray(value.apps) && value.apps.every((app) => isAppUsage(app));
 }
-function isDailyInsight(value) {
+function isInsightRecord(value) {
 	if (!isRecord(value) || !isRecord(value.data)) return false;
-	return typeof value.id === "number" && (typeof value.narrative === "string" || value.narrative === null || value.narrative === void 0);
+	return typeof value.id === "number" && typeof value.insight_type === "string" && (typeof value.narrative === "string" || value.narrative === null || value.narrative === void 0) && (typeof value.window_start === "string" || value.window_start === null || value.window_start === void 0) && (typeof value.window_end === "string" || value.window_end === null || value.window_end === void 0);
+}
+function isInsightListResponse(value) {
+	if (!isRecord(value)) return false;
+	return Array.isArray(value.insights) && value.insights.every((insight) => isInsightRecord(insight));
+}
+function isDailyInsight(value) {
+	return isInsightRecord(value);
 }
 var EMPTY_STATS = {
 	capture_count: 0,
@@ -50,6 +57,11 @@ var EMPTY_HEALTH = {
 	status: "offline",
 	uptime_secs: 0
 };
+function normalizeDateParam(date) {
+	const normalizedDate = date.trim();
+	if (!normalizedDate) throw new Error("date is required");
+	return normalizedDate;
+}
 async function listCaptures(limit = 60, offset = 0, options = {}) {
 	const params = new URLSearchParams({
 		limit: String(limit),
@@ -125,9 +137,54 @@ async function getApps() {
 		return [];
 	}
 }
+async function getCurrentInsight() {
+	try {
+		const response = await fetch("/api/insights/current", { headers: { Accept: "application/json" } });
+		if (response.status === 404) return null;
+		if (!response.ok) throw new Error(`current insight request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isInsightRecord(payload)) {
+			console.warn("Unexpected current insight payload shape", payload);
+			return null;
+		}
+		return payload;
+	} catch (error) {
+		console.error("Failed to load current insight", error);
+		return null;
+	}
+}
+async function getHourlyInsights(date) {
+	let normalizedDate;
+	try {
+		normalizedDate = normalizeDateParam(date);
+	} catch (error) {
+		console.warn("Skipping hourly insights request due to invalid date", error);
+		return [];
+	}
+	const params = new URLSearchParams({ date: normalizedDate });
+	try {
+		const response = await fetch(`/api/insights/hourly?${params.toString()}`, { headers: { Accept: "application/json" } });
+		if (response.status === 404) return [];
+		if (!response.ok) throw new Error(`hourly insight request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isInsightListResponse(payload)) {
+			console.warn("Unexpected hourly insight payload shape", payload);
+			return [];
+		}
+		return payload.insights;
+	} catch (error) {
+		console.error("Failed to load hourly insights", error);
+		return [];
+	}
+}
 async function getDailyInsight(date) {
-	const normalizedDate = date.trim();
-	if (!normalizedDate) return null;
+	let normalizedDate;
+	try {
+		normalizedDate = normalizeDateParam(date);
+	} catch (error) {
+		console.warn("Skipping daily insight request due to invalid date", error);
+		return null;
+	}
 	const params = new URLSearchParams({ date: normalizedDate });
 	try {
 		const response = await fetch(`/api/insights/daily?${params.toString()}`, { headers: { Accept: "application/json" } });
@@ -145,4 +202,4 @@ async function getDailyInsight(date) {
 	}
 }
 //#endregion
-export { getStats as a, getHealth as i, getCaptureDetail as n, listCaptures as o, getDailyInsight as r, getApps as t };
+export { getHealth as a, listCaptures as c, getDailyInsight as i, getCaptureDetail as n, getHourlyInsights as o, getCurrentInsight as r, getStats as s, getApps as t };

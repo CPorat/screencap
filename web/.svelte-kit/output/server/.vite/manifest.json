@@ -129,10 +129,11 @@
     "src": "src/routes/insights/+page.svelte",
     "isEntry": true,
     "imports": [
-      "_index-server.js"
+      "_index-server.js",
+      "_api.js"
     ],
     "css": [
-      "_app/immutable/assets/_page.CXeqjQhF.css"
+      "_app/immutable/assets/_page.CGMUfalM.css"
     ]
   },
   "src/routes/search/+page.svelte": {

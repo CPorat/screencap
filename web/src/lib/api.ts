@@ -89,6 +89,8 @@ export interface InsightRecord {
   narrative?: string | null;
   window_start?: string;
   window_end?: string;
+  tokens_used?: number | null;
+  cost_cents?: number | null;
 }
 
 interface InsightListResponse {
@@ -97,6 +99,49 @@ interface InsightListResponse {
 
 export interface DailyInsight extends InsightRecord {}
 
+export interface TimeRangeOptions {
+  from?: string;
+  to?: string;
+}
+
+export interface DateRangeOptions {
+  from: string;
+  to: string;
+}
+
+export interface ProjectTimeAllocation {
+  project: string | null;
+  capture_count: number;
+}
+
+interface ProjectTimeAllocationResponse {
+  projects: ProjectTimeAllocation[];
+}
+
+export interface TopicFrequency {
+  topic: string;
+  capture_count: number;
+}
+
+interface TopicFrequencyResponse {
+  topics: TopicFrequency[];
+}
+
+export interface CostSummary {
+  tokens_used: number;
+  reported_cost_cents: number;
+}
+
+export interface DailyCostSummary extends CostSummary {
+  date: string;
+}
+
+export interface CostBreakdown {
+  total: CostSummary;
+  extraction: CostSummary;
+  synthesis: CostSummary;
+  by_day: DailyCostSummary[];
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -237,7 +282,9 @@ function isInsightRecord(value: unknown): value is InsightRecord {
     (typeof value.window_start === 'string' ||
       value.window_start === null ||
       value.window_start === undefined) &&
-    (typeof value.window_end === 'string' || value.window_end === null || value.window_end === undefined)
+    (typeof value.window_end === 'string' || value.window_end === null || value.window_end === undefined) &&
+    (typeof value.tokens_used === 'number' || value.tokens_used === null || value.tokens_used === undefined) &&
+    (typeof value.cost_cents === 'number' || value.cost_cents === null || value.cost_cents === undefined)
   );
 }
 
@@ -251,6 +298,71 @@ function isInsightListResponse(value: unknown): value is InsightListResponse {
 
 function isDailyInsight(value: unknown): value is DailyInsight {
   return isInsightRecord(value);
+}
+
+function isProjectTimeAllocation(value: unknown): value is ProjectTimeAllocation {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (typeof value.project === 'string' || value.project === null || value.project === undefined) &&
+    typeof value.capture_count === 'number'
+  );
+}
+
+function isProjectTimeAllocationResponse(value: unknown): value is ProjectTimeAllocationResponse {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Array.isArray(value.projects) && value.projects.every((entry) => isProjectTimeAllocation(entry));
+}
+
+function isTopicFrequency(value: unknown): value is TopicFrequency {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.topic === 'string' && typeof value.capture_count === 'number';
+}
+
+function isTopicFrequencyResponse(value: unknown): value is TopicFrequencyResponse {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Array.isArray(value.topics) && value.topics.every((entry) => isTopicFrequency(entry));
+}
+
+function isCostSummary(value: unknown): value is CostSummary {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return typeof value.tokens_used === 'number' && typeof value.reported_cost_cents === 'number';
+}
+
+function isDailyCostSummary(value: unknown): value is DailyCostSummary {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return isCostSummary(value) && typeof value.date === 'string';
+}
+
+function isCostBreakdown(value: unknown): value is CostBreakdown {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isCostSummary(value.total) &&
+    isCostSummary(value.extraction) &&
+    isCostSummary(value.synthesis) &&
+    Array.isArray(value.by_day) &&
+    value.by_day.every((entry) => isDailyCostSummary(entry))
+  );
 }
 
 const EMPTY_STATS: SystemStats = {
@@ -272,6 +384,18 @@ function normalizeDateParam(date: string): string {
   }
 
   return normalizedDate;
+}
+
+function appendTimeRangeParams(params: URLSearchParams, options: TimeRangeOptions): void {
+  const from = options.from?.trim();
+  if (from) {
+    params.set('from', from);
+  }
+
+  const to = options.to?.trim();
+  if (to) {
+    params.set('to', to);
+  }
 }
 
 function mapSearchHitToCaptureRecord(hit: SearchHitResponse): CaptureRecord {
@@ -552,6 +676,174 @@ export async function getDailyInsight(date: string): Promise<DailyInsight | null
     return payload;
   } catch (error) {
     console.error('Failed to load daily insight', error);
+    return null;
+  }
+}
+
+export async function getDailyInsightsRange(options: DateRangeOptions): Promise<DailyInsight[]> {
+  let normalizedFrom: string;
+  let normalizedTo: string;
+
+  try {
+    normalizedFrom = normalizeDateParam(options.from);
+    normalizedTo = normalizeDateParam(options.to);
+  } catch (error) {
+    console.warn('Skipping daily insights range request due to invalid date range', error);
+    return [];
+  }
+
+  const params = new URLSearchParams({
+    from: normalizedFrom,
+    to: normalizedTo,
+  });
+
+  try {
+    const response = await fetch(`/api/insights/daily?${params.toString()}`, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (response.status === 404) {
+      return [];
+    }
+
+    if (!response.ok) {
+      throw new Error(`daily insights range request failed (${response.status})`);
+    }
+
+    const payload: unknown = await response.json();
+    if (!isInsightListResponse(payload)) {
+      console.warn('Unexpected daily insights range payload shape', payload);
+      return [];
+    }
+
+    return payload.insights;
+  } catch (error) {
+    console.error('Failed to load daily insights range', error);
+    return [];
+  }
+}
+
+export async function getProjectTimeAllocations(
+  options: TimeRangeOptions = {}
+): Promise<ProjectTimeAllocation[]> {
+  const params = new URLSearchParams();
+  appendTimeRangeParams(params, options);
+  const query = params.toString();
+
+  try {
+    const response = await fetch(`/api/insights/projects${query ? `?${query}` : ''}`, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`project allocation request failed (${response.status})`);
+    }
+
+    const payload: unknown = await response.json();
+    if (!isProjectTimeAllocationResponse(payload)) {
+      console.warn('Unexpected project allocation payload shape', payload);
+      return [];
+    }
+
+    return payload.projects;
+  } catch (error) {
+    console.error('Failed to load project allocations', error);
+    return [];
+  }
+}
+
+export async function getTopicFrequencies(options: TimeRangeOptions = {}): Promise<TopicFrequency[]> {
+  const params = new URLSearchParams();
+  appendTimeRangeParams(params, options);
+  const query = params.toString();
+
+  try {
+    const response = await fetch(`/api/insights/topics${query ? `?${query}` : ''}`, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`topic frequency request failed (${response.status})`);
+    }
+
+    const payload: unknown = await response.json();
+    if (!isTopicFrequencyResponse(payload)) {
+      console.warn('Unexpected topic frequency payload shape', payload);
+      return [];
+    }
+
+    return payload.topics;
+  } catch (error) {
+    console.error('Failed to load topic frequencies', error);
+    return [];
+  }
+}
+
+export async function listCapturesInRange(
+  options: CaptureListOptions = {},
+  pageSize = 500,
+  maxPages = 20
+): Promise<CaptureRecord[]> {
+  const normalizedPageSize = Math.max(1, Math.min(500, Math.trunc(pageSize) || 500));
+  const normalizedMaxPages = Math.max(1, Math.trunc(maxPages) || 1);
+
+  try {
+    const captures: CaptureRecord[] = [];
+    let offset = 0;
+
+    for (let page = 0; page < normalizedMaxPages; page += 1) {
+      const payload = await listCaptures(normalizedPageSize, offset, options);
+      captures.push(...payload.captures);
+
+      if (payload.captures.length < normalizedPageSize) {
+        break;
+      }
+
+      offset += payload.captures.length;
+    }
+
+    return captures;
+  } catch (error) {
+    console.error('Failed to load captures in range', error);
+    return [];
+  }
+}
+
+export async function getCosts(options: TimeRangeOptions = {}): Promise<CostBreakdown | null> {
+  const params = new URLSearchParams();
+  appendTimeRangeParams(params, options);
+  const query = params.toString();
+
+  try {
+    const response = await fetch(`/api/costs${query ? `?${query}` : ''}`, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`costs request failed (${response.status})`);
+    }
+
+    const payload: unknown = await response.json();
+    if (!isCostBreakdown(payload)) {
+      console.warn('Unexpected cost payload shape', payload);
+      return null;
+    }
+
+    return payload;
+  } catch (error) {
+    console.error('Failed to load costs', error);
     return null;
   }
 }

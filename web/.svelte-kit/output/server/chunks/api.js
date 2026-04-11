@@ -38,7 +38,7 @@ function isAppsResponse(value) {
 }
 function isInsightRecord(value) {
 	if (!isRecord(value) || !isRecord(value.data)) return false;
-	return typeof value.id === "number" && typeof value.insight_type === "string" && (typeof value.narrative === "string" || value.narrative === null || value.narrative === void 0) && (typeof value.window_start === "string" || value.window_start === null || value.window_start === void 0) && (typeof value.window_end === "string" || value.window_end === null || value.window_end === void 0);
+	return typeof value.id === "number" && typeof value.insight_type === "string" && (typeof value.narrative === "string" || value.narrative === null || value.narrative === void 0) && (typeof value.window_start === "string" || value.window_start === null || value.window_start === void 0) && (typeof value.window_end === "string" || value.window_end === null || value.window_end === void 0) && (typeof value.tokens_used === "number" || value.tokens_used === null || value.tokens_used === void 0) && (typeof value.cost_cents === "number" || value.cost_cents === null || value.cost_cents === void 0);
 }
 function isInsightListResponse(value) {
 	if (!isRecord(value)) return false;
@@ -46,6 +46,34 @@ function isInsightListResponse(value) {
 }
 function isDailyInsight(value) {
 	return isInsightRecord(value);
+}
+function isProjectTimeAllocation(value) {
+	if (!isRecord(value)) return false;
+	return (typeof value.project === "string" || value.project === null || value.project === void 0) && typeof value.capture_count === "number";
+}
+function isProjectTimeAllocationResponse(value) {
+	if (!isRecord(value)) return false;
+	return Array.isArray(value.projects) && value.projects.every((entry) => isProjectTimeAllocation(entry));
+}
+function isTopicFrequency(value) {
+	if (!isRecord(value)) return false;
+	return typeof value.topic === "string" && typeof value.capture_count === "number";
+}
+function isTopicFrequencyResponse(value) {
+	if (!isRecord(value)) return false;
+	return Array.isArray(value.topics) && value.topics.every((entry) => isTopicFrequency(entry));
+}
+function isCostSummary(value) {
+	if (!isRecord(value)) return false;
+	return typeof value.tokens_used === "number" && typeof value.reported_cost_cents === "number";
+}
+function isDailyCostSummary(value) {
+	if (!isRecord(value)) return false;
+	return isCostSummary(value) && typeof value.date === "string";
+}
+function isCostBreakdown(value) {
+	if (!isRecord(value)) return false;
+	return isCostSummary(value.total) && isCostSummary(value.extraction) && isCostSummary(value.synthesis) && Array.isArray(value.by_day) && value.by_day.every((entry) => isDailyCostSummary(entry));
 }
 var EMPTY_STATS = {
 	capture_count: 0,
@@ -61,6 +89,12 @@ function normalizeDateParam(date) {
 	const normalizedDate = date.trim();
 	if (!normalizedDate) throw new Error("date is required");
 	return normalizedDate;
+}
+function appendTimeRangeParams(params, options) {
+	const from = options.from?.trim();
+	if (from) params.set("from", from);
+	const to = options.to?.trim();
+	if (to) params.set("to", to);
 }
 async function listCaptures(limit = 60, offset = 0, options = {}) {
 	const params = new URLSearchParams({
@@ -201,5 +235,107 @@ async function getDailyInsight(date) {
 		return null;
 	}
 }
+async function getDailyInsightsRange(options) {
+	let normalizedFrom;
+	let normalizedTo;
+	try {
+		normalizedFrom = normalizeDateParam(options.from);
+		normalizedTo = normalizeDateParam(options.to);
+	} catch (error) {
+		console.warn("Skipping daily insights range request due to invalid date range", error);
+		return [];
+	}
+	const params = new URLSearchParams({
+		from: normalizedFrom,
+		to: normalizedTo
+	});
+	try {
+		const response = await fetch(`/api/insights/daily?${params.toString()}`, { headers: { Accept: "application/json" } });
+		if (response.status === 404) return [];
+		if (!response.ok) throw new Error(`daily insights range request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isInsightListResponse(payload)) {
+			console.warn("Unexpected daily insights range payload shape", payload);
+			return [];
+		}
+		return payload.insights;
+	} catch (error) {
+		console.error("Failed to load daily insights range", error);
+		return [];
+	}
+}
+async function getProjectTimeAllocations(options = {}) {
+	const params = new URLSearchParams();
+	appendTimeRangeParams(params, options);
+	const query = params.toString();
+	try {
+		const response = await fetch(`/api/insights/projects${query ? `?${query}` : ""}`, { headers: { Accept: "application/json" } });
+		if (!response.ok) throw new Error(`project allocation request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isProjectTimeAllocationResponse(payload)) {
+			console.warn("Unexpected project allocation payload shape", payload);
+			return [];
+		}
+		return payload.projects;
+	} catch (error) {
+		console.error("Failed to load project allocations", error);
+		return [];
+	}
+}
+async function getTopicFrequencies(options = {}) {
+	const params = new URLSearchParams();
+	appendTimeRangeParams(params, options);
+	const query = params.toString();
+	try {
+		const response = await fetch(`/api/insights/topics${query ? `?${query}` : ""}`, { headers: { Accept: "application/json" } });
+		if (!response.ok) throw new Error(`topic frequency request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isTopicFrequencyResponse(payload)) {
+			console.warn("Unexpected topic frequency payload shape", payload);
+			return [];
+		}
+		return payload.topics;
+	} catch (error) {
+		console.error("Failed to load topic frequencies", error);
+		return [];
+	}
+}
+async function listCapturesInRange(options = {}, pageSize = 500, maxPages = 20) {
+	const normalizedPageSize = Math.max(1, Math.min(500, Math.trunc(pageSize) || 500));
+	const normalizedMaxPages = Math.max(1, Math.trunc(maxPages) || 1);
+	try {
+		const captures = [];
+		let offset = 0;
+		for (let page = 0; page < normalizedMaxPages; page += 1) {
+			const payload = await listCaptures(normalizedPageSize, offset, options);
+			captures.push(...payload.captures);
+			if (payload.captures.length < normalizedPageSize) break;
+			offset += payload.captures.length;
+		}
+		return captures;
+	} catch (error) {
+		console.error("Failed to load captures in range", error);
+		return [];
+	}
+}
+async function getCosts(options = {}) {
+	const params = new URLSearchParams();
+	appendTimeRangeParams(params, options);
+	const query = params.toString();
+	try {
+		const response = await fetch(`/api/costs${query ? `?${query}` : ""}`, { headers: { Accept: "application/json" } });
+		if (response.status === 404) return null;
+		if (!response.ok) throw new Error(`costs request failed (${response.status})`);
+		const payload = await response.json();
+		if (!isCostBreakdown(payload)) {
+			console.warn("Unexpected cost payload shape", payload);
+			return null;
+		}
+		return payload;
+	} catch (error) {
+		console.error("Failed to load costs", error);
+		return null;
+	}
+}
 //#endregion
-export { getHealth as a, listCaptures as c, getDailyInsight as i, getCaptureDetail as n, getHourlyInsights as o, getCurrentInsight as r, getStats as s, getApps as t };
+export { getDailyInsight as a, getHourlyInsights as c, getTopicFrequencies as d, listCaptures as f, getCurrentInsight as i, getProjectTimeAllocations as l, getCaptureDetail as n, getDailyInsightsRange as o, listCapturesInRange as p, getCosts as r, getHealth as s, getApps as t, getStats as u };

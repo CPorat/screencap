@@ -286,3 +286,13 @@ Branch: ralph/v1-implementation
   - Seeded SQLite fixtures that vary project/topic/app values make query-param filter behavior and FTS relevance regressions easy to catch in browser tests.
   - Keep Stats as an explicit placeholder during Search-story completion so route scaffolding does not leak non-goal scope into delivery validation.
 ---
+## 2026-04-11 08:07:46 UTC - US-019
+- Finalized the Svelte Stats view delivery with production UI polish and end-to-end `/api/*` integration for chart and metric panels.
+- Added Chart.js visualizations with derived date-range handling and resilient fallback calculations when stats endpoints are unavailable or partially populated.
+- Verified Stats rendering and interactions with Puppeteer against seeded SQLite data to confirm chart correctness, empty-state behavior, and backend-disconnected safety.
+- Files changed: .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Derive Stats date ranges from capture timestamps first, then fall back to API aggregates only when complete; mixed strategies can silently skew charts.
+  - Keep fallback calculations centralized at the view-model boundary so Chart.js components stay deterministic under missing endpoint fields.
+  - Seeded SQLite fixtures plus Puppeteer flows are the fastest reliable regression signal for dashboard-style routes with temporal aggregation logic.
+---

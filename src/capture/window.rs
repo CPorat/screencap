@@ -11,14 +11,6 @@ pub fn get_active_window() -> Result<WindowInfo> {
     native::get_active_window()
 }
 
-pub fn start_app_change_listener(callback: extern "C" fn()) {
-    native::start_app_change_listener(callback);
-}
-
-pub fn stop_app_change_listener() {
-    native::stop_app_change_listener();
-}
-
 #[cfg(not(feature = "mock-capture"))]
 mod native {
     use std::ffi::{c_char, CStr};
@@ -37,12 +29,6 @@ mod native {
 
         #[link_name = "free_bridge_string"]
         fn ffi_free_bridge_string(value: *mut c_char);
-
-        #[link_name = "start_app_change_listener"]
-        fn ffi_start_app_change_listener(callback: extern "C" fn());
-
-        #[link_name = "stop_app_change_listener"]
-        fn ffi_stop_app_change_listener();
     }
 
     pub(super) fn get_active_window() -> Result<WindowInfo> {
@@ -64,14 +50,6 @@ mod native {
             window_title: window_title.to_string()?,
             bundle_id: bundle_id.to_string()?,
         })
-    }
-
-    pub(super) fn start_app_change_listener(callback: extern "C" fn()) {
-        unsafe { ffi_start_app_change_listener(callback) };
-    }
-
-    pub(super) fn stop_app_change_listener() {
-        unsafe { ffi_stop_app_change_listener() };
     }
 
     struct BridgeString {
@@ -116,10 +94,6 @@ mod native {
             bundle_id: "com.mock.app".into(),
         })
     }
-
-    pub(super) fn start_app_change_listener(_callback: extern "C" fn()) {}
-
-    pub(super) fn stop_app_change_listener() {}
 }
 
 #[cfg(all(test, feature = "mock-capture"))]

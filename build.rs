@@ -190,7 +190,13 @@ fn compile_swift_bridge() -> Result<(), String> {
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=screencap_swift");
 
-    for framework in ["AppKit", "CoreGraphics", "Foundation", "ScreenCaptureKit"] {
+    for framework in [
+        "AppKit",
+        "ApplicationServices",
+        "CoreGraphics",
+        "Foundation",
+        "ScreenCaptureKit",
+    ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
 

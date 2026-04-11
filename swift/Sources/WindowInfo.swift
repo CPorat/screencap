@@ -3,39 +3,11 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-
-private var appChangeObserver: NSObjectProtocol?
-
-@_cdecl("start_app_change_listener")
-public func start_app_change_listener(_ callback: (@convention(c) () -> Void)?) {
-    guard let callback else {
-        return
-    }
-
-    stop_app_change_listener()
-    appChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-        forName: NSWorkspace.didActivateApplicationNotification,
-        object: nil,
-        queue: nil
-    ) { _ in
-        callback()
-    }
-}
-
-@_cdecl("stop_app_change_listener")
-public func stop_app_change_listener() {
-    guard let observer = appChangeObserver else {
-        return
-    }
-
-    NSWorkspace.shared.notificationCenter.removeObserver(observer)
-    appChangeObserver = nil
-}
-
 private enum WindowInfoBridgeError: Error {
     case missingFrontmostApplication
     case stringAllocationFailed
 }
+
 
 private struct ActiveWindowInfo {
     let appName: String

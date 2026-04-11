@@ -4,10 +4,7 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{self, Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex, OnceLock,
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -25,6 +22,7 @@ use crate::{
     ai::provider::ProviderError,
     api,
     capture::{
+        events,
         screenshot,
         window::{self, WindowInfo},
     },
@@ -46,50 +44,62 @@ const DAILY_PRUNE_HOUR_UTC: u32 = 2;
 
 pub static CAPTURE_PAUSED: AtomicBool = AtomicBool::new(false);
 
-static APP_CHANGE_TRIGGER_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
-
-fn app_change_trigger_sender_slot() -> &'static Mutex<Option<mpsc::Sender<()>>> {
-    APP_CHANGE_TRIGGER_SENDER.get_or_init(|| Mutex::new(None))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureWakeReason {
+    TimerFallback,
+    Event(events::CaptureTrigger),
 }
 
-fn set_app_change_trigger_sender(sender: mpsc::Sender<()>) {
-    let mut guard = app_change_trigger_sender_slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *guard = Some(sender);
+#[derive(Debug, Clone, Copy)]
+struct PendingEventCapture {
+    trigger: events::CaptureTrigger,
+    capture_at: time::Instant,
 }
 
-fn clear_app_change_trigger_sender() {
-    let mut guard = app_change_trigger_sender_slot()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *guard = None;
+#[derive(Debug, Clone, Copy)]
+struct CaptureWakeScheduler {
+    idle_interval: Duration,
+    event_settle: Duration,
+    next_timer_capture_at: time::Instant,
+    pending_event_capture: Option<PendingEventCapture>,
 }
 
-extern "C" fn on_active_app_change() {
-    let sender = app_change_trigger_sender_slot()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone());
-    if let Some(sender) = sender {
-        let _ = sender.try_send(());
+impl CaptureWakeScheduler {
+    fn new(now: time::Instant, idle_interval: Duration, event_settle: Duration) -> Self {
+        Self {
+            idle_interval,
+            event_settle,
+            next_timer_capture_at: now,
+            pending_event_capture: None,
+        }
     }
-}
 
-struct AppChangeListenerGuard;
-
-impl AppChangeListenerGuard {
-    fn start(sender: mpsc::Sender<()>) -> Self {
-        set_app_change_trigger_sender(sender);
-        window::start_app_change_listener(on_active_app_change);
-        Self
+    fn timer_deadline(&self) -> Option<time::Instant> {
+        self.pending_event_capture
+            .is_none()
+            .then_some(self.next_timer_capture_at)
     }
-}
 
-impl Drop for AppChangeListenerGuard {
-    fn drop(&mut self) {
-        window::stop_app_change_listener();
-        clear_app_change_trigger_sender();
+    fn event_deadline(&self) -> Option<time::Instant> {
+        self.pending_event_capture.map(|pending| pending.capture_at)
+    }
+
+    fn record_event(&mut self, trigger: events::CaptureTrigger, now: time::Instant) {
+        self.pending_event_capture = Some(PendingEventCapture {
+            trigger,
+            capture_at: now + self.event_settle,
+        });
+    }
+
+    fn take_pending_event_wake(&mut self) -> Option<CaptureWakeReason> {
+        self.pending_event_capture
+            .take()
+            .map(|pending| CaptureWakeReason::Event(pending.trigger))
+    }
+
+    fn capture_completed(&mut self, now: time::Instant) {
+        self.pending_event_capture = None;
+        self.next_timer_capture_at = now + self.idle_interval;
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +236,7 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
     let mut capture_task = tokio::spawn(run_capture_loop(
         capture_loop,
         config.capture.idle_interval_secs,
+        config.capture.event_settle_ms,
         config.storage.max_age_days,
         shutdown_rx.clone(),
     ));
@@ -476,24 +487,49 @@ fn is_nonfatal_pipeline_init_error(error: &anyhow::Error) -> bool {
 async fn run_capture_loop(
     mut capture_loop: CaptureLoop,
     idle_interval_secs: u64,
+    event_settle_ms: u64,
     retention_days: u32,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let idle_interval = Duration::from_secs(idle_interval_secs);
-    let (app_change_trigger_tx, mut app_change_trigger_rx) = mpsc::channel(1);
-    let _app_change_listener_guard = AppChangeListenerGuard::start(app_change_trigger_tx);
+    let event_settle = Duration::from_millis(event_settle_ms);
+    let (event_trigger_tx, mut event_trigger_rx) = mpsc::channel(32);
+    let _event_listener_guard = match events::start_capture_trigger_listener(
+        event_trigger_tx,
+        idle_interval,
+    ) {
+        events::EventListenerStart::Active(guard) => Some(guard),
+        events::EventListenerStart::Disabled { reason } => {
+            warn!(reason = %reason, "event-driven capture disabled; falling back to timer-only mode");
+            None
+        }
+    };
 
-    let mut next_capture_at = time::Instant::now();
+    let mut wake_scheduler = CaptureWakeScheduler::new(time::Instant::now(), idle_interval, event_settle);
+    let mut event_listener_closed = false;
     let mut last_prune_date: Option<NaiveDate> = None;
     loop {
-        tokio::select! {
-            _ = time::sleep_until(next_capture_at) => {}
-            maybe_trigger = app_change_trigger_rx.recv() => {
-                if maybe_trigger.is_none() {
-                    next_capture_at = time::Instant::now() + idle_interval;
-                    continue;
+        let timer_deadline = wake_scheduler.timer_deadline();
+        let event_deadline = wake_scheduler.event_deadline();
+        let disabled_deadline = time::Instant::now() + Duration::from_secs(86_400);
+        let timer_deadline = timer_deadline.unwrap_or(disabled_deadline);
+        let event_deadline = event_deadline.unwrap_or(disabled_deadline);
+        let wake_reason = tokio::select! {
+            _ = time::sleep_until(timer_deadline), if wake_scheduler.timer_deadline().is_some() => {
+                Some(CaptureWakeReason::TimerFallback)
+            }
+            _ = time::sleep_until(event_deadline), if wake_scheduler.event_deadline().is_some() => {
+                wake_scheduler.take_pending_event_wake()
+            }
+            maybe_trigger = event_trigger_rx.recv(), if !event_listener_closed => {
+                match maybe_trigger {
+                    Some(trigger) => wake_scheduler.record_event(trigger, time::Instant::now()),
+                    None => {
+                        event_listener_closed = true;
+                        debug!("event-driven capture listener stopped");
+                    }
                 }
-                debug!("capture triggered by active application change");
+                continue;
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -501,6 +537,16 @@ async fn run_capture_loop(
                 }
                 continue;
             }
+        };
+
+        match wake_reason {
+            Some(CaptureWakeReason::TimerFallback) => {
+                debug!("capture triggered by idle fallback timer");
+            }
+            Some(CaptureWakeReason::Event(trigger)) => {
+                debug!(?trigger, settle_ms = event_settle_ms, "capture triggered by settled event activity");
+            }
+            None => continue,
         }
 
         if CAPTURE_PAUSED.load(Ordering::SeqCst) {
@@ -518,7 +564,7 @@ async fn run_capture_loop(
             error!(error = %err, retention_days, "daily prune cycle failed");
         }
 
-        next_capture_at = time::Instant::now() + idle_interval;
+        wake_scheduler.capture_completed(time::Instant::now());
     }
 
     Ok(())
@@ -1089,6 +1135,74 @@ mod exclusion_pattern_tests {
     }
 }
 
+#[cfg(test)]
+mod wake_scheduler_tests {
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
+    use super::{events, CaptureWakeReason, CaptureWakeScheduler};
+
+    #[test]
+    fn event_wake_suppresses_idle_timer_until_settle_deadline() {
+        let now = Instant::now();
+        let idle_interval = Duration::from_secs(300);
+        let settle = Duration::from_millis(500);
+        let mut scheduler = CaptureWakeScheduler::new(now, idle_interval, settle);
+
+        assert_eq!(scheduler.timer_deadline(), Some(now));
+        scheduler.record_event(events::CaptureTrigger::AppSwitch, now + Duration::from_secs(1));
+
+        assert_eq!(scheduler.timer_deadline(), None);
+        assert_eq!(
+            scheduler.event_deadline(),
+            Some(now + Duration::from_secs(1) + settle)
+        );
+    }
+
+    #[test]
+    fn later_event_extends_settle_deadline_and_keeps_latest_trigger() {
+        let now = Instant::now();
+        let settle = Duration::from_millis(500);
+        let mut scheduler = CaptureWakeScheduler::new(now, Duration::from_secs(300), settle);
+
+        scheduler.record_event(events::CaptureTrigger::AppSwitch, now + Duration::from_secs(1));
+        scheduler.record_event(
+            events::CaptureTrigger::KeyboardBurst,
+            now + Duration::from_secs(2),
+        );
+
+        assert_eq!(
+            scheduler.event_deadline(),
+            Some(now + Duration::from_secs(2) + settle)
+        );
+        assert_eq!(
+            scheduler.take_pending_event_wake(),
+            Some(CaptureWakeReason::Event(
+                events::CaptureTrigger::KeyboardBurst,
+            ))
+        );
+    }
+
+    #[test]
+    fn completed_capture_reschedules_idle_timer_and_clears_pending_event() {
+        let now = Instant::now();
+        let idle_interval = Duration::from_secs(300);
+        let settle = Duration::from_millis(500);
+        let mut scheduler = CaptureWakeScheduler::new(now, idle_interval, settle);
+
+        scheduler.record_event(events::CaptureTrigger::MouseResume, now + Duration::from_secs(5));
+        scheduler.capture_completed(now + Duration::from_secs(6));
+
+        assert_eq!(
+            scheduler.timer_deadline(),
+            Some(now + Duration::from_secs(6) + idle_interval)
+        );
+        assert_eq!(scheduler.event_deadline(), None);
+    }
+}
+
+
 #[cfg(all(test, feature = "mock-capture"))]
 mod tests {
     use std::{
@@ -1100,12 +1214,8 @@ mod tests {
     use anyhow::Result;
     use chrono::TimeZone;
 
-    use super::{
-        clear_app_change_trigger_sender, on_active_app_change, set_app_change_trigger_sender,
-        status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord,
-    };
+    use super::{status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord};
     use crate::config::AppConfig;
-    use tokio::sync::mpsc::error::TryRecvError;
 
     fn temp_home_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1125,17 +1235,6 @@ mod tests {
         config
     }
 
-    #[test]
-    fn active_app_change_callback_enqueues_trigger() {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        set_app_change_trigger_sender(sender);
-
-        on_active_app_change();
-        assert!(matches!(receiver.try_recv(), Ok(())));
-        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
-
-        clear_app_change_trigger_sender();
-    }
 
     #[test]
     fn invalid_excluded_window_title_regex_fails_capture_loop_open() {

@@ -8,6 +8,8 @@ Branch: ralph/v1-implementation
 
 - Event-driven capture triggers should bridge `NSWorkspace.didActivateApplicationNotification` through a C callback into a bounded Rust `mpsc` channel managed by an RAII listener guard, so app-switch captures fire immediately without leaking observers.
 
+- Event-driven capture should keep native code to raw app-switch/key-down/mouse-move callbacks, let `src/capture/events.rs` detect keyboard bursts and post-idle mouse resumes, and leave the daemon responsible for the final settle-time debounce so CGEventTap policy stays unit-testable in Rust.
+
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
@@ -517,4 +519,14 @@ Branch: ralph/v1-implementation
   - Patterns discovered: menu bar daemon controllers should treat `screencap status` stdout as the source of truth for liveness instead of assuming exit-code semantics.
   - Gotchas encountered: quitting the menu bar app must not stop a daemon it did not launch, or the UI can kill an externally managed session.
   - Useful context: a small Foundation-only controller plus Swift Testing fakes keeps AppKit wiring thin while still verifying launch/stop ownership behavior.
+---
+## 2026-04-11 15:13:31 UTC - US-025
+- Implemented event-driven capture via a new native CGEventTap bridge plus a Rust-side detector that emits app-switch, keyboard-burst, and post-idle mouse-resume triggers into the daemon capture loop.
+- Added daemon wake scheduling so event-driven captures wait for `event_settle_ms`, preserve timer fallback behavior, and still honor persisted dedup/exclusion rules before writing screenshots.
+- Added mock-capture coverage for trigger detection, listener availability fallback, and wake scheduling, while keeping existing daemon CLI/e2e tests green.
+- Files changed: AGENTS.md, build.rs, src/capture/events.rs, src/capture/window.rs, src/daemon.rs, swift/Sources/Events.swift, swift/Sources/WindowInfo.swift, swift/Sources/bridge.h, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep CGEventTap/native hooks limited to raw callbacks and do the burst/idle policy in Rust so the behavior is deterministic under unit tests.
+  - Gotchas encountered: `tokio::select!` branch futures are still evaluated before guards short-circuit, so optional sleep deadlines must not unwrap `None` inside the future expression.
+  - Useful context: if Accessibility permission or CGEventTap setup is unavailable, disable the whole event-driven listener and let the timer fallback continue with a warning instead of partially enabling only some native triggers.
 ---

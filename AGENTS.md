@@ -51,6 +51,7 @@ Three-layer pipeline:
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
 - Swift bridge build integration should compile sources from `swift/Sources/` via `build.rs`, keep the ABI C-callable, and keep `mock-capture` fallbacks in Rust so tests can emit real JPEGs without macOS permissions.
 - When the Swift bridge spans multiple source files, have `build.rs` invoke `swiftc -emit-library -static` over the full `swift/Sources/` set; `-emit-object -o <single-file>` breaks as soon as a second Swift source is added.
+- Event-driven capture should keep the native bridge limited to raw app-switch/key-down/mouse-move callbacks, feed those callbacks into `src/capture/events.rs` for keyboard-burst and post-idle mouse-resume detection, and let the daemon apply `event_settle_ms` before capturing so CGEventTap glue stays minimal while capture policy remains unit-testable.
 - When deriving the frontmost window title from `CGWindowListCopyWindowInfo`, treat the first layer-0 window for the frontmost app PID as authoritative; if that window has no title, return an empty string instead of scanning later windows from the same app.
 - When one capture cycle spans multiple displays, write all screenshots for that cycle first and persist their `captures` rows in one SQLite transaction; if any display capture or DB write fails, delete that cycle’s new JPEGs so disk state cannot drift from the database.
 - All timestamps are ISO 8601 in UTC.

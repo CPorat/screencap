@@ -29,6 +29,7 @@ use crate::{
     },
 };
 
+use super::static_assets;
 const DEFAULT_CAPTURE_LIMIT: usize = 100;
 const MAX_CAPTURE_LIMIT: usize = 500;
 const DEFAULT_SEARCH_LIMIT: usize = 50;
@@ -237,8 +238,11 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/insights/projects", get(list_project_time_allocations))
         .route("/api/insights/topics", get(list_topic_frequencies))
         .route("/api/search", get(search_extractions))
+        .route("/", get(static_assets::root_handler))
+        .route("/{*path}", get(static_assets::static_handler))
         .with_state(state)
 }
+
 
 async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
     Json(HealthResponse {

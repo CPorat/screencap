@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ralph — Autonomous AI agent loop for Screencap
+# Ralph — Autonomous AI agent loop
 # Runs a coding agent repeatedly until all PRD stories are complete.
 #
 # Supported tools:
@@ -13,7 +13,16 @@
 #   in prd.json to override the defaults for that story. Example:
 #     { "id": "US-015", "tool": "omp", "model": "claude-sonnet-4", "provider": "anthropic", ... }
 #
-# Usage: ./.ralph/scripts/ralph.sh [--tool claude|codex|opencode|omp] [--provider <provider>] [--model <model>] [--thinking <level>] [max_iterations]
+# Expected directory layout (.ralph/ at project root):
+#   .ralph/
+#   ├── prd.json              # Product requirements document
+#   ├── progress.txt          # Append-only progress log
+#   ├── scripts/
+#   │   ├── ralph.sh          # This script (or symlinked from agent-workspace)
+#   │   └── PROMPT.md         # Agent prompt template
+#   └── archive/              # Auto-archived previous runs
+#
+# Usage: .ralph/scripts/ralph.sh [--tool claude|codex|opencode|omp] [--provider <provider>] [--model <model>] [--thinking <level>] [max_iterations]
 # Default: claude, 30 iterations. --provider, --model, --thinking are passed to omp only.
 
 set -e
@@ -86,12 +95,13 @@ LAST_BRANCH_FILE="$RALPH_DIR/.last-branch"
 
 if [ ! -f "$PRD_FILE" ]; then
   echo "Error: No prd.json found at $PRD_FILE"
-  echo "Create a PRD first, then convert it with the ralph skill."
+  echo "Create a PRD first. See: https://github.com/snarktank/ralph"
   exit 1
 fi
 
 if [ ! -f "$PROMPT_FILE" ]; then
   echo "Error: No PROMPT.md found at $PROMPT_FILE"
+  echo "Create a prompt template at $PROMPT_FILE"
   exit 1
 fi
 
@@ -109,7 +119,6 @@ check_tool_installed() {
   fi
 }
 
-# Only check the default tool at startup; per-task overrides are checked at runtime
 case "$TOOL" in
   claude)   check_tool_installed "claude"   "npm install -g @anthropic-ai/claude-code" ;;
   codex)    check_tool_installed "codex"    "npm install -g @openai/codex" ;;
@@ -157,14 +166,17 @@ fi
 
 # ── Run the loop ─────────────────────────────────────────────────────
 
+PROJECT_NAME=$(jq -r '.project // "project"' "$PRD_FILE")
 REMAINING=$(jq '[.userStories[] | select(.passes == false)] | length' "$PRD_FILE")
 TOTAL=$(jq '[.userStories[]] | length' "$PRD_FILE")
 
-echo ""
 MODEL_DISPLAY="${MODEL:-default}"
 THINKING_DISPLAY="${THINKING:-default}"
+
+echo ""
 echo "╔═══════════════════════════════════════════════════╗"
-echo "║  Ralph — Screencap Autonomous Agent Loop          ║"
+echo "║  Ralph — Autonomous Agent Loop                    ║"
+echo "║  Project: $PROJECT_NAME"
 echo "║  Tool: $TOOL | Model: $MODEL_DISPLAY | Thinking: $THINKING_DISPLAY"
 echo "║  Max iterations: $MAX_ITERATIONS"
 echo "║  Stories: $((TOTAL - REMAINING))/$TOTAL complete, $REMAINING remaining"
@@ -182,20 +194,20 @@ run_agent() {
 
   case "$use_tool" in
     claude)
-      claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1
+      claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1 | tee /dev/stderr
       ;;
     codex)
-      codex exec --full-auto -C "$PROJECT_DIR" "$prompt_content" 2>&1
+      codex exec --full-auto -C "$PROJECT_DIR" "$prompt_content" 2>&1 | tee /dev/stderr
       ;;
     opencode)
-      opencode run "$prompt_content" 2>&1
+      opencode run "$prompt_content" 2>&1 | tee /dev/stderr
       ;;
     omp)
       local omp_args=(-p)
       [ -n "$use_provider" ] && omp_args+=(--provider "$use_provider")
       [ -n "$use_model" ] && omp_args+=(--model "$use_model")
       [ -n "$use_thinking" ] && omp_args+=(--thinking "$use_thinking")
-      omp "${omp_args[@]}" @"$prompt_file" 2>&1
+      omp "${omp_args[@]}" @"$prompt_file" 2>&1 | tee /dev/stderr
       ;;
   esac
 }
@@ -209,20 +221,17 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     exit 0
   fi
 
-  # Get the next story and any per-task overrides
   NEXT_STORY=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | "\(.id): \(.title)"' "$PRD_FILE")
   TASK_TOOL=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .tool // empty' "$PRD_FILE")
   TASK_MODEL=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .model // empty' "$PRD_FILE")
   TASK_PROVIDER=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .provider // empty' "$PRD_FILE")
   TASK_THINKING=$(jq -r '[.userStories[] | select(.passes == false)] | sort_by(.priority) | .[0] | .thinking // empty' "$PRD_FILE")
 
-  # Use per-task overrides if set, otherwise fall back to CLI defaults
   USE_TOOL="${TASK_TOOL:-$TOOL}"
   USE_MODEL="${TASK_MODEL:-$MODEL}"
   USE_PROVIDER="${TASK_PROVIDER:-$PROVIDER}"
   USE_THINKING="${TASK_THINKING:-$THINKING}"
 
-  # Validate the tool for this iteration
   if ! echo "$VALID_TOOLS" | grep -qw "$USE_TOOL"; then
     echo "Warning: Story specifies invalid tool '$USE_TOOL', falling back to '$TOOL'"
     USE_TOOL="$TOOL"
@@ -235,16 +244,13 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   fi
   echo "═══════════════════════════════════════════════════"
 
-  ITER_LOG="$RALPH_DIR/.iter-output.log"
-  run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING" | tee "$ITER_LOG" || true
+  OUTPUT=$(run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING") || true
 
-  if grep -q "<promise>COMPLETE</promise>" "$ITER_LOG" 2>/dev/null; then
+  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
     echo ""
-    echo "All tasks completed after $i iterations!"
-    rm -f "$ITER_LOG"
+    echo "Ralph completed all tasks after $i iterations!"
     exit 0
   fi
-  rm -f "$ITER_LOG"
 
   echo ""
   echo "Iteration $i complete. Continuing..."

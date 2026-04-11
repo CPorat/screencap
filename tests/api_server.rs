@@ -176,6 +176,73 @@ async fn wait_for_server(client: &Client, base_url: &str) -> Result<()> {
 }
 
 #[tokio::test]
+async fn api_server_serves_embedded_ui_and_spa_fallback() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("embedded-ui")?;
+    let config = test_config(home.path())?;
+
+    let listener = api::server::bind(&config).await?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let server = tokio::spawn(api::server::serve(
+        listener,
+        config.clone(),
+        home.path().to_path_buf(),
+        shutdown_rx,
+    ));
+
+    let client = Client::new();
+    let base_url = format!("http://127.0.0.1:{}", config.server.port);
+    wait_for_server(&client, &base_url).await?;
+
+    let health_response = client
+        .get(format!("{base_url}/api/health"))
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(
+        health_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("content type header should exist"),
+        "application/json"
+    );
+    let health: HealthResponse = health_response.json().await?;
+    assert_eq!(health.status, "ok");
+
+    let root_response = client.get(format!("{base_url}/")).send().await?;
+    assert_eq!(root_response.status(), 200);
+    assert_eq!(
+        root_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("content type header should exist"),
+        "text/html"
+    );
+    let root_html = root_response.text().await?;
+    assert!(root_html.contains("<html"));
+
+    let fallback_response = client.get(format!("{base_url}/timeline")).send().await?;
+    assert_eq!(fallback_response.status(), 200);
+    assert_eq!(
+        fallback_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("content type header should exist"),
+        "text/html"
+    );
+    let fallback_html = fallback_response.text().await?;
+    assert!(fallback_html.contains("<html"));
+    assert_eq!(fallback_html, root_html);
+
+    shutdown_tx
+        .send(true)
+        .expect("server shutdown channel should accept signal");
+    server.await??;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn api_server_serves_rest_endpoints() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("rest")?;
@@ -662,7 +729,10 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         ))
         .send()
         .await?;
-    println!("rejected_screenshot status: {}", rejected_screenshot.status());
+    println!(
+        "rejected_screenshot status: {}",
+        rejected_screenshot.status()
+    );
     assert_eq!(rejected_screenshot.status(), 404);
 
     let html_response = client.get(format!("{base_url}/")).send().await?;
@@ -678,7 +748,7 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     );
     let html_text = html_response.text().await?;
     assert!(html_text.contains("<html"));
-    assert!(html_text.contains("screencap"));
+    assert!(html_text.contains("</html>"));
 
     shutdown_tx
         .send(true)

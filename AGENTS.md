@@ -27,6 +27,18 @@ Three-layer pipeline:
 
 - macOS only. Lean into Apple APIs aggressively. No cross-platform abstractions.
 - The capture layer must never touch the network. All network calls happen in the extraction and synthesis pipelines.
+- Web app shells should use SvelteKit route files (`+layout.svelte`, `+page.svelte`) with shared nav metadata in `src/lib/utils/nav.ts`, and keep `adapter-static` fallback set to `index.html` so embedded static serving handles deep links.
+- Embedded web delivery should use a dedicated npm script (for example `build:embed`) invoked by `build.rs`; allow `SCREENCAP_WEB_DEV=1` to skip npm builds and keep `web/dist/index.html` available for API-only or external `npm run dev` workflows.
+
+
+- Timeline-like Svelte views should page from `/api/captures` and hydrate only `processed` rows via `/api/captures/:id`; render pending placeholders for unprocessed rows and drive infinite loading with an intersection sentinel instead of container-specific scroll events.
+
+- Insights Svelte views should normalize raw `/api/insights/*` payloads into typed view models before rendering; parse optional/missing fields at the boundary so cards can show meaningful empty states instead of throwing on shape drift.
+
+- Search Svelte views should debounce query input, cancel stale requests, and pass app/project/from filters directly to `/api/search` so chips reflect server-ranked FTS results instead of client-side post-filtering.
+- Settings Svelte views should treat `/api/health` as the daemon liveness source, pair it with `/api/stats` telemetry for storage/capture metrics, and render an explicit disconnected state with actionable CLI recovery guidance when the backend is unavailable.
+
+
 - AI provider code uses a trait (`LlmProvider`) with `complete(prompt, images?)` and `complete_text(prompt)`. The `openai_compat` module handles OpenAI, OpenRouter, and LM Studio since they share the same API format.
 - OpenAI-compatible provider implementations should resolve provider-specific default base URLs in one helper and return response text plus optional token-usage metadata; local backends that omit usage must stay `None` instead of inventing zero-cost data.
 - When an OpenAI-compatible backend returns usage cost metadata (for example OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that omit cost should leave it `None` rather than guessing.

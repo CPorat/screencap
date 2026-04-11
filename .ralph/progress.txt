@@ -21,6 +21,15 @@ Branch: ralph/v1-implementation
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
 - When synthesis needs both extraction batch summaries and frame-level evidence, add a typed storage helper that groups `extraction_batches` with joined `captures`/`extractions`; keep multi-table SQL in `StorageDb` so prompt builders stay focused on prompt shape.
 - Daily synthesis should read typed hourly `Insight` rows from `StorageDb`, and on-demand entry points should check for an existing daily summary before opening an LLM provider so already-generated summaries stay readable without API credentials.
+- For web shell scaffolding, use SvelteKit route files (`+layout.svelte`, `+page.svelte`) with shared navigation metadata in `src/lib/utils/nav.ts` and `adapter-static` fallback `index.html` so embedded static hosting supports deep links.
+- For embedded web delivery, compile SvelteKit with `adapter-static` to `web/dist`, embed that directory via `rust-embed`, and have the Rust server fall back to `index.html` for non-API routes so deep links resolve without hash routing.
+- Keep embedded web delivery on a dedicated npm build script (`build:embed`) called from `build.rs`, and support `SCREENCAP_WEB_DEV=1` to skip npm during Rust builds while still ensuring `web/dist/index.html` exists for SPA fallback serving.
+- Timeline route pagination should read lightweight batches from `/api/captures`, hydrate only processed cards through `/api/captures/:id`, and trigger incremental loads with an intersection sentinel so infinite scroll works whether the page scrolls at window level or inside a container.
+- Insights route components should normalize polymorphic synthesis payloads (`data` shape drift, missing fields, alternate key casing) into strict UI view-models before rendering, so empty/error states stay deliberate and the UI remains resilient to API evolution.
+- Search route UIs should debounce query typing, gate stale async responses with request IDs, and keep app/project/time chips wired to server-side `/api/search` filters so relevance ranking remains authoritative.
+- Settings route UIs should derive daemon liveness from `/api/health`, pair it with `/api/stats` telemetry for storage/capture panels, and always provide a first-class disconnected state with explicit CLI recovery steps.
+
+
 
 
 
@@ -175,4 +184,76 @@ Branch: ralph/v1-implementation
 - **Learnings for future iterations:**
   - CLI read commands should use read-only storage opens and only fall back to write-mode flows for the specific command that may synthesize missing data (`today`).
   - If project allocation is derived from capture counts rather than persisted minute totals, say so in the terminal output instead of implying false precision.
+---
+
+## 2026-04-11 04:02:11 UTC - US-015
+- Re-scaffolded the web UI onto SvelteKit: replaced the legacy SPA entrypoint with route-based pages (`/`, `/insights`, `/search`, `/settings`), added a shared app shell layout with responsive sidebar navigation, and introduced reusable `src/lib` utilities/components for nav metadata, API calls, and time formatting.
+- Established the bold base visual system with CSS variables, distinctive typography, motion-aware transitions, layered atmospheric depth, and accessible navigation semantics suitable for follow-on stories.
+- Verified `npm run check` passes and performed browser navigation verification on all four routes (Timeline, Insights, Search, Settings).
+- Files changed: AGENTS.md, web/package.json, web/package-lock.json, web/svelte.config.js, web/vite.config.ts, web/tailwind.config.js, web/tsconfig.json, web/src/app.css, web/src/app.html, web/src/lib/components/Layout.svelte, web/src/lib/components/SidebarNav.svelte, web/src/lib/components/RoutePlaceholder.svelte, web/src/lib/utils/nav.ts, web/src/lib/utils/api.ts, web/src/lib/utils/time.ts, web/src/routes/+layout.svelte, web/src/routes/+page.svelte, web/src/routes/insights/+page.svelte, web/src/routes/search/+page.svelte, web/src/routes/settings/+page.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Keep navigation metadata centralized in `src/lib/utils/nav.ts` so new routes can update shell links and iconography without duplicating route labels across components.
+  - For embedded static serving, preserve SvelteKit `adapter-static` fallback `index.html` and route-level pages together; this gives deep-link resilience without hash routing.
+  - A reusable shell placeholder component (`RoutePlaceholder.svelte`) keeps story-level scaffolding coherent while data wiring lands in later stories.
+---
+
+## 2026-04-11 04:18:38 UTC - US-015, US-016, US-017, US-018, US-019, US-033
+- Implemented the Svelte UI shell, API integration layer, Timeline/Insights/Search/Stats views, and rust-embed static asset integration with server-side SPA fallback routing.
+- Files changed: AGENTS.md, build.rs, src/api/mod.rs, src/api/server.rs, src/api/static_assets.rs, tests/api_server.rs, web/package.json, web/package-lock.json, web/svelte.config.js, web/vite.config.ts, web/tailwind.config.js, web/tsconfig.json, web/src/app.css, web/src/app.html, web/src/lib/components/*, web/src/lib/utils/*, web/src/routes/+layout.svelte, web/src/routes/+page.svelte, web/src/routes/insights/+page.svelte, web/src/routes/search/+page.svelte, web/src/routes/settings/+page.svelte, web/src/routes/stats/+page.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep Vite static output in `web/dist` as the single source of truth for `rust-embed`, and preserve an `index.html` fallback in Rust static serving so direct navigation to `/insights`, `/search`, and `/stats` works in production.
+  - Gotchas encountered: stale generated `.svelte-kit/` artifacts and legacy SPA files can mask route issues; remove them during migration to avoid mixed routing behavior.
+  - Useful context: a shared API client utility plus route-scoped SvelteKit pages keeps view wiring consistent and reduces duplicate fetch/state handling across Timeline, Search, Insights, and Stats.
+---
+
+## 2026-04-11 04:21:48 UTC - US-016
+- Implemented a production Timeline route with dedicated `web/src/lib/components/Timeline/` modules: grouped-by-hour sections, bold card treatment, per-capture extraction hydration, expandable detail panels, and pending/empty/loading states with skeleton placeholders.
+- Added incremental loading on `/api/captures` with intersection-sentinel pagination and selective `/api/captures/:id` hydration for processed captures so extraction fields (activity, project, summary, topics, people) render without overfetching pending rows.
+- Verified `npm run check` in `web/`, then ran browser verification against a seeded mock daemon on `http://127.0.0.1:8787` (capture grouping, thumbnail rendering, expansion details, pagination load from 24 → 33 cards), and ran accessibility audit via `npx --yes @axe-core/cli http://127.0.0.1:8787 --exit` with 0 violations.
+- Files changed: AGENTS.md, web/src/lib/api.ts, web/src/routes/+page.svelte, web/src/lib/components/Timeline/types.ts, web/src/lib/components/Timeline/TimelineFeed.svelte, web/src/lib/components/Timeline/TimelineHourGroup.svelte, web/src/lib/components/Timeline/TimelineCaptureCard.svelte, web/src/lib/components/Timeline/TimelineSkeleton.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - For timeline cards backed by lightweight list endpoints, keep extraction detail hydration conditional on `extraction_status === 'processed'` and expose pending placeholders for the rest; this preserves responsiveness while still surfacing rich detail when available.
+---
+
+## 2026-04-11 04:31:26 UTC - US-017
+- Implemented the Insights route UI with dedicated `web/src/lib/components/Insights/` modules: rolling-context panel, daily synthesis dashboard, and date-selectable history view wired to `/api/insights/daily` plus rolling context fetch (with `/api/insights/current` fallback while `/api/insights/rolling` is absent in the backend).
+- Added robust payload normalization for daily/rolling insight data (alternate key casing, optional fields, no-data handling), duration formatting, focus-score derivation from focus blocks when explicit scores are missing, and key-moment extraction from project accomplishments.
+- Verified `npm run check` in `web/`, browser-rendered states on `/insights` for seeded and empty dates, and accessibility with `npx --yes @axe-core/cli http://127.0.0.1:4173/insights --exit` (0 violations).
+- Files changed: AGENTS.md, web/src/routes/insights/+page.svelte, web/src/lib/components/Insights/types.ts, web/src/lib/components/Insights/RollingContextCard.svelte, web/src/lib/components/Insights/DailySummaryCard.svelte, web/src/lib/components/Insights/InsightsDashboard.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Normalize insight payloads in one boundary function before templating; synthesis JSON and API contracts evolve independently, and view-model normalization prevents brittle inline field access.
+  - Keep date-scoped daily summaries and now-scoped rolling context side-by-side; users can inspect past days without losing “what am I doing now” context.
+---
+## 2026-04-11 04:36:12 UTC - US-018
+- Rebuilt the `/search` route into a dedicated Search workspace with an autofocused large query field, debounced live querying against `/api/search`, stale-request cancellation, and server-backed app/project/time filter chips.
+- Added ranked search result cards that mirror Timeline depth (thumbnail + metadata + expandable details) while surfacing relevance percent and BM25 rank order.
+- Added robust empty-query, loading, and zero-result states with quick-prompt suggestions and fallback facet suggestions from `/api/apps` and `/api/insights/projects`.
+- Verified TypeScript/Svelte integrity with `npm run check` in `web/`, then ran browser validation on `/search` for seeded positive and no-result queries.
+- Files changed: AGENTS.md, web/src/routes/search/+page.svelte, web/src/lib/components/Search/search-client.ts, web/src/lib/components/Search/SearchWorkspace.svelte, web/src/lib/components/Search/SearchResultCard.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: search UIs stay responsive when query typing is debounced and out-of-order async responses are dropped via monotonic request IDs.
+  - Gotchas encountered: keeping filter chips server-authoritative (instead of local post-filtering) is necessary to preserve backend relevance ranking semantics.
+  - Useful context: facet chips can be bootstrapped from `/api/apps` + `/api/insights/projects` so the empty-query state is still actionable before first search.
+---
+## 2026-04-11 04:47:33 UTC - US-019
+- Replaced the `/settings` placeholder with a dedicated Settings control deck component (`web/src/lib/components/Settings/SettingsControlDeck.svelte`) that renders live daemon telemetry from `/api/health` and `/api/stats`, including status, total storage, daemon uptime, captures, and active time today.
+- Added guided operational controls in Settings: explicit instructions for editing `~/.screencap/config.toml` and restart flow, plus runnable CLI command tiles for `screencap prune` and `screencap export` with copy-to-clipboard actions.
+- Added robust disconnected-backend handling by using `/api/health` as the liveness source, showing an offline warning banner with recovery instructions while preserving safe fallback metrics.
+- Added shared API support for health polling in `web/src/lib/api.ts` (`HealthResponse`, payload guard, and `getHealth()`) so Settings uses the same typed boundary pattern as other routes.
+- Verified `npm run check` in `web/`, validated connected Settings rendering against daemon-served UI (`http://127.0.0.1:7878/settings`), validated disconnected fallback rendering on dev UI (`http://127.0.0.1:4173/settings` with backend unavailable), and ran `npx --yes @axe-core/cli http://127.0.0.1:7878/settings --exit` (0 violations).
+- Files changed: AGENTS.md, web/src/lib/api.ts, web/src/lib/components/Settings/SettingsControlDeck.svelte, web/src/routes/settings/+page.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: use `/api/health` as the canonical daemon liveness signal and combine it with `/api/stats` for telemetry cards; this keeps online/offline UX truthful even when metrics default to zero.
+  - Useful context: settings surfaces should include direct terminal commands (prune/export/restart) alongside config file guidance so operational actions remain one hop away from the telemetry state.
+---
+
+## 2026-04-11 07:03:19 UTC - US-015
+- Implemented the Svelte web app shell foundation: route-based SvelteKit scaffolding for Timeline/Insights/Search/Settings placeholders, shared layout/navigation primitives, and typed `/api/*` client utilities wired for the Rust backend contract.
+- Integrated embedded static asset delivery in Rust with `rust-embed` plus SPA fallback serving so non-API paths resolve to `index.html` while `/api/*` remains unchanged.
+- Verified UI behavior with browser automation (Puppeteer route navigation and shell rendering) and addressed accessibility issues in shell navigation semantics/labels to keep serious/critical findings at zero.
+- Files changed: AGENTS.md, build.rs, src/api/mod.rs, src/api/server.rs, src/api/static_assets.rs, tests/api_server.rs, web/package.json, web/package-lock.json, web/svelte.config.js, web/vite.config.ts, web/tailwind.config.js, web/tsconfig.json, web/src/app.css, web/src/app.html, web/src/lib/components/Layout.svelte, web/src/lib/components/SidebarNav.svelte, web/src/lib/components/RoutePlaceholder.svelte, web/src/lib/utils/nav.ts, web/src/lib/utils/api.ts, web/src/lib/utils/time.ts, web/src/routes/+layout.svelte, web/src/routes/+page.svelte, web/src/routes/insights/+page.svelte, web/src/routes/search/+page.svelte, web/src/routes/settings/+page.svelte, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - SvelteKit app-shell stories land cleanly when route placeholders and shared nav metadata are established first; feature routes can then iterate independently without reworking shell structure.
+  - Embedding `web/dist` with a server-side `index.html` fallback is the reliable deep-link strategy for SPA-style navigation under a Rust binary.
+  - Pair browser-flow verification with accessibility checks during shell setup to catch navigation semantics regressions before feature views add complexity.
 ---

@@ -11,7 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=swift/Sources");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     println!("cargo:rerun-if-env-changed=TARGET");
-
+    println!("cargo:rerun-if-env-changed=SCREENCAP_WEB_DEV");
     register_web_rerun_hints();
     if let Err(error) = build_web_ui() {
         panic!("failed to build web frontend: {error}");
@@ -68,7 +68,18 @@ fn build_web_ui() -> Result<(), String> {
     let dist_dir = web_dir.join("dist");
 
     if !web_dir.exists() {
-        return Err(format!("missing web frontend directory at {}", web_dir.display()));
+        return Err(format!(
+            "missing web frontend directory at {}",
+            web_dir.display()
+        ));
+    }
+
+    if web_dev_mode_enabled() {
+        ensure_dist_placeholder(&dist_dir)?;
+        println!(
+            "cargo:warning=SCREENCAP_WEB_DEV is set; skipping `npm run build` and embedding existing web/dist assets."
+        );
+        return Ok(());
     }
 
     if !command_available("npm") {
@@ -90,8 +101,8 @@ fn build_web_ui() -> Result<(), String> {
     }
 
     let mut npm_build = Command::new("npm");
-    npm_build.current_dir(&web_dir).arg("run").arg("build");
-    run_command(npm_build, "npm run build")?;
+    npm_build.current_dir(&web_dir).arg("run").arg("build:embed");
+    run_command(npm_build, "npm run build:embed")?;
 
     if !dist_dir.join("index.html").exists() {
         return Err(format!(
@@ -101,6 +112,15 @@ fn build_web_ui() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn web_dev_mode_enabled() -> bool {
+    env::var("SCREENCAP_WEB_DEV")
+        .map(|value| {
+            let trimmed = value.trim();
+            trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false)
 }
 
 fn command_available(command: &str) -> bool {

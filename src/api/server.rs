@@ -4,11 +4,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use axum::routing::get;
 use tokio::{net::TcpListener, sync::watch};
 
 use crate::config::AppConfig;
 
-use super::routes;
+use super::{routes, ui};
 
 pub async fn bind(config: &AppConfig) -> Result<TcpListener> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, config.server.port));
@@ -23,7 +24,7 @@ pub async fn serve(
     home: PathBuf,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let app = routes::router(&config, &home);
+    let app = routes::router(&config, &home).fallback(get(ui::serve));
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {

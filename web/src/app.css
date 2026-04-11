@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;700&display=swap');
+
+:root {
+  --bg: #0b0b0f;
+  --surface: #12131a;
+  --surface-lift: #1d1f2b;
+  --surface-border: #f7f5eb;
+  --surface-shadow: #2e5cff;
+  --text: #f7f5eb;
+  --muted: #c0bdb1;
+  --accent: #ffd000;
+  --display-font: 'Archivo Black', sans-serif;
+  --body-font: 'IBM Plex Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--body-font);
+  background:
+    radial-gradient(circle at 10% 10%, rgba(46, 92, 255, 0.25), transparent 46%),
+    radial-gradient(circle at 90% 92%, rgba(255, 208, 0, 0.13), transparent 38%),
+    var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.view {
+  padding: clamp(1.2rem, 2.8vw, 2.4rem);
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+}
+
+.view__kicker {
+  margin: 0;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.72rem;
+}
+
+.view__title {
+  margin: 0;
+  font-family: var(--display-font);
+  text-transform: uppercase;
+  font-size: clamp(1.8rem, 4.2vw, 3.2rem);
+  line-height: 0.95;
+}
+
+.view__copy {
+  margin: 0;
+  max-width: 54ch;
+  color: var(--muted);
+}
+
+.view__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.view__list li {
+  border: 2px solid var(--surface-border);
+  padding: 0.8rem 0.95rem;
+  background: var(--surface-lift);
+}

@@ -211,6 +211,7 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
 
     let client = Client::new();
     let base_url = format!("http://127.0.0.1:{}", config.server.port);
+    println!("Server running at {}", base_url);
     wait_for_server(&client, &base_url).await?;
 
     let health: HealthResponse = client
@@ -661,7 +662,23 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         ))
         .send()
         .await?;
+    println!("rejected_screenshot status: {}", rejected_screenshot.status());
     assert_eq!(rejected_screenshot.status(), 404);
+
+    let html_response = client.get(format!("{base_url}/")).send().await?;
+    println!("html response status: {}", html_response.status());
+    println!("html response headers: {:?}", html_response.headers());
+    assert_eq!(html_response.status(), 200);
+    assert_eq!(
+        html_response
+            .headers()
+            .get(CONTENT_TYPE)
+            .expect("content type header should exist"),
+        "text/html"
+    );
+    let html_text = html_response.text().await?;
+    assert!(html_text.contains("<html"));
+    assert!(html_text.contains("screencap"));
 
     shutdown_tx
         .send(true)

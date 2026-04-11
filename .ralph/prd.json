@@ -389,7 +389,7 @@
         "Browser verification via expect MCP: open localhost:7878, verify app shell renders with navigation tabs (Timeline, Insights, Search, Stats), click each tab and verify the URL changes and corresponding view container appears, verify no console errors, run accessibility_audit with 0 critical/serious violations, close"
       ],
       "priority": 16,
-      "passes": false,
+      "passes": true,
       "notes": "Keep the UI clean and minimal. No heavy component libraries. The build order matters: Svelte must compile before cargo build embeds the dist/ files. Use expect MCP tools for browser verification. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
       "tool": "omp",
       "model": "gemini-3.1-pro-preview",

@@ -52,10 +52,7 @@ fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, 
         .spawn()
         .context("failed to spawn screencap mcp")?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .context("failed to take mcp stdout")?;
+    let stdout = child.stdout.take().context("failed to take mcp stdout")?;
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
@@ -64,8 +61,9 @@ fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, 
             match line {
                 Ok(line) if line.trim().is_empty() => continue,
                 Ok(line) => {
-                    let parsed = serde_json::from_str::<Value>(&line)
-                        .map_err(|error| format!("failed to parse stdout as JSON `{line}`: {error}"));
+                    let parsed = serde_json::from_str::<Value>(&line).map_err(|error| {
+                        format!("failed to parse stdout as JSON `{line}`: {error}")
+                    });
                     let _ = tx.send(parsed);
                 }
                 Err(error) => {
@@ -80,7 +78,10 @@ fn spawn_mcp_server(home: &Path) -> Result<(Child, mpsc::Receiver<Result<Value, 
 }
 
 fn send_request(child: &mut Child, request: Value) -> Result<()> {
-    let stdin = child.stdin.as_mut().context("mcp stdin pipe is unavailable")?;
+    let stdin = child
+        .stdin
+        .as_mut()
+        .context("mcp stdin pipe is unavailable")?;
     writeln!(stdin, "{}", serde_json::to_string(&request)?).context("failed to write request")?;
     stdin.flush().context("failed to flush request")?;
     Ok(())
@@ -112,7 +113,10 @@ fn mcp_server_handles_initialize_and_tools_list() -> Result<()> {
     )?;
 
     let initialize_response = recv_response(&rx, Duration::from_secs(3))?;
-    assert_eq!(initialize_response.get("jsonrpc"), Some(&Value::String("2.0".into())));
+    assert_eq!(
+        initialize_response.get("jsonrpc"),
+        Some(&Value::String("2.0".into()))
+    );
     assert_eq!(initialize_response.get("id"), Some(&json!(1)));
     assert!(initialize_response["result"]["capabilities"]["tools"].is_object());
 
@@ -141,21 +145,13 @@ fn mcp_server_handles_initialize_and_tools_list() -> Result<()> {
     let tools = tools_list_response["result"]["tools"]
         .as_array()
         .context("tools/list response missing tools array")?;
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 2);
 
     let tool_names = tools
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .collect::<BTreeSet<_>>();
-    let expected_names = BTreeSet::from([
-        "get_current_context",
-        "search_screen_history",
-        "get_recent_activity",
-        "get_screenshot",
-        "get_daily_summary",
-        "get_project_activity",
-        "get_app_usage",
-    ]);
+    let expected_names = BTreeSet::from(["screencap.search", "screencap.stats"]);
     assert_eq!(tool_names, expected_names);
 
     let _ = child.kill();

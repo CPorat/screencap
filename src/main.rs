@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
         Some(Command::Costs) => handle_costs()?,
         Some(Command::Mcp) => {
             let config = AppConfig::load()?;
-            screencap::mcp::run_mcp_server(config)?;
+            screencap::mcp::server::run_mcp_server(config).await?;
         }
         Some(command) => {
             let _config = AppConfig::load()?;

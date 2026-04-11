@@ -243,7 +243,6 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .with_state(state)
 }
 
-
 async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",

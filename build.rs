@@ -101,7 +101,10 @@ fn build_web_ui() -> Result<(), String> {
     }
 
     let mut npm_build = Command::new("npm");
-    npm_build.current_dir(&web_dir).arg("run").arg("build:embed");
+    npm_build
+        .current_dir(&web_dir)
+        .arg("run")
+        .arg("build:embed");
     run_command(npm_build, "npm run build:embed")?;
 
     if !dist_dir.join("index.html").exists() {

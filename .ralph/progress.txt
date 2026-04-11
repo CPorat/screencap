@@ -4,6 +4,8 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
+- MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
 - Config loaders should separate where config lives from what config resolves to: accept explicit root/home inputs for tests, then create runtime directories from resolved storage and export paths after parsing.
 - When FTS search text is assembled from multiple tables, use a standalone FTS index keyed by the primary row id and rebuild it from storage writes instead of relying on an external-content FTS table tied to a single base table.
 - For Swift capture bridges, keep enumeration and capture on the same native backend, expose C-callable functions from `swift/Sources/`, and keep `mock-capture` JPEG generation in Rust so permissionless tests exercise real files.
@@ -305,4 +307,13 @@ Branch: ralph/v1-implementation
   - MCP over stdio must treat stdout as protocol-only; any diagnostics should go to stderr or they will corrupt JSON-RPC streams.
   - Message framing and line-delimited handling both need explicit tests because clients differ in how they chunk/write requests to child processes.
   - `assert_cmd` is a practical way to exercise real child-process stdio flows end-to-end without mocking transport semantics.
+---
+
+## [2026-04-11 10:21:33 UTC] - US-020
+- Implemented MCP Server over stdio for `screencap mcp`, including JSON-RPC 2.0 request/response handling and tool registration for current context, search history, recent activity, screenshot retrieval, daily summaries, project activity, and app usage.
+- Files changed: src/mcp/server.rs, src/mcp/mod.rs, src/main.rs, tests/mcp_server.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: manual JSON-RPC 2.0 framing over tokio `Lines` streams stays predictable when each message is serialized and flushed as one newline-delimited frame.
+  - Gotchas encountered: any stdout logging corrupts stdio protocol streams; keep tracing and diagnostics on stderr only.
+  - Useful context: child-process integration tests with `assert_cmd` catch transport-level regressions that unit tests miss.
 ---

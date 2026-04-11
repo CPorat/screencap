@@ -13,8 +13,8 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Row, Transaction,
 };
 use serde::de::DeserializeOwned;
-use uuid::Uuid;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::config::AppConfig;
 
@@ -1160,11 +1160,6 @@ impl StorageDb {
         })
     }
 
-
-
-
-
-
     pub fn prune_old_data(&self, days: u32) -> Result<usize> {
         let cutoff = Utc::now() - chrono::Duration::days(i64::from(days));
         let cutoff_timestamp = format_db_timestamp(&cutoff);
@@ -1308,7 +1303,8 @@ impl StorageDb {
 
         tx.commit().context("failed to commit prune transaction")?;
 
-        let rows_deleted = deleted_captures + deleted_extractions + deleted_batches + deleted_insights;
+        let rows_deleted =
+            deleted_captures + deleted_extractions + deleted_batches + deleted_insights;
         info!(
             cutoff = %cutoff_timestamp,
             rows_deleted,
@@ -2331,7 +2327,11 @@ mod tests {
         )
         .expect("recent capture status should update");
 
-        let old_daily_start = old_time.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let old_daily_start = old_time
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
         let old_daily_end = old_time
             .date_naive()
             .and_hms_opt(23, 59, 59)
@@ -2396,7 +2396,9 @@ mod tests {
 
         let batch_count: i64 = db
             .connection()
-            .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM extraction_batches", [], |row| {
+                row.get(0)
+            })
             .expect("batch count should query");
         assert_eq!(batch_count, 1);
 

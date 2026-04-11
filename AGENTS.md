@@ -42,6 +42,7 @@ Three-layer pipeline:
 - AI provider code uses a trait (`LlmProvider`) with `complete(prompt, images?)` and `complete_text(prompt)`. The `openai_compat` module handles OpenAI, OpenRouter, and LM Studio since they share the same API format.
 - OpenAI-compatible provider implementations should resolve provider-specific default base URLs in one helper and return response text plus optional token-usage metadata; local backends that omit usage must stay `None` instead of inventing zero-cost data.
 - When an OpenAI-compatible backend returns usage cost metadata (for example OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that omit cost should leave it `None` rather than guessing.
+- Daemon startup should spawn extraction/synthesis schedulers as separate shutdown-aware tasks, but missing or unsupported AI provider configuration must degrade those schedulers to a logged no-op instead of blocking capture/API startup; users should still be able to collect screenshots before configuring networked pipelines.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
 - Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.
 - Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.

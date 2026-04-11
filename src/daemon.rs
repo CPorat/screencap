@@ -13,21 +13,23 @@ use std::{
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Timelike, Utc};
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{mpsc, watch},
     time,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
+    ai::provider::ProviderError,
     api,
     capture::{
         screenshot,
         window::{self, WindowInfo},
     },
     config::AppConfig,
+    pipeline::scheduler::ExtractionScheduler,
     storage::{
         db::StorageDb,
         metrics,
@@ -231,6 +233,11 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
         listener,
         config.clone(),
         home.to_path_buf(),
+        shutdown_rx.clone(),
+    ));
+    let mut extraction_task = tokio::spawn(run_managed_extraction_scheduler(
+        config.clone(),
+        home.to_path_buf(),
         shutdown_rx,
     ));
 
@@ -241,27 +248,83 @@ async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
             let _ = shutdown_tx.send(true);
             capture_task.await.context("capture loop task panicked")??;
             server_task.await.context("api server task panicked")??;
+            extraction_task.await.context("extraction scheduler task panicked")??;
             Ok(())
         }
         result = &mut capture_task => {
             let _ = shutdown_tx.send(true);
             let capture_result = result.context("capture loop task panicked")?;
             server_task.await.context("api server task panicked")??;
-            match capture_result {
-                Ok(()) => Err(anyhow!("capture loop exited before shutdown signal")),
-                Err(err) => Err(err),
-            }
+            extraction_task.await.context("extraction scheduler task panicked")??;
+            task_exit_result("capture loop", capture_result)
         }
         result = &mut server_task => {
             let _ = shutdown_tx.send(true);
             let server_result = result.context("api server task panicked")?;
             capture_task.await.context("capture loop task panicked")??;
-            match server_result {
-                Ok(()) => Err(anyhow!("api server exited before shutdown signal")),
-                Err(err) => Err(err),
-            }
+            extraction_task.await.context("extraction scheduler task panicked")??;
+            task_exit_result("api server", server_result)
+        }
+        result = &mut extraction_task => {
+            let _ = shutdown_tx.send(true);
+            let extraction_result = result.context("extraction scheduler task panicked")?;
+            capture_task.await.context("capture loop task panicked")??;
+            server_task.await.context("api server task panicked")??;
+            task_exit_result("extraction scheduler", extraction_result)
         }
     }
+}
+
+async fn run_managed_extraction_scheduler(
+    config: AppConfig,
+    home: PathBuf,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    if !config.extraction.enabled {
+        return wait_for_shutdown(shutdown).await;
+    }
+
+    match ExtractionScheduler::open(config, &home) {
+        Ok(mut scheduler) => scheduler.run_until_shutdown(shutdown).await,
+        Err(error) if is_nonfatal_pipeline_init_error(&error) => {
+            warn!(
+                error = %error,
+                "extraction scheduler disabled; capture and API services will continue without automatic extraction"
+            );
+            wait_for_shutdown(shutdown).await
+        }
+        Err(error) => Err(error.context("failed to initialize extraction scheduler")),
+    }
+}
+
+async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) -> Result<()> {
+    if *shutdown.borrow() {
+        return Ok(());
+    }
+
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn task_exit_result(task_name: &str, result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Err(anyhow!("{task_name} exited before shutdown signal")),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_nonfatal_pipeline_init_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ProviderError>(),
+            Some(ProviderError::MissingApiKey { .. } | ProviderError::UnsupportedProvider { .. })
+        )
+    })
 }
 
 async fn run_capture_loop(
@@ -643,9 +706,7 @@ fn compile_excluded_window_title_patterns(raw_patterns: &[String]) -> Result<Vec
         .enumerate()
         .map(|(index, pattern)| {
             Regex::new(pattern).with_context(|| {
-                format!(
-                    "invalid capture.excluded_window_titles regex at index {index}: {pattern}"
-                )
+                format!("invalid capture.excluded_window_titles regex at index {index}: {pattern}")
             })
         })
         .collect()
@@ -685,7 +746,12 @@ impl CaptureLoop {
     fn capture_once_at(&mut self, timestamp: DateTime<Utc>) -> Result<CaptureCycleOutcome> {
         let active_window = window::get_active_window().context("failed to fetch active window")?;
 
-        if self.config.capture.excluded_apps.contains(&active_window.app_name) {
+        if self
+            .config
+            .capture
+            .excluded_apps
+            .contains(&active_window.app_name)
+        {
             info!(
                 app_name = %active_window.app_name,
                 window_title = %active_window.window_title,
@@ -857,7 +923,10 @@ mod exclusion_pattern_tests {
         .expect("regex patterns should compile");
 
         assert!(is_excluded_window_title("Mock Window", &patterns));
-        assert!(is_excluded_window_title("Personal Incognito Tab", &patterns));
+        assert!(is_excluded_window_title(
+            "Personal Incognito Tab",
+            &patterns
+        ));
         assert!(!is_excluded_window_title("Regular Browser", &patterns));
     }
 

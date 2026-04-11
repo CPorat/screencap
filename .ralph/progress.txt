@@ -11,6 +11,8 @@ Branch: ralph/v1-implementation
 - Event-driven capture should keep native code to raw app-switch/key-down/mouse-move callbacks, let `src/capture/events.rs` detect keyboard bursts and post-idle mouse resumes, and leave the daemon responsible for the final settle-time debounce so CGEventTap policy stays unit-testable in Rust.
 
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
+- Daemon startup smoke tests should launch the real binary with an isolated `HOME`, enforce a short `/api/health` readiness deadline, then terminate via `SIGTERM` and assert both PID-file cleanup and panic-free stderr so shutdown regressions are observable end-to-end.
+
 - Time-dependent pipeline schedulers should expose explicit `run_once_at(...)` entry points so integration tests and backfills can drive fixed rolling/hourly/daily windows deterministically without wall-clock sleeps or midnight-boundary flake.
 
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
@@ -581,4 +583,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: time-aware schedulers are much easier to integration-test when they expose explicit timestamp-driven execution entry points instead of forcing tests to race the wall clock.
   - Gotchas encountered: daily summary generation only consumes hourly insights whose `window_start` falls on the requested date, so midnight-boundary tests need deterministic clock control or they become flaky.
   - Useful context: `capture::screenshot::capture_screenshot()` under `--features mock-capture` is sufficient for generating real JPEG fixtures on disk, which keeps screenshot-serving integration tests close to production behavior without TCC permissions.
+---
+
+## [2026-04-11 16:29:30 UTC] - US-031
+- What was implemented: added `tests/e2e_daemon.rs`, a focused foreground-daemon smoke test that writes an isolated temp-home config, boots the real `screencap` binary, enforces API health readiness within 3 seconds, verifies `/api/health`, `/api/stats`, and `/` HTML, then sends `SIGTERM` and asserts clean exit plus PID-file cleanup.
+- Files changed: AGENTS.md, tests/e2e_daemon.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: daemon smoke tests are more trustworthy when they capture stderr and assert shutdown is panic-free after a real `SIGTERM`, not just after the CLI stop path.
+  - Gotchas encountered: readiness checks should use a short explicit deadline tied to `/api/health`; otherwise startup regressions can hide behind generous test timeouts.
+  - Useful context: keeping extraction and synthesis disabled in the smoke-test config isolates lifecycle/API behavior from unrelated provider setup while still exercising the real foreground daemon path.
 ---

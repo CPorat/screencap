@@ -5,7 +5,9 @@ use thiserror::Error;
 
 use crate::config::{AiProvider, ExtractionConfig, SynthesisConfig};
 
-use super::{anthropic::AnthropicClient, openai_compat::OpenAiCompatClient};
+use super::{
+    anthropic::AnthropicClient, google::GoogleClient, openai_compat::OpenAiCompatClient,
+};
 
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
 
@@ -167,6 +169,7 @@ pub fn create_provider(config: &LlmProviderConfig) -> ProviderResult<Box<dyn Llm
             Ok(Box::new(OpenAiCompatClient::new(config.clone())?))
         }
         AiProvider::Anthropic => Ok(Box::new(AnthropicClient::new(config.clone())?)),
+        AiProvider::Google => Ok(Box::new(GoogleClient::new(config.clone())?)),
         provider => Err(ProviderError::UnsupportedProvider {
             provider: provider_name(provider),
         }),
@@ -199,6 +202,7 @@ pub fn supported_base_url(provider: AiProvider) -> ProviderResult<&'static str> 
         AiProvider::Openrouter => Ok("https://openrouter.ai/api/v1"),
         AiProvider::Openai => Ok("https://api.openai.com/v1"),
         AiProvider::Anthropic => Ok("https://api.anthropic.com"),
+        AiProvider::Google => Ok("https://generativelanguage.googleapis.com"),
         AiProvider::Lmstudio => Ok("http://localhost:1234/v1"),
         provider => Err(ProviderError::UnsupportedProvider {
             provider: provider_name(provider),
@@ -244,6 +248,16 @@ mod tests {
 
         create_provider(&config).expect("create provider");
     }
+    #[test]
+    fn create_provider_accepts_google_config() {
+        let env_var = "SCREENCAP_TEST_GOOGLE_PROVIDER_KEY";
+        let _guard = EnvGuard::set(env_var, "token");
+        let config = LlmProviderConfig::new(AiProvider::Google, "gemini-2.5-flash", env_var, "");
+
+        create_provider(&config).expect("create provider");
+    }
+
+
 
     #[test]
     fn resolved_base_url_uses_lm_studio_default() {
@@ -265,6 +279,17 @@ mod tests {
             "https://api.anthropic.com"
         );
     }
+
+    #[test]
+    fn resolved_base_url_uses_google_default() {
+        let config = LlmProviderConfig::new(AiProvider::Google, "gemini-2.5-flash", "IGNORED", "");
+
+        assert_eq!(
+            resolved_base_url(&config).expect("resolve base url"),
+            "https://generativelanguage.googleapis.com"
+        );
+    }
+
 
     #[test]
     fn load_api_key_rejects_missing_values() {

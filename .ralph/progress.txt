@@ -35,6 +35,8 @@ Branch: ralph/v1-implementation
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
 - When OpenAI-compatible providers expose usage cost metadata (such as OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that do not report cost should stay `None` rather than fabricating values.
 - Native Anthropic provider implementations should post one user message whose content array combines base64 image blocks with the prompt text block, then derive `total_tokens` from `input_tokens + output_tokens` because the Messages API omits a combined total field.
+- Native Google provider implementations should call `/v1beta/models/{model}:generateContent` with `x-goog-api-key` auth, send screenshots as `inline_data` parts plus the prompt text part, and derive `TokenUsage` from `usageMetadata` without fabricating cost data.
+
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
 - When synthesis needs both extraction batch summaries and frame-level evidence, add a typed storage helper that groups `extraction_batches` with joined `captures`/`extractions`; keep multi-table SQL in `StorageDb` so prompt builders stay focused on prompt shape.
@@ -538,4 +540,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: direct Anthropic requests fit the existing `LlmProvider` trait cleanly by sending one user message whose content array contains image blocks plus the prompt text block.
   - Gotchas encountered: Anthropic usage responses expose `input_tokens` and `output_tokens` but no combined total, so provider code must derive `total_tokens` instead of inventing a separate field contract.
   - Useful context: AI provider unit tests were duplicating env/server harness code; `src/ai/test_support.rs` now keeps those fixtures shared across native and OpenAI-compatible providers.
+---
+## [2026-04-11 15:52:39 UTC] - US-027
+- Implemented the native Google Gemini provider in `src/ai/google.rs`: added `generateContent` request/response handling for text and inline image inputs, `x-goog-api-key` auth, usage parsing, and focused provider tests.
+- Wired `AiProvider::Google` through the shared provider factory and default base URL resolution so `provider='google'` now constructs a working `GoogleClient` instead of returning `UnsupportedProvider`.
+- Files changed: AGENTS.md, src/ai/google.rs, src/ai/provider.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: Gemini Developer API requests are single-turn `generateContent` calls with `inline_data` image parts and `usageMetadata` token counts; keep that contract isolated in the native provider module.
+  - Gotchas encountered: Google REST examples mix model path styles (`models/...` in endpoints vs bare model IDs in SDKs), so trimming an optional `models/` prefix at the provider boundary keeps config ergonomic without duplicating endpoint logic elsewhere.
+  - Useful context: Gemini Developer API responses currently omit cost metadata, so downstream persistence should keep `cost_cents=None` instead of guessing.
 ---

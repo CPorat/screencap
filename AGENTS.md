@@ -45,6 +45,8 @@ Three-layer pipeline:
 - OpenAI-compatible provider implementations should resolve provider-specific default base URLs in one helper and return response text plus optional token-usage metadata; local backends that omit usage must stay `None` instead of inventing zero-cost data.
 - When an OpenAI-compatible backend returns usage cost metadata (for example OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that omit cost should leave it `None` rather than guessing.
 - Native Anthropic provider code should call `/v1/messages` with one user message whose content array contains base64 image blocks plus the prompt text block, and derive `total_tokens` from `input_tokens + output_tokens` because the Messages API reports usage without a combined total.
+- Native Google provider code should call `/v1beta/models/{model}:generateContent` with `x-goog-api-key` auth, send screenshots as `inline_data` parts plus the prompt text part, and derive `TokenUsage` from `usageMetadata` without inventing cost metadata.
+
 - Daemon startup should spawn extraction/synthesis schedulers as separate shutdown-aware tasks, but missing or unsupported AI provider configuration must degrade those schedulers to a logged no-op instead of blocking capture/API startup; users should still be able to collect screenshots before configuring networked pipelines.
 - Writable SQLite connections should set a busy timeout and enable WAL mode, because the daemon runs capture, API, and pipeline schedulers with concurrent database connections and should wait briefly instead of failing with `database is locked`.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.

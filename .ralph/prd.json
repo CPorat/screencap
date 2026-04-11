@@ -575,7 +575,7 @@
       ],
       "priority": 24,
       "passes": true,
-      "notes": "Completed: the menu bar app now owns foreground daemon launches, parses `screencap status` output for truthful state, exposes Start/Stop/Open Timeline/Open Data Folder/Quit actions, and has focused Swift test coverage."
+      "notes": "Completed: the menu bar app now owns foreground daemon launches, parses `screencap status` output for truthful state, exposes Start/Stop/Open Timeline/Open Data Folder/Quit actions, and has focused Swift test coverage.",
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let daemonController = ScreencapDaemonController()
     private var startItem = NSMenuItem(title: "Start Capture", action: #selector(startCapture), keyEquivalent: "")
     private var stopItem = NSMenuItem(title: "Stop Capture", action: #selector(stopCapture), keyEquivalent: "")
+    private var preferencesItem = NSMenuItem(title: "Preferences", action: #selector(openPreferences), keyEquivalent: ",")
+    private var launchAtLoginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+    private var lastKnownLaunchdInstalled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -43,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startItem.target = self
         stopItem.target = self
+        preferencesItem.target = self
+        launchAtLoginItem.target = self
 
         let openTimeline = NSMenuItem(title: "Open Timeline", action: #selector(openTimeline), keyEquivalent: "")
         openTimeline.target = self
@@ -58,6 +63,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(openTimeline)
         menu.addItem(openDataFolder)
+        menu.addItem(preferencesItem)
+        menu.addItem(.separator())
+        menu.addItem(launchAtLoginItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
 
@@ -88,6 +96,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(folderURL)
     }
 
+    @objc private func openPreferences() {
+        if !daemonController.openPreferences() {
+            NSSound.beep()
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        applyStatus(daemonController.toggleLaunchAtLogin())
+    }
+
     @objc private func quitApp() {
         daemonController.stopOwnedDaemonIfNeeded()
         NSApp.terminate(nil)
@@ -107,6 +125,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startItem.isEnabled = snapshot.startEnabled
         stopItem.isEnabled = snapshot.stopEnabled
+        updateLaunchAtLoginItem(for: snapshot)
         statusItem.button?.toolTip = snapshot.tooltip
+    }
+
+    private func updateLaunchAtLoginItem(for snapshot: DaemonStatusSnapshot) {
+        switch snapshot {
+        case .running(let report):
+            lastKnownLaunchdInstalled = report.launchdInstalled
+            launchAtLoginItem.state = report.launchdInstalled ? .on : .off
+            launchAtLoginItem.title = report.launchdInstalled
+                ? "Launch at Login (stop capture to disable)"
+                : "Launch at Login"
+            launchAtLoginItem.isEnabled = !report.launchdInstalled
+        case .stopped(let report):
+            lastKnownLaunchdInstalled = report.launchdInstalled
+            launchAtLoginItem.state = report.launchdInstalled ? .on : .off
+            launchAtLoginItem.title = "Launch at Login"
+            launchAtLoginItem.isEnabled = true
+        case .starting, .unavailable:
+            launchAtLoginItem.state = lastKnownLaunchdInstalled ? .on : .off
+            launchAtLoginItem.title = "Launch at Login"
+            launchAtLoginItem.isEnabled = false
+        }
     }
 }

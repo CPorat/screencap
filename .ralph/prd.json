@@ -959,7 +959,7 @@
         "Swift tests cover menu action wiring and tooltip state mapping where practical"
       ],
       "priority": 41,
-      "passes": false,
+      "passes": true,
       "notes": "Spec menu bar section explicitly requires Preferences, launchd management, and rolling-context tooltip.",
       "tool": "omp",
       "model": "gpt-5.4",

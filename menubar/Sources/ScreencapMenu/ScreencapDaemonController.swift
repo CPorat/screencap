@@ -11,6 +11,8 @@ struct DaemonStatusReport: Equatable {
     let uptimeSecs: UInt64?
     let capturesToday: UInt64?
     let storageBytes: UInt64?
+    let launchdInstalled: Bool
+    let rollingSummary: String?
 
     static func parse(_ text: String) -> Self? {
         var fields: [String: String] = [:]
@@ -35,7 +37,9 @@ struct DaemonStatusReport: Equatable {
             pid: parseInt32(fields["pid"]),
             uptimeSecs: parseUInt64(fields["uptime_secs"]),
             capturesToday: parseUInt64(fields["captures_today"]),
-            storageBytes: parseUInt64(fields["storage_bytes"])
+            storageBytes: parseUInt64(fields["storage_bytes"]),
+            launchdInstalled: parseBool(fields["launchd_installed"]) ?? false,
+            rollingSummary: parseText(fields["rolling_summary"])
         )
     }
 
@@ -49,9 +53,31 @@ struct DaemonStatusReport: Equatable {
         return UInt64(value)
     }
 
+    private static func parseBool(_ value: String?) -> Bool? {
+        guard let value else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true":
+            return true
+        case "false":
+            return false
+        default:
+            return nil
+        }
+    }
+
+    private static func parseText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "-" else { return nil }
+        return trimmed
+    }
+
     var tooltip: String {
         switch state {
         case .running:
+            if let rollingSummary {
+                return rollingSummary
+            }
             let pidText = pid.map(String.init) ?? "-"
             let capturesText = capturesToday.map(String.init) ?? "0"
             return "Screencap running · pid \(pidText) · \(capturesText) captures today"
@@ -214,6 +240,30 @@ final class ScreencapDaemonController {
         clearManagedProcess()
     }
 
+    func openPreferences() -> Bool {
+        guard let result = runScreencap(["config"]) else { return false }
+        return result.exitCode == 0
+    }
+
+    func toggleLaunchAtLogin() -> DaemonStatusSnapshot {
+        switch refreshStatus() {
+        case .unavailable(let message):
+            return .unavailable(message)
+        case .starting:
+            return .starting
+        case .running(let report):
+            if report.launchdInstalled {
+                return .running(report)
+            }
+            return installLaunchAtLogin(stopAfterInstall: false)
+        case .stopped(let report):
+            if report.launchdInstalled {
+                return uninstallLaunchAtLogin()
+            }
+            return installLaunchAtLogin(stopAfterInstall: true)
+        }
+    }
+
     func refreshStatus() -> DaemonStatusSnapshot {
         clearExitedManagedProcess()
 
@@ -309,6 +359,49 @@ final class ScreencapDaemonController {
             screencapCommand = nil
         }
         return result
+    }
+
+    private func installLaunchAtLogin(stopAfterInstall: Bool) -> DaemonStatusSnapshot {
+        guard let installResult = runScreencap(["start", "--install"]) else {
+            return .unavailable(Self.missingCommandMessage)
+        }
+        guard installResult.exitCode == 0 else {
+            return .unavailable(commandFailureMessage(action: "install launch at login", result: installResult))
+        }
+
+        if stopAfterInstall {
+            guard let stopResult = runScreencap(["stop"]) else {
+                return .unavailable(Self.missingCommandMessage)
+            }
+            guard stopResult.exitCode == 0 else {
+                return .unavailable(commandFailureMessage(action: "restore stopped state", result: stopResult))
+            }
+        }
+
+        return refreshStatus()
+    }
+
+    private func uninstallLaunchAtLogin() -> DaemonStatusSnapshot {
+        guard let result = runScreencap(["stop", "--uninstall"]) else {
+            return .unavailable(Self.missingCommandMessage)
+        }
+        guard result.exitCode == 0 else {
+            return .unavailable(commandFailureMessage(action: "uninstall launch at login", result: result))
+        }
+
+        return refreshStatus()
+    }
+
+    private func commandFailureMessage(action: String, result: CommandResult) -> String {
+        let detail = [result.stderr, result.stdout]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })
+
+        if let detail {
+            return "failed to \(action): \(detail)"
+        }
+
+        return "failed to \(action)"
     }
 
     private func resolveScreencapCommand() -> Command? {

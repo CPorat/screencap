@@ -30,7 +30,7 @@ use crate::{
     storage::{
         db::StorageDb,
         metrics,
-        models::{Capture, NewCapture, PipelineCostSummary, PipelineHealth},
+        models::{Capture, InsightType, NewCapture, PipelineCostSummary, PipelineHealth},
         prune,
     },
 };
@@ -125,6 +125,7 @@ pub struct DaemonStatus {
     pub captures_today: u64,
     pub storage_bytes: u64,
     pub launchd_installed: bool,
+    pub rolling_summary: Option<String>,
     pub pipeline: PipelineHealth,
     pub cost_today: PipelineCostSummary,
 }
@@ -132,6 +133,7 @@ pub struct DaemonStatus {
 #[derive(Debug, Clone)]
 struct StatusMetrics {
     captures_today: u64,
+    rolling_summary: Option<String>,
     pipeline: PipelineHealth,
     cost_today: PipelineCostSummary,
 }
@@ -794,6 +796,7 @@ fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
         captures_today: status_metrics.captures_today,
         storage_bytes,
         launchd_installed,
+        rolling_summary: status_metrics.rolling_summary,
         pipeline: status_metrics.pipeline,
         cost_today: status_metrics.cost_today,
     })
@@ -886,6 +889,7 @@ fn load_status_metrics(
     else {
         return Ok(StatusMetrics {
             captures_today: 0,
+            rolling_summary: None,
             pipeline: PipelineHealth::default(),
             cost_today: PipelineCostSummary::default(),
         });
@@ -893,6 +897,9 @@ fn load_status_metrics(
 
     Ok(StatusMetrics {
         captures_today: metrics::count_captures_today(&db, now)?,
+        rolling_summary: db
+            .get_latest_insight_by_type(InsightType::Rolling)?
+            .map(|insight| insight.narrative),
         pipeline: db.summarize_pipeline_health()?,
         cost_today: db.summarize_reported_costs_for_date(now.date_naive())?,
     })
@@ -1368,7 +1375,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use chrono::TimeZone;
 
     use super::{
@@ -1376,7 +1383,14 @@ mod tests {
         uninstall_launch_agent_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord,
         INTERNAL_DAEMON_SUBCOMMAND, LAUNCHD_AGENT_LABEL,
     };
-    use crate::{capture::screenshot, config::AppConfig};
+    use crate::{
+        capture::screenshot,
+        config::AppConfig,
+        storage::{
+            db::StorageDb,
+            models::{InsightData, InsightType, NewInsight},
+        },
+    };
 
     fn temp_home_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1662,6 +1676,46 @@ mod tests {
         assert!(plist.contains(INTERNAL_DAEMON_SUBCOMMAND));
         assert!(plist.contains(home.to_str().expect("temp path should be utf-8")));
 
+        Ok(())
+    }
+
+    #[test]
+    fn status_includes_latest_rolling_summary() -> Result<()> {
+        let home = temp_home_root("status-rolling-summary");
+        let config = test_config(&home);
+        let db_path = config.storage_root(&home).join("screencap.db");
+        let mut db = StorageDb::open_at_path(&db_path)
+            .with_context(|| format!("failed to open capture database at {}", db_path.display()))?;
+
+        let window_end = chrono::Utc
+            .with_ymd_and_hms(2026, 4, 10, 14, 30, 0)
+            .unwrap();
+        let window_start = window_end - chrono::Duration::minutes(30);
+        let summary = "Focused menu bar implementation\nwith launchd controls";
+
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Rolling,
+            window_start,
+            window_end,
+            data: InsightData::Rolling {
+                window_start,
+                window_end,
+                current_focus: "Menu bar controls".into(),
+                active_project: Some("screencap".into()),
+                apps_used: std::collections::BTreeMap::from([("Xcode".into(), "30 min".into())]),
+                context_switches: 1,
+                mood: "focused".into(),
+                summary: summary.into(),
+            },
+            model_used: Some("mock-synthesis".into()),
+            tokens_used: Some(120),
+            cost_cents: Some(0.12),
+        })?;
+
+        let status = status_at_home(&config, &home)?;
+        assert_eq!(status.rolling_summary.as_deref(), Some(summary));
+
+        fs::remove_dir_all(&home)?;
         Ok(())
     }
 

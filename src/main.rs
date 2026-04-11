@@ -182,6 +182,10 @@ fn print_daemon_status(status: &daemon::DaemonStatus) {
     println!("captures_today: {}", status.captures_today);
     println!("storage_bytes: {}", status.storage_bytes);
     println!("launchd_installed: {}", status.launchd_installed);
+    println!(
+        "rolling_summary: {}",
+        format_optional_status_text(status.rolling_summary.as_deref())
+    );
     println!("pending_captures: {}", status.pipeline.pending_captures);
     println!(
         "last_extraction_at: {}",
@@ -938,6 +942,12 @@ fn format_timestamp(timestamp: &DateTime<Utc>) -> String {
 fn format_optional_timestamp(timestamp: Option<&DateTime<Utc>>) -> String {
     timestamp
         .map(format_timestamp)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_status_text(text: Option<&str>) -> String {
+    text.map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "-".to_string())
 }
 

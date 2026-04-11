@@ -18,6 +18,8 @@ Branch: ralph/v1-implementation
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Menu bar daemon controllers should parse the `state:` line from `screencap status` and track whether the current daemon was launched by the menu bar, so icon state stays truthful and quitting the app only tears down the child it started.
+- Menu bar preference and launch-at-login controls should keep the `screencap` CLI as the single source of truth: use `screencap config` to open settings, consume `launchd_installed` and `rolling_summary` from `screencap status`, and when enabling auto-start from a stopped state, pair `start --install` with a follow-up `stop` so the setting change does not silently change current daemon ownership or run state.
+
 - CLI config editing should create `~/.screencap/config.toml` on demand, resolve the editor as `$VISUAL` then `$EDITOR` then macOS fallback `open -t`, and include the manual config path in launch errors so first-run setup stays recoverable.
 
 
@@ -699,4 +701,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: status/stats telemetry is most stable when CLI and API both read one storage-level summary instead of recomputing freshness/cost independently in each surface.
   - Gotchas encountered: if status-style commands open SQLite in write mode, they can accidentally create runtime state while only trying to report telemetry; use read-only opens for these paths.
   - Useful context: deriving pipeline freshness from `batch_end` / `window_end` reports how current the persisted analysis actually is, which is more useful for operators than raw row creation times.
+---
+
+## [2026-04-11 22:47:03 UTC] - US-041
+- What was implemented: added menu bar Preferences and launch-at-login controls, surfaced rolling-context summaries through `screencap status` for tooltip rendering, and extended Swift coverage for tooltip/action wiring while preserving owned-daemon shutdown behavior.
+- Files changed: AGENTS.md, menubar/Sources/ScreencapMenu/AppDelegate.swift, menubar/Sources/ScreencapMenu/ScreencapDaemonController.swift, menubar/Tests/ScreencapMenuTests/ScreencapMenuTests.swift, src/daemon.rs, src/main.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: menu bar preference and launch-at-login actions stay truthful when Swift shells out to the `screencap` CLI instead of reimplementing config or launchd behavior separately.
+  - Gotchas encountered: enabling launch-at-login via `start --install` will also start the daemon, so a menu toggle that should preserve a stopped state needs an immediate `stop` follow-up after installation.
+  - Useful context: pushing the latest rolling insight summary into `screencap status` keeps the menu bar tooltip on the same read-only status channel it already trusts for liveness and ownership decisions.
 ---

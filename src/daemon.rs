@@ -4,6 +4,7 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{self, Child, Command, Stdio},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
@@ -11,8 +12,8 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::{
-    sync::watch,
-    time::{self, MissedTickBehavior},
+    sync::{mpsc, watch},
+    time,
 };
 use tracing::{debug, error, info};
 
@@ -36,6 +37,53 @@ const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const DAILY_PRUNE_HOUR_UTC: u32 = 2;
+
+static APP_CHANGE_TRIGGER_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
+
+fn app_change_trigger_sender_slot() -> &'static Mutex<Option<mpsc::Sender<()>>> {
+    APP_CHANGE_TRIGGER_SENDER.get_or_init(|| Mutex::new(None))
+}
+
+fn set_app_change_trigger_sender(sender: mpsc::Sender<()>) {
+    let mut guard = app_change_trigger_sender_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = Some(sender);
+}
+
+fn clear_app_change_trigger_sender() {
+    let mut guard = app_change_trigger_sender_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = None;
+}
+
+extern "C" fn on_active_app_change() {
+    let sender = app_change_trigger_sender_slot()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+    if let Some(sender) = sender {
+        let _ = sender.try_send(());
+    }
+}
+
+struct AppChangeListenerGuard;
+
+impl AppChangeListenerGuard {
+    fn start(sender: mpsc::Sender<()>) -> Self {
+        set_app_change_trigger_sender(sender);
+        window::start_app_change_listener(on_active_app_change);
+        Self
+    }
+}
+
+impl Drop for AppChangeListenerGuard {
+    fn drop(&mut self) {
+        window::stop_app_change_listener();
+        clear_app_change_trigger_sender();
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonState {
     Running,
@@ -215,32 +263,44 @@ async fn run_capture_loop(
     retention_days: u32,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let mut interval = time::interval(Duration::from_secs(idle_interval_secs));
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let idle_interval = Duration::from_secs(idle_interval_secs);
+    let (app_change_trigger_tx, mut app_change_trigger_rx) = mpsc::channel(1);
+    let _app_change_listener_guard = AppChangeListenerGuard::start(app_change_trigger_tx);
 
+    let mut next_capture_at = time::Instant::now();
     let mut last_prune_date: Option<NaiveDate> = None;
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                if let Err(err) = capture_loop.capture_once() {
-                    error!(error = %err, "capture cycle failed");
+            _ = time::sleep_until(next_capture_at) => {}
+            maybe_trigger = app_change_trigger_rx.recv() => {
+                if maybe_trigger.is_none() {
+                    next_capture_at = time::Instant::now() + idle_interval;
+                    continue;
                 }
-
-                if let Err(err) = run_daily_prune_if_due(
-                    &capture_loop,
-                    retention_days,
-                    &mut last_prune_date,
-                    Utc::now(),
-                ) {
-                    error!(error = %err, retention_days, "daily prune cycle failed");
-                }
+                debug!("capture triggered by active application change");
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
                     break;
                 }
+                continue;
             }
         }
+
+        if let Err(err) = capture_loop.capture_once() {
+            error!(error = %err, "capture cycle failed");
+        }
+
+        if let Err(err) = run_daily_prune_if_due(
+            &capture_loop,
+            retention_days,
+            &mut last_prune_date,
+            Utc::now(),
+        ) {
+            error!(error = %err, retention_days, "daily prune cycle failed");
+        }
+
+        next_capture_at = time::Instant::now() + idle_interval;
     }
 
     Ok(())
@@ -742,8 +802,12 @@ mod tests {
     use anyhow::Result;
     use chrono::TimeZone;
 
-    use super::{status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord};
+    use super::{
+        clear_app_change_trigger_sender, on_active_app_change, set_app_change_trigger_sender,
+        status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord,
+    };
     use crate::config::AppConfig;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     fn temp_home_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -761,6 +825,18 @@ mod tests {
         config.capture.excluded_apps.clear();
         config.capture.excluded_window_titles.clear();
         config
+    }
+
+    #[test]
+    fn active_app_change_callback_enqueues_trigger() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        set_app_change_trigger_sender(sender);
+
+        on_active_app_change();
+        assert!(matches!(receiver.try_recv(), Ok(())));
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+
+        clear_app_change_trigger_sender();
     }
 
     #[test]

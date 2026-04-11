@@ -42,7 +42,7 @@ use super::{
 const ROLLING_CONTEXT_WINDOW_MINUTES: i64 = 30;
 const HOURLY_DIGEST_WINDOW_HOURS: i64 = 1;
 const HOURLY_DIGEST_INTERVAL: Duration = Duration::from_secs(60 * 60);
-const DAILY_SUMMARY_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
+const DAILY_SUMMARY_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 const SEMANTIC_SEARCH_FALLBACK_REFERENCES: usize = 5;
 
@@ -291,9 +291,7 @@ impl DailySummaryScheduler {
     }
 
     pub async fn run_until_shutdown(&mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        let summary_time = parse_daily_summary_time(&self.config.synthesis.daily_summary_time)?;
-        let first_tick = next_daily_summary_boundary(Utc::now(), summary_time);
-        let mut interval = time::interval_at(interval_start(first_tick), DAILY_SUMMARY_INTERVAL);
+        let mut interval = time::interval(DAILY_SUMMARY_POLL_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
@@ -327,9 +325,14 @@ impl DailySummaryScheduler {
 
     pub async fn run_once(&mut self) -> Result<Option<Insight>> {
         let summary_time = parse_daily_summary_time(&self.config.synthesis.daily_summary_time)?;
-        let date = Utc::now().date_naive();
-        self.run_once_at(utc_datetime_on_date(date, summary_time))
-            .await
+        let now = Utc::now();
+        let date = now.date_naive();
+        let has_daily_summary = self.db.get_latest_daily_insight_for_date(date)?.is_some();
+        if !should_run_daily_summary(now, summary_time, has_daily_summary) {
+            return Ok(None);
+        }
+
+        self.run_once_at(utc_datetime_on_date(date, summary_time)).await
     }
 
     async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
@@ -1009,6 +1012,7 @@ fn utc_datetime_on_date(date: NaiveDate, time: NaiveTime) -> DateTime<Utc> {
     date.and_time(time).and_utc()
 }
 
+#[cfg(test)]
 fn next_daily_summary_boundary(after: DateTime<Utc>, summary_time: NaiveTime) -> DateTime<Utc> {
     let boundary = utc_datetime_on_date(after.date_naive(), summary_time);
     if after <= boundary {
@@ -1022,6 +1026,14 @@ fn next_daily_summary_boundary(after: DateTime<Utc>, summary_time: NaiveTime) ->
             summary_time,
         )
     }
+}
+
+fn should_run_daily_summary(
+    now: DateTime<Utc>,
+    summary_time: NaiveTime,
+    has_daily_summary: bool,
+) -> bool {
+    now >= utc_datetime_on_date(now.date_naive(), summary_time) && !has_daily_summary
 }
 
 fn interval_start(target: DateTime<Utc>) -> Instant {
@@ -1431,6 +1443,26 @@ mod tests {
             next_daily_summary_boundary(after_boundary, summary_time),
             Utc.with_ymd_and_hms(2026, 4, 11, 18, 0, 0).unwrap()
         );
+    }
+
+    #[test]
+    fn parse_daily_summary_time_accepts_hh_mm() {
+        assert_eq!(
+            parse_daily_summary_time("23:50").expect("valid 24-hour HH:MM time"),
+            NaiveTime::from_hms_opt(23, 50, 0).unwrap()
+        );
+        assert!(parse_daily_summary_time("24:00").is_err());
+    }
+
+    #[test]
+    fn should_run_daily_summary_requires_time_and_missing_summary() {
+        let summary_time = NaiveTime::from_hms_opt(18, 0, 0).unwrap();
+        let before_summary = Utc.with_ymd_and_hms(2026, 4, 10, 17, 59, 59).unwrap();
+        let at_summary = Utc.with_ymd_and_hms(2026, 4, 10, 18, 0, 0).unwrap();
+
+        assert!(!should_run_daily_summary(before_summary, summary_time, false));
+        assert!(should_run_daily_summary(at_summary, summary_time, false));
+        assert!(!should_run_daily_summary(at_summary, summary_time, true));
     }
 
     #[tokio::test]

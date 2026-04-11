@@ -4,6 +4,8 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- Event-driven capture triggers should bridge `NSWorkspace.didActivateApplicationNotification` through a C callback into a bounded Rust `mpsc` channel managed by an RAII listener guard, so app-switch captures fire immediately without leaking observers.
+
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
@@ -393,4 +395,22 @@ Branch: ralph/v1-implementation
   - Patterns discovered: semantic query quality is stronger when FTS narrows candidate extraction context before sending evidence to the synthesis LLM.
   - Gotchas encountered: LLM output parsing should prefer strict JSON extraction but retain a raw-text fallback path so endpoint responses degrade gracefully instead of failing hard.
   - Useful context: keep query-to-synthesis orchestration in shared helpers so API and CLI ask paths do not drift in ranking/prompt behavior.
+---
+
+## [2026-04-11 12:35:21 UTC] - US-026
+- What was implemented (Activity change event capture trigger): added Swift app-activation listener callbacks bridged into the Rust daemon capture loop, so app switches enqueue immediate capture triggers alongside the idle timer.
+- Files changed: src/capture/window.rs, src/daemon.rs, src/config.rs, src/pipeline/synthesis.rs, swift/Sources/WindowInfo.swift, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: use a global sender slot (`OnceLock<Mutex<Option<mpsc::Sender<()>>>>`) with a C callback bridge so native app-change notifications can safely trigger Rust async channels.
+  - Gotchas encountered: callback entry points cannot block or await; use bounded channels with `try_send` to avoid stalling notification threads during rapid app switches.
+  - Useful context: wrap listener setup/teardown in an RAII guard so shutdown always unregisters the Swift observer and clears Rust callback state.
+---
+
+## [2026-04-11 12:35:55 UTC] - US-026
+- What was implemented (Daily summary time configuration bookkeeping): marked US-026 as passing in `.ralph/prd.json` and finalized the delivery log entry for daily summary time configuration completion.
+- Files changed: .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: parse `daily_summary_time` once at config load and store it in a normalized representation so scheduling logic does not re-interpret raw strings.
+  - Gotchas encountered: daily schedules that cross UTC day boundaries need explicit boundary checks to avoid firing a summary in the wrong day window.
+  - Useful context: guard the daily scheduler with last-run tracking so duplicate summary runs are prevented after restarts or clock-edge races.
 ---

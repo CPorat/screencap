@@ -191,7 +191,7 @@ impl Default for SynthesisConfig {
             base_url: String::new(),
             rolling_interval_secs: 1800,
             hourly_enabled: true,
-            daily_summary_time: "18:00".into(),
+            daily_summary_time: "23:50".into(),
             daily_export_markdown: true,
             daily_export_path: "~/.screencap/daily/".into(),
         }

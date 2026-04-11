@@ -1,57 +1,20 @@
 <script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+
   import type { SearchResult } from './search-client';
 
   export let result: SearchResult;
   export let position = 1;
 
-  const timeFormatter = new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
+  const dispatch = createEventDispatcher<{ open: { result: SearchResult } }>();
+
+  const timestampFormatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
   });
 
-  const dateFormatter = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-
-  let expanded = false;
   let imageFailed = false;
-
-  function toMonogram(appName: string): string {
-    const parts = appName
-      .split(/\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.length === 0) {
-      return '??';
-    }
-
-    return parts
-      .slice(0, 2)
-      .map((part) => part.charAt(0).toUpperCase())
-      .join('');
-  }
-
-  function iconHue(appName: string, project: string): number {
-    let hash = 0;
-    const seed = `${appName}:${project}`;
-
-    for (let index = 0; index < seed.length; index += 1) {
-      hash = (hash * 31 + seed.charCodeAt(index)) % 360;
-    }
-
-    return hash;
-  }
-
-  function humanizeActivity(activityType: string): string {
-    return activityType
-      .split('_')
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
-  }
+  let previousCaptureId: number | null = null;
 
   function buildScreenshotSrc(): string | null {
     if (result.capture.screenshot_url?.trim()) {
@@ -66,354 +29,231 @@
     return `/api/screenshots/${encodeURIComponent(normalizedPath)}`;
   }
 
+  function humanizeActivity(activityType: string | null): string {
+    if (!activityType?.trim()) {
+      return 'Unclassified';
+    }
+
+    return activityType
+      .split('_')
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
+  function openDetails(): void {
+    dispatch('open', { result });
+  }
+
+  $: if (result.capture.id !== previousCaptureId) {
+    imageFailed = false;
+    previousCaptureId = result.capture.id;
+  }
+
   $: capturedAt = new Date(result.capture.timestamp);
   $: hasTimestamp = Number.isFinite(capturedAt.getTime());
-  $: timeLabel = hasTimestamp ? timeFormatter.format(capturedAt) : 'Unknown time';
-  $: dateLabel = hasTimestamp ? dateFormatter.format(capturedAt) : 'Timestamp unavailable';
-
-  $: appLabel = result.capture.app_name?.trim() || 'Unknown app';
-  $: projectLabel = result.extraction.project?.trim() || 'Unassigned';
-  $: appGlyph = toMonogram(appLabel);
-  $: hue = iconHue(appLabel, projectLabel);
-
-  $: activityLabel = result.extraction.activity_type
-    ? humanizeActivity(result.extraction.activity_type)
-    : result.extraction.description?.trim() || 'Unclassified';
-
-  $: titleLabel = result.capture.window_title?.trim() || 'Untitled window';
-  $: summaryLabel =
-    result.extraction.key_content?.trim() ||
-    result.extraction.description?.trim() ||
-    result.batchNarrative?.trim() ||
-    'No summary returned for this result.';
-
-  $: topics = result.extraction.topics;
-  $: people = result.extraction.people;
+  $: timestampLabel = hasTimestamp ? timestampFormatter.format(capturedAt) : 'Timestamp unavailable';
 
   $: screenshotSrc = imageFailed ? null : buildScreenshotSrc();
+  $: appLabel = result.capture.app_name?.trim() || 'Unknown app';
+  $: projectLabel = result.extraction.project?.trim() || 'Unassigned project';
+  $: activityLabel = humanizeActivity(result.extraction.activity_type);
+  $: descriptionLabel =
+    result.extraction.description?.trim() ||
+    result.extraction.key_content?.trim() ||
+    result.batchNarrative?.trim() ||
+    'No extraction description available.';
+  $: topics = result.extraction.topics;
 </script>
 
-<article class="capture-card" aria-label={`Search hit ${position} from ${timeLabel}`}>
-  <header class="capture-card__header">
-    <div>
-      <p class="capture-card__rank">#{position}</p>
-      <p class="capture-card__score">{result.relevance}% relevance</p>
-    </div>
-    <div class="capture-card__time-group">
-      <p class="capture-card__time">{timeLabel}</p>
-      <p class="capture-card__date">{dateLabel}</p>
-    </div>
-  </header>
-
-  <div class="capture-card__app-chip">
-    <span class="capture-card__glyph" aria-hidden="true" style={`--hue:${hue}`}>{appGlyph}</span>
-    <div class="capture-card__app-copy">
-      <p>{appLabel}</p>
-      <small>{projectLabel}</small>
-    </div>
+<button class="search-result" type="button" on:click={openDetails} aria-label={`Open search result ${position}`}>
+  <div class="search-result__thumb-wrap">
+    {#if screenshotSrc}
+      <img
+        class="search-result__thumb"
+        src={screenshotSrc}
+        alt={`Screenshot from ${appLabel} at ${timestampLabel}`}
+        loading="lazy"
+        on:error={() => {
+          imageFailed = true;
+        }}
+      />
+    {:else}
+      <div class="search-result__thumb search-result__thumb--fallback" role="img" aria-label="Screenshot unavailable">
+        Screenshot unavailable
+      </div>
+    {/if}
   </div>
 
-  <h4>{titleLabel}</h4>
+  <div class="search-result__meta">
+    <p class="search-result__rank">#{position}</p>
+    <p class="search-result__time">{timestampLabel}</p>
+  </div>
 
-  <dl class="capture-card__signals">
+  <h3 class="search-result__summary" title={descriptionLabel}>{descriptionLabel}</h3>
+
+  <dl class="search-result__facts">
+    <div>
+      <dt>App</dt>
+      <dd>{appLabel}</dd>
+    </div>
+    <div>
+      <dt>Project</dt>
+      <dd>{projectLabel}</dd>
+    </div>
     <div>
       <dt>Activity</dt>
       <dd>{activityLabel}</dd>
     </div>
-    <div>
-      <dt>Summary</dt>
-      <dd>{summaryLabel}</dd>
-    </div>
   </dl>
 
-  {#if screenshotSrc}
-    <img
-      class="capture-card__thumb"
-      src={screenshotSrc}
-      alt={`Thumbnail for ${titleLabel}`}
-      loading="lazy"
-      on:error={() => {
-        imageFailed = true;
-      }}
-    />
-  {:else}
-    <div class="capture-card__placeholder" role="img" aria-label="Screenshot unavailable">
-      Screenshot unavailable
+  {#if topics.length > 0}
+    <div class="search-result__topics" aria-label="Topics">
+      {#each topics.slice(0, 6) as topic (topic)}
+        <span>{topic}</span>
+      {/each}
     </div>
   {/if}
-
-  <button class="capture-card__toggle" type="button" aria-expanded={expanded} on:click={() => (expanded = !expanded)}>
-    {expanded ? 'Hide details' : 'Expand details'}
-  </button>
-
-  {#if expanded}
-    <section class="capture-card__details" aria-label="Search hit details">
-      <div class="capture-card__detail-grid">
-        <p>
-          <strong>Rank:</strong>
-          {result.rank.toFixed(3)}
-        </p>
-        <p>
-          <strong>Capture ID:</strong>
-          {result.capture.id}
-        </p>
-      </div>
-
-      <p class="capture-card__context">
-        <strong>Context:</strong>
-        {result.extraction.app_context?.trim() || result.batchNarrative?.trim() || 'No additional context returned.'}
-      </p>
-
-      {#if topics.length > 0}
-        <div class="capture-card__pill-row" aria-label="Topics">
-          {#each topics as topic (topic)}
-            <span>{topic}</span>
-          {/each}
-        </div>
-      {/if}
-
-      {#if people.length > 0}
-        <p class="capture-card__people">
-          <strong>People:</strong>
-          {people.join(', ')}
-        </p>
-      {/if}
-
-      {#if screenshotSrc}
-        <img class="capture-card__full" src={screenshotSrc} alt={`Full screenshot for ${titleLabel}`} loading="lazy" />
-      {/if}
-    </section>
-  {/if}
-</article>
+</button>
 
 <style>
-  .capture-card {
+  .search-result {
+    all: unset;
     display: grid;
-    gap: 0.74rem;
+    gap: 0.68rem;
     border: 1px solid rgb(246 241 231 / 30%);
     border-radius: 0.95rem;
     background:
       linear-gradient(162deg, rgb(72 84 120 / 38%), rgb(17 21 31 / 94%)),
       radial-gradient(circle at 12% 8%, rgb(112 255 227 / 12%), transparent 46%);
-    padding: 0.95rem;
+    padding: 0.9rem;
     box-shadow: 0.34rem 0.34rem 0 rgb(8 10 16 / 88%);
     min-width: 0;
+    cursor: pointer;
     transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
-    animation: card-rise 240ms ease both;
   }
 
-  .capture-card:hover {
+  .search-result:hover,
+  .search-result:focus-visible {
     transform: translate(-0.08rem, -0.08rem);
     box-shadow: 0.42rem 0.42rem 0 rgb(8 10 16 / 92%);
     border-color: rgb(246 241 231 / 48%);
+    outline: none;
   }
 
-  .capture-card__header {
+  .search-result__thumb-wrap {
+    border-radius: 0.72rem;
+    overflow: hidden;
+    border: 1px solid rgb(246 241 231 / 28%);
+  }
+
+  .search-result__thumb {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    background: rgb(8 9 14 / 86%);
+    display: block;
+  }
+
+  .search-result__thumb--fallback {
+    display: grid;
+    place-content: center;
+    min-height: 7.8rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--paper-200);
+    background: rgb(8 9 14 / 54%);
+  }
+
+  .search-result__meta {
     display: flex;
     justify-content: space-between;
-    gap: 0.7rem;
     align-items: baseline;
+    gap: 0.5rem;
   }
 
-  .capture-card__rank {
-    font-size: 0.7rem;
-    letter-spacing: 0.18em;
+  .search-result__rank {
+    font-size: 0.68rem;
     text-transform: uppercase;
+    letter-spacing: 0.18em;
     color: var(--pulse);
   }
 
-  .capture-card__score {
-    font-size: 0.78rem;
-    color: var(--paper-200);
-  }
-
-  .capture-card__time-group {
-    text-align: right;
-    display: grid;
-    gap: 0.1rem;
-  }
-
-  .capture-card__time {
-    font-size: 0.95rem;
-    font-family: var(--display-font);
-    letter-spacing: 0.03em;
-  }
-
-  .capture-card__date {
-    font-size: 0.73rem;
-    color: var(--paper-200);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .capture-card__app-chip {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: center;
-    gap: 0.65rem;
-  }
-
-  .capture-card__glyph {
-    width: 2.4rem;
-    aspect-ratio: 1;
-    border-radius: 0.7rem;
-    display: grid;
-    place-items: center;
-    font-family: var(--display-font);
-    font-size: 0.82rem;
-    color: var(--ink-950);
-    background: hsl(var(--hue) 88% 68%);
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 46%);
-  }
-
-  .capture-card__app-copy p {
-    font-family: var(--display-font);
-    font-size: 0.85rem;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .capture-card__app-copy small {
+  .search-result__time {
     font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
     color: var(--paper-200);
-    letter-spacing: 0.06em;
   }
 
-  h4 {
-    font-size: 1.15rem;
-    letter-spacing: 0.04em;
-  }
-
-  .capture-card__signals {
-    display: grid;
-    gap: 0.55rem;
+  .search-result__summary {
     margin: 0;
+    font-size: 1rem;
+    letter-spacing: 0.03em;
+    line-height: 1.2;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    line-clamp: 3;
+    text-overflow: ellipsis;
   }
 
-  .capture-card__signals div {
-    display: grid;
-    gap: 0.16rem;
-  }
-
-  .capture-card__signals dt {
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    color: var(--paper-200);
-  }
-
-  .capture-card__signals dd {
+  .search-result__facts {
     margin: 0;
-    font-size: 0.81rem;
-    color: var(--paper-100);
-    line-height: 1.4;
-  }
-
-  .capture-card__thumb {
-    width: 100%;
-    border-radius: 0.72rem;
-    border: 1px solid rgb(246 241 231 / 30%);
-    object-fit: cover;
-    aspect-ratio: 16 / 10;
-    background: rgb(8 9 14 / 86%);
-  }
-
-  .capture-card__placeholder {
-    border-radius: 0.72rem;
-    border: 1px dashed rgb(246 241 231 / 35%);
-    min-height: 7.8rem;
     display: grid;
-    place-items: center;
-    color: var(--paper-200);
-    background: rgb(8 9 14 / 54%);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-  }
-
-  .capture-card__toggle {
-    border: 1px solid rgb(255 179 71 / 52%);
-    border-radius: 0.66rem;
-    padding: 0.52rem 0.75rem;
-    background: rgb(255 179 71 / 12%);
-    color: var(--paper-100);
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    cursor: pointer;
-    transition: border-color 150ms ease, transform 150ms ease, background 150ms ease;
-  }
-
-  .capture-card__toggle:hover {
-    border-color: rgb(255 179 71 / 82%);
-    transform: translateY(-1px);
-    background: rgb(255 179 71 / 18%);
-  }
-
-  .capture-card__details {
-    border-top: 1px solid rgb(246 241 231 / 22%);
-    padding-top: 0.7rem;
-    display: grid;
-    gap: 0.66rem;
-  }
-
-  .capture-card__detail-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.46rem;
-  }
-
-  .capture-card__detail-grid p,
-  .capture-card__context,
-  .capture-card__people {
-    font-size: 0.76rem;
-    color: var(--paper-200);
-    line-height: 1.4;
-  }
-
-  .capture-card__context strong,
-  .capture-card__people strong,
-  .capture-card__detail-grid strong {
-    color: var(--paper-100);
-    font-family: var(--display-font);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 0.68rem;
-  }
-
-  .capture-card__pill-row {
-    display: flex;
-    flex-wrap: wrap;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.45rem;
   }
 
-  .capture-card__pill-row span {
-    padding: 0.32rem 0.5rem;
-    border-radius: 999px;
-    font-size: 0.66rem;
+  .search-result__facts div {
+    min-width: 0;
+    display: grid;
+    gap: 0.14rem;
+  }
+
+  .search-result__facts dt {
+    font-size: 0.62rem;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
+    color: var(--paper-200);
+  }
+
+  .search-result__facts dd {
+    margin: 0;
+    font-size: 0.74rem;
+    line-height: 1.32;
+    color: var(--paper-100);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .search-result__topics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.36rem;
+  }
+
+  .search-result__topics span {
+    padding: 0.28rem 0.52rem;
+    border-radius: 999px;
     border: 1px solid rgb(112 255 227 / 42%);
     background: rgb(112 255 227 / 8%);
+    font-size: 0.64rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
     color: var(--paper-100);
   }
 
-  .capture-card__full {
-    width: 100%;
-    border-radius: 0.72rem;
-    border: 1px solid rgb(246 241 231 / 30%);
-    background: rgb(8 9 14 / 86%);
-  }
-
-  @keyframes card-rise {
-    from {
-      opacity: 0;
-      transform: translateY(0.44rem);
+  @media (width <= 760px) {
+    .search-result__facts {
+      grid-template-columns: 1fr;
     }
 
-    to {
-      opacity: 1;
-      transform: translateY(0);
+    .search-result__facts dd {
+      white-space: normal;
     }
   }
 </style>

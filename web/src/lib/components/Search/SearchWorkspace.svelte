@@ -1,54 +1,29 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
 
-  import { getApps } from '$lib/api';
+  import { getApps, getCaptureDetail, type CaptureRecord, type ExtractionRecord } from '$lib/api';
+  import CaptureDetailsModal from '$lib/components/CaptureDetailsModal.svelte';
 
   import SearchResultCard from './SearchResultCard.svelte';
   import { collectFacetValues, listProjectFilters, searchCaptures, type SearchResult } from './search-client';
 
-  type TimeWindow = 'all' | '24h' | '72h' | '168h' | '720h';
+  type DatePreset = 'all' | '24h' | '7d' | '30d' | 'custom';
 
-  interface TimeRangeOption {
-    id: TimeWindow;
+  interface DatePresetOption {
+    id: Exclude<DatePreset, 'custom'>;
     label: string;
-    description: string;
     hours: number | null;
   }
 
-  const timeRangeOptions: TimeRangeOption[] = [
-    {
-      id: 'all',
-      label: 'All time',
-      description: 'Search across every indexed extraction.',
-      hours: null,
-    },
-    {
-      id: '24h',
-      label: '24h',
-      description: 'Only the most recent day of activity.',
-      hours: 24,
-    },
-    {
-      id: '72h',
-      label: '3d',
-      description: 'Last 72 hours of captures and extraction notes.',
-      hours: 72,
-    },
-    {
-      id: '168h',
-      label: '7d',
-      description: 'Last week of indexed context.',
-      hours: 168,
-    },
-    {
-      id: '720h',
-      label: '30d',
-      description: 'Search up to one month back.',
-      hours: 720,
-    },
+  const datePresetOptions: DatePresetOption[] = [
+    { id: 'all', label: 'All time', hours: null },
+    { id: '24h', label: '24h', hours: 24 },
+    { id: '7d', label: '7d', hours: 168 },
+    { id: '30d', label: '30d', hours: 720 },
   ];
 
   const quickPrompts = ['sprint planning', 'incident follow-up', 'debugging', 'PR review'];
+  const RESULTS_STEP = 18;
 
   let searchInput: HTMLInputElement | null = null;
   let query = '';
@@ -58,7 +33,11 @@
 
   let selectedApp: string | null = null;
   let selectedProject: string | null = null;
-  let selectedWindow: TimeWindow = '168h';
+  let selectedActivity: string | null = null;
+
+  let selectedPreset: DatePreset = '7d';
+  let fromDate = '';
+  let toDate = '';
 
   let results: SearchResult[] = [];
   let appSuggestions: string[] = [];
@@ -69,33 +48,71 @@
   let requestCounter = 0;
   let mounted = false;
 
+  let visibleLimit = RESULTS_STEP;
+  let paginationFingerprint = '';
+
+  let selectedCapture: CaptureRecord | null = null;
+  let selectedExtraction: ExtractionRecord | null = null;
+  let detailLoading = false;
+  let detailRequestCounter = 0;
+
   $: facets = collectFacetValues(results);
+  $: activityChips = collectActivityTypes(results);
   $: appChips = mergeFacetSuggestions(facets.apps, appSuggestions, selectedApp);
   $: projectChips = mergeFacetSuggestions(facets.projects, projectSuggestions, selectedProject);
-  $: queryPreview = query.trim();
 
-  $: fingerprint = [queryPreview, selectedApp ?? '', selectedProject ?? '', selectedWindow].join('::');
+  $: queryPreview = query.trim();
+  $: normalizedSelectedActivity = selectedActivity?.trim().toLowerCase() ?? '';
+
+  $: filteredResults = results.filter((result) => {
+    if (!normalizedSelectedActivity) {
+      return true;
+    }
+
+    const activityType = result.extraction.activity_type?.trim().toLowerCase() ?? '';
+    return activityType === normalizedSelectedActivity;
+  });
+
+  $: visibleResults = filteredResults.slice(0, visibleLimit);
+  $: hasMoreResults = visibleResults.length < filteredResults.length;
+
+  $: fingerprint = [queryPreview, selectedApp ?? '', selectedProject ?? '', fromDate, toDate].join('::');
   $: if (mounted && fingerprint !== currentFingerprint) {
     currentFingerprint = fingerprint;
     queueSearch();
   }
 
+  $: {
+    const nextPaginationFingerprint = [
+      queryPreview,
+      selectedApp ?? '',
+      selectedProject ?? '',
+      selectedActivity ?? '',
+      fromDate,
+      toDate,
+      String(results.length),
+    ].join('::');
+
+    if (nextPaginationFingerprint !== paginationFingerprint) {
+      paginationFingerprint = nextPaginationFingerprint;
+      visibleLimit = RESULTS_STEP;
+    }
+  }
+
   onMount(async () => {
     mounted = true;
+    applyDatePreset('7d');
     searchInput?.focus({ preventScroll: true });
 
     try {
-      const [apps, projects] = await Promise.all([
-        getApps(),
-        listProjectFilters(hoursAgoIso(720)),
-      ]);
+      const [apps, projects] = await Promise.all([getApps(), listProjectFilters(hoursAgoIso(720))]);
 
       appSuggestions = apps
         .map((app) => app.app_name.trim())
         .filter((appName) => appName.length > 0)
-        .slice(0, 10);
+        .slice(0, 12);
 
-      projectSuggestions = projects.slice(0, 10);
+      projectSuggestions = projects.slice(0, 12);
     } catch (error) {
       console.warn('Failed to load search filter suggestions', error);
     }
@@ -128,15 +145,115 @@
       }
     }
 
-    return [...merged].slice(0, 12);
+    return [...merged].slice(0, 14);
   }
 
-  function hoursAgoIso(hours: number | null): string | null {
-    if (hours === null) {
+  function collectActivityTypes(entries: SearchResult[]): string[] {
+    const values = new Set<string>();
+
+    for (const entry of entries) {
+      const activity = entry.extraction.activity_type?.trim();
+      if (activity) {
+        values.add(activity);
+      }
+    }
+
+    return [...values].sort((left, right) => left.localeCompare(right));
+  }
+
+  function toInputDate(value: Date): string {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function parseInputDate(value: string): Date | null {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
       return null;
     }
 
+    const [yearRaw, monthRaw, dayRaw] = value.split('-').map((part) => Number(part));
+    const parsed = new Date(yearRaw, monthRaw - 1, dayRaw, 0, 0, 0, 0);
+
+    if (!Number.isFinite(parsed.getTime())) {
+      return null;
+    }
+
+    return parsed;
+  }
+
+  function startOfDayIso(dateInput: string): string | null {
+    const parsed = parseInputDate(dateInput);
+    if (!parsed) {
+      return null;
+    }
+
+    parsed.setHours(0, 0, 0, 0);
+    return parsed.toISOString();
+  }
+
+  function nextDayStartIso(dateInput: string): string | null {
+    const parsed = parseInputDate(dateInput);
+    if (!parsed) {
+      return null;
+    }
+
+    parsed.setDate(parsed.getDate() + 1);
+    parsed.setHours(0, 0, 0, 0);
+    return parsed.toISOString();
+  }
+
+  function hoursAgoIso(hours: number): string {
     return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  }
+
+  function applyDatePreset(preset: DatePreset): void {
+    selectedPreset = preset;
+
+    if (preset === 'custom') {
+      return;
+    }
+
+    if (preset === 'all') {
+      fromDate = '';
+      toDate = '';
+      return;
+    }
+
+    const option = datePresetOptions.find((candidate) => candidate.id === preset);
+    if (!option || option.hours === null) {
+      return;
+    }
+
+    const now = new Date();
+    const from = new Date(now.getTime() - option.hours * 60 * 60 * 1000);
+
+    fromDate = toInputDate(from);
+    toDate = toInputDate(now);
+  }
+
+  function normalizeDateRange(): { from: string | null; to: string | null; error: string | null } {
+    const from = fromDate ? startOfDayIso(fromDate) : null;
+    const to = toDate ? nextDayStartIso(toDate) : null;
+
+    if ((fromDate && !from) || (toDate && !to)) {
+      return {
+        from: null,
+        to: null,
+        error: 'Enter valid dates before searching.',
+      };
+    }
+
+    if (from && to && new Date(from).getTime() >= new Date(to).getTime()) {
+      return {
+        from: null,
+        to: null,
+        error: 'Date range is invalid: “From” must be before “To”.',
+      };
+    }
+
+    return { from, to, error: null };
   }
 
   function queueSearch(): void {
@@ -149,17 +266,27 @@
       hasSearched = false;
       errorMessage = '';
       results = [];
+      selectedActivity = null;
       return;
     }
 
     debounceHandle = setTimeout(() => {
       void executeSearch();
-    }, 280);
+    }, 300);
   }
 
   async function executeSearch(): Promise<void> {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) {
+      return;
+    }
+
+    const dateRange = normalizeDateRange();
+    if (dateRange.error) {
+      loading = false;
+      hasSearched = true;
+      errorMessage = dateRange.error;
+      results = [];
       return;
     }
 
@@ -170,13 +297,13 @@
     const requestId = ++requestCounter;
 
     try {
-      const selectedRange = timeRangeOptions.find((option) => option.id === selectedWindow) ?? timeRangeOptions[0];
       const nextResults = await searchCaptures({
         query: trimmedQuery,
         app: selectedApp,
         project: selectedProject,
-        from: hoursAgoIso(selectedRange.hours),
-        limit: 90,
+        from: dateRange.from,
+        to: dateRange.to,
+        limit: 120,
       });
 
       if (requestId !== requestCounter) {
@@ -184,6 +311,10 @@
       }
 
       results = nextResults;
+
+      if (selectedActivity && !collectActivityTypes(nextResults).includes(selectedActivity)) {
+        selectedActivity = null;
+      }
     } catch (error) {
       if (requestId !== requestCounter) {
         return;
@@ -203,14 +334,66 @@
     selectedApp = selectedApp === appName ? null : appName;
   }
 
-  function toggleProject(project: string): void {
-    selectedProject = selectedProject === project ? null : project;
+  function toggleProject(projectName: string): void {
+    selectedProject = selectedProject === projectName ? null : projectName;
+  }
+
+  function toggleActivity(activity: string): void {
+    selectedActivity = selectedActivity === activity ? null : activity;
   }
 
   function applyQuickPrompt(prompt: string): void {
     query = prompt;
-    selectedApp = null;
-    selectedProject = null;
+    selectedActivity = null;
+  }
+
+  function updateFromDate(value: string): void {
+    fromDate = value;
+    selectedPreset = 'custom';
+  }
+
+  function updateToDate(value: string): void {
+    toDate = value;
+    selectedPreset = 'custom';
+  }
+
+  function loadMore(): void {
+    visibleLimit += RESULTS_STEP;
+  }
+
+  async function openResultDetails(result: SearchResult): Promise<void> {
+    selectedCapture = result.capture;
+    selectedExtraction = null;
+    detailLoading = true;
+
+    const requestId = ++detailRequestCounter;
+
+    try {
+      const detail = await getCaptureDetail(result.capture.id);
+      if (requestId !== detailRequestCounter || selectedCapture?.id !== result.capture.id) {
+        return;
+      }
+
+      selectedExtraction = detail?.extraction ?? null;
+    } catch (error) {
+      if (requestId !== detailRequestCounter) {
+        return;
+      }
+
+      console.warn(`Failed to load capture detail for ${result.capture.id}`, error);
+      selectedExtraction = null;
+    } finally {
+      if (requestId === detailRequestCounter) {
+        detailLoading = false;
+      }
+    }
+  }
+
+  function closeDetailsModal(): void {
+    detailRequestCounter += 1;
+    detailLoading = false;
+    selectedCapture = null;
+    selectedExtraction = null;
   }
 </script>
 
@@ -219,7 +402,8 @@
     <p class="panel__section">Search</p>
     <h2>Memory retrieval deck</h2>
     <p class="panel__summary">
-      Live FTS across extraction summaries, projects, topics, and app context. Ranked hits surface your most relevant captures first.
+      Full-text query across indexed extraction descriptions, projects, and topics. Refine by app, project, activity type,
+      and date range.
     </p>
   </header>
 
@@ -240,29 +424,47 @@
   <section class="chip-stack" aria-label="Search filters">
     <article class="chip-group">
       <header>
-        <h3>Time range</h3>
-        <p>{timeRangeOptions.find((option) => option.id === selectedWindow)?.description}</p>
+        <h3>Date range</h3>
+        <p>Preset windows or custom from/to boundaries.</p>
       </header>
+
       <div class="chips">
-        {#each timeRangeOptions as range (range.id)}
+        {#each datePresetOptions as option (option.id)}
           <button
             type="button"
             class="chip"
-            class:chip--active={selectedWindow === range.id}
-            on:click={() => {
-              selectedWindow = range.id;
-            }}
+            class:chip--active={selectedPreset === option.id}
+            on:click={() => applyDatePreset(option.id)}
           >
-            {range.label}
+            {option.label}
           </button>
         {/each}
+      </div>
+
+      <div class="date-controls">
+        <label>
+          <span>From</span>
+          <input
+            type="date"
+            value={fromDate}
+            on:input={(event) => updateFromDate((event.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+        <label>
+          <span>To</span>
+          <input
+            type="date"
+            value={toDate}
+            on:input={(event) => updateToDate((event.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
       </div>
     </article>
 
     <article class="chip-group">
       <header>
         <h3>Apps</h3>
-        <p>Refine by frontmost app name.</p>
+        <p>Refine by frontmost application.</p>
       </header>
       <div class="chips">
         <button type="button" class="chip" class:chip--active={!selectedApp} on:click={() => (selectedApp = null)}>
@@ -272,12 +474,7 @@
           <span class="chip-empty">No app facets yet</span>
         {:else}
           {#each appChips as appName (appName)}
-            <button
-              type="button"
-              class="chip"
-              class:chip--active={selectedApp === appName}
-              on:click={() => toggleApp(appName)}
-            >
+            <button type="button" class="chip" class:chip--active={selectedApp === appName} on:click={() => toggleApp(appName)}>
               {appName}
             </button>
           {/each}
@@ -288,7 +485,7 @@
     <article class="chip-group">
       <header>
         <h3>Projects</h3>
-        <p>Slice relevance ranking by project context.</p>
+        <p>Limit retrieval to project context.</p>
       </header>
       <div class="chips">
         <button
@@ -315,6 +512,37 @@
         {/if}
       </div>
     </article>
+
+    <article class="chip-group">
+      <header>
+        <h3>Activity</h3>
+        <p>Client-side filter when API activity filtering is unavailable.</p>
+      </header>
+      <div class="chips">
+        <button
+          type="button"
+          class="chip"
+          class:chip--active={!selectedActivity}
+          on:click={() => (selectedActivity = null)}
+        >
+          All activities
+        </button>
+        {#if activityChips.length === 0}
+          <span class="chip-empty">No activity types in results</span>
+        {:else}
+          {#each activityChips as activity (activity)}
+            <button
+              type="button"
+              class="chip"
+              class:chip--active={selectedActivity === activity}
+              on:click={() => toggleActivity(activity)}
+            >
+              {activity.replaceAll('_', ' ')}
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </article>
   </section>
 
   {#if queryPreview}
@@ -322,7 +550,8 @@
       {#if loading}
         Searching “{queryPreview}”…
       {:else}
-        {results.length} ranked result{results.length === 1 ? '' : 's'} for “{queryPreview}”.
+        Showing {visibleResults.length} of {filteredResults.length} result{filteredResults.length === 1 ? '' : 's'} for
+        “{queryPreview}”.
       {/if}
     </p>
   {/if}
@@ -334,9 +563,7 @@
   {#if !queryPreview}
     <section class="empty-state" aria-label="Search suggestions">
       <h3>Start with a prompt</h3>
-      <p>
-        Search waits for your input and debounces requests automatically. Try one of these prompts or type your own.
-      </p>
+      <p>Search debounces requests automatically. Try one of these prompts or type your own.</p>
       <div class="chips">
         {#each quickPrompts as prompt (prompt)}
           <button type="button" class="chip" on:click={() => applyQuickPrompt(prompt)}>
@@ -347,18 +574,35 @@
     </section>
   {:else if loading}
     <p class="panel__state">Searching indexed captures…</p>
-  {:else if hasSearched && results.length === 0}
+  {:else if hasSearched && filteredResults.length === 0}
     <section class="empty-state" aria-label="No search results">
-      <h3>No matches for that filter set</h3>
-      <p>Try broadening the time range or clearing app/project chips to surface adjacent captures.</p>
+      <h3>No matches for this filter set</h3>
+      <p>Try broadening date bounds or clearing app/project/activity chips.</p>
     </section>
   {:else}
     <div class="results-grid" aria-live="polite">
-      {#each results as result, index (result.capture.id)}
-        <SearchResultCard {result} position={index + 1} />
+      {#each visibleResults as result, index (result.capture.id)}
+        <SearchResultCard {result} position={index + 1} on:open={(event) => void openResultDetails(event.detail.result)} />
       {/each}
     </div>
+
+    {#if hasMoreResults}
+      <div class="load-more-wrap">
+        <button class="load-more" type="button" on:click={loadMore}>Load more</button>
+      </div>
+    {/if}
   {/if}
+
+  {#if detailLoading && selectedCapture}
+    <p class="panel__state">Loading full extraction payload…</p>
+  {/if}
+
+  <CaptureDetailsModal
+    open={selectedCapture !== null}
+    capture={selectedCapture}
+    extraction={selectedExtraction}
+    on:close={closeDetailsModal}
+  />
 </section>
 
 <style>
@@ -445,6 +689,7 @@
 
   .chip-stack {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.75rem;
   }
 
@@ -455,6 +700,7 @@
     background: rgb(8 11 19 / 62%);
     display: grid;
     gap: 0.54rem;
+    align-content: start;
   }
 
   .chip-group header {
@@ -513,6 +759,40 @@
     align-self: center;
   }
 
+  .date-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .date-controls label {
+    display: grid;
+    gap: 0.28rem;
+  }
+
+  .date-controls span {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--paper-200);
+  }
+
+  .date-controls input {
+    width: 100%;
+    border: 1px solid rgb(246 241 231 / 36%);
+    border-radius: 0.6rem;
+    background: rgb(14 18 28 / 94%);
+    color: var(--paper-100);
+    padding: 0.36rem 0.45rem;
+    font: inherit;
+    font-size: 0.75rem;
+  }
+
+  .date-controls input:focus-visible {
+    outline: 2px solid var(--pulse);
+    outline-offset: 1px;
+  }
+
   .result-summary {
     font-family: var(--display-font);
     letter-spacing: 0.04em;
@@ -558,10 +838,47 @@
     align-content: start;
   }
 
+  .load-more-wrap {
+    display: flex;
+    justify-content: center;
+  }
+
+  .load-more {
+    border: 1px solid rgb(255 179 71 / 54%);
+    border-radius: 0.74rem;
+    background: rgb(255 179 71 / 11%);
+    color: var(--paper-100);
+    font: inherit;
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    padding: 0.58rem 0.92rem;
+    cursor: pointer;
+    transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
+  }
+
+  .load-more:hover,
+  .load-more:focus-visible {
+    transform: translateY(-1px);
+    border-color: rgb(255 179 71 / 86%);
+    background: rgb(255 179 71 / 18%);
+    outline: none;
+  }
+
+  @media (width <= 960px) {
+    .chip-stack {
+      grid-template-columns: 1fr;
+    }
+  }
+
   @media (width <= 760px) {
     .chip-group header {
       display: grid;
       justify-items: start;
+    }
+
+    .date-controls {
+      grid-template-columns: 1fr;
     }
 
     .results-grid {

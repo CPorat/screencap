@@ -27,7 +27,9 @@ export interface SearchRequest {
   app?: string | null;
   project?: string | null;
   from?: string | null;
+  to?: string | null;
   limit?: number;
+
 }
 
 export interface SearchResult {
@@ -171,6 +173,9 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
     params.set('from', request.from.trim());
   }
 
+  if (request.to?.trim()) {
+    params.set('to', request.to.trim());
+  }
   const response = await fetch(`/api/search?${params.toString()}`, {
     headers: {
       Accept: 'application/json',

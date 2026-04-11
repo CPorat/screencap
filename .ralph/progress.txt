@@ -277,3 +277,12 @@ Branch: ralph/v1-implementation
   - Route-level dashboards that compose multiple `/api/*` calls should normalize payload shape once at the boundary so component trees remain deterministic under partial/missing fields.
   - Seeded SQLite fixtures plus Puppeteer route checks are the fastest reliable signal for regression-proofing summary-heavy Svelte views backed by evolving synthesis payloads.
 ---
+## 2026-04-11 07:52:39 UTC - US-018
+- Finalized the Svelte Search view delivery checkpoint: confirmed debounced `/api/search` fetching with query-param filters, ranked/expandable result rendering, and placeholder Stats scope isolation aligned with US-018 boundaries.
+- Verified implementation coverage context includes FTS-matching seed data setup and Puppeteer browser validation against seeded SQLite captures/extractions for positive and no-result queries.
+- Files changed: .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Debounced search + request-order guards are required to keep `/api/search` results stable under fast typing while preserving backend relevance ordering.
+  - Seeded SQLite fixtures that vary project/topic/app values make query-param filter behavior and FTS relevance regressions easy to catch in browser tests.
+  - Keep Stats as an explicit placeholder during Search-story completion so route scaffolding does not leak non-goal scope into delivery validation.
+---

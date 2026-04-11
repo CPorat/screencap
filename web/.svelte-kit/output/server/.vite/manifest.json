@@ -9,6 +9,20 @@
       "_internal.js"
     ]
   },
+  "_CaptureDetailsModal.js": {
+    "file": "chunks/CaptureDetailsModal.js",
+    "name": "CaptureDetailsModal",
+    "imports": [
+      "_index-server.js"
+    ],
+    "css": [
+      "_app/immutable/assets/CaptureDetailsModal.ttaSlq1E.css"
+    ]
+  },
+  "_CaptureDetailsModal.ttaSlq1E.css": {
+    "file": "_app/immutable/assets/CaptureDetailsModal.ttaSlq1E.css",
+    "src": "_CaptureDetailsModal.ttaSlq1E.css"
+  },
   "_api.js": {
     "file": "chunks/api.js",
     "name": "api"
@@ -117,10 +131,11 @@
     "isEntry": true,
     "imports": [
       "_index-server.js",
-      "_api.js"
+      "_api.js",
+      "_CaptureDetailsModal.js"
     ],
     "css": [
-      "_app/immutable/assets/_page.kkx8h4aO.css"
+      "_app/immutable/assets/_page.DpbjLttt.css"
     ]
   },
   "src/routes/insights/+page.svelte": {
@@ -143,10 +158,11 @@
     "isEntry": true,
     "imports": [
       "_index-server.js",
-      "_api.js"
+      "_api.js",
+      "_CaptureDetailsModal.js"
     ],
     "css": [
-      "_app/immutable/assets/_page.Bi9ycbbz.css"
+      "_app/immutable/assets/_page.Ct6gjIuw.css"
     ]
   },
   "src/routes/settings/+page.svelte": {

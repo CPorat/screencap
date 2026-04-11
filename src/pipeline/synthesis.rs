@@ -123,7 +123,7 @@ impl RollingContextScheduler {
         self.run_once_at(Utc::now()).await
     }
 
-    async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
+    pub async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
         let window_end = truncate_to_second(window_end);
         let window_start = window_end - ChronoDuration::minutes(ROLLING_CONTEXT_WINDOW_MINUTES);
         let batches = self
@@ -225,7 +225,7 @@ impl HourlyDigestScheduler {
         self.run_once_at(truncate_to_hour(Utc::now())).await
     }
 
-    async fn run_once_at(&mut self, hour_end: DateTime<Utc>) -> Result<Option<Insight>> {
+    pub async fn run_once_at(&mut self, hour_end: DateTime<Utc>) -> Result<Option<Insight>> {
         let hour_end = truncate_to_hour(hour_end);
         let hour_start = hour_end - ChronoDuration::hours(HOURLY_DIGEST_WINDOW_HOURS);
         let batches = self
@@ -335,7 +335,7 @@ impl DailySummaryScheduler {
             .await
     }
 
-    async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
+    pub async fn run_once_at(&mut self, window_end: DateTime<Utc>) -> Result<Option<Insight>> {
         let date = window_end.date_naive();
         if let Some(existing) = self.db.get_latest_daily_insight_for_date(date)? {
             if self.config.synthesis.daily_export_markdown {

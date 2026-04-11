@@ -91,6 +91,8 @@ Three-layer pipeline:
 - Unit tests for extraction/synthesis prompt construction and response parsing.
 - Integration tests for the API endpoints.
 - The capture layer is hard to unit test (requires screen recording permission); test it manually or with integration tests that mock the Swift bridge.
+- Time-dependent pipeline schedulers should expose explicit `run_once_at(...)` entry points so integration tests and backfills can drive rolling/hourly/daily windows deterministically without wall-clock sleeps.
+
 
 ## What NOT to Do
 

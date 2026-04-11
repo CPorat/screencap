@@ -11,6 +11,8 @@ Branch: ralph/v1-implementation
 - Event-driven capture should keep native code to raw app-switch/key-down/mouse-move callbacks, let `src/capture/events.rs` detect keyboard bursts and post-idle mouse resumes, and leave the daemon responsible for the final settle-time debounce so CGEventTap policy stays unit-testable in Rust.
 
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
+- Time-dependent pipeline schedulers should expose explicit `run_once_at(...)` entry points so integration tests and backfills can drive fixed rolling/hourly/daily windows deterministically without wall-clock sleeps or midnight-boundary flake.
+
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Menu bar daemon controllers should parse the `state:` line from `screencap status` and track whether the current daemon was launched by the menu bar, so icon state stays truthful and quitting the app only tears down the child it started.
@@ -571,4 +573,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: launchd install flows are safest when status reporting exposes install state separately from process liveness, so menu/CLI callers do not infer autostart from the PID file alone.
   - Gotchas encountered: LaunchAgents must invoke the hidden foreground daemon entrypoint (`__daemon-child`) rather than `start`, or login autostart would recurse into the backgrounding path.
   - Useful context: integration coverage should read the generated plist and assert `RunAtLoad`, `KeepAlive`, and the daemon-child argument so launchd regressions are caught without needing a live `launchctl` session.
+---
+## [2026-04-11 16:22:27 UTC] - US-030
+- What was implemented: added `tests/e2e_pipeline.rs`, a single Tokio integration test that seeds 10 capture rows with synthetic JPEGs, runs extraction plus rolling/hourly/daily synthesis against one temp-home SQLite database with `MockLlmProvider`, then starts the real axum server and verifies health, capture listing, FTS search, rolling insight, daily insight, embedded HTML, and screenshot JPEG delivery over HTTP.
+- Files changed: AGENTS.md, src/pipeline/synthesis.rs, tests/e2e_pipeline.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: time-aware schedulers are much easier to integration-test when they expose explicit timestamp-driven execution entry points instead of forcing tests to race the wall clock.
+  - Gotchas encountered: daily summary generation only consumes hourly insights whose `window_start` falls on the requested date, so midnight-boundary tests need deterministic clock control or they become flaky.
+  - Useful context: `capture::screenshot::capture_screenshot()` under `--features mock-capture` is sufficient for generating real JPEG fixtures on disk, which keeps screenshot-serving integration tests close to production behavior without TCC permissions.
 ---

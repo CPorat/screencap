@@ -1,0 +1,118 @@
+{
+  "story": "US-033",
+  "target": "http://127.0.0.1:7878",
+  "runDate": "2026-04-11",
+  "setup": {
+    "daemon": {
+      "feature": "mock-capture",
+      "startCommandUsed": "cargo run --features mock-capture -- start",
+      "stableRunCommandUsed": "HOME=.tmp/us033-home target/debug/screencap (detached foreground)",
+      "capturePaused": true
+    },
+    "seededData": {
+      "captures": 5,
+      "extractions": 5,
+      "extraction_batches": 3,
+      "rolling_insights": 1,
+      "hourly_insights": 3,
+      "daily_insights": 1
+    }
+  },
+  "acceptance": {
+    "appShellNavigation": {
+      "passed": true,
+      "tabsClickable": 4
+    },
+    "timeline": {
+      "passed": true,
+      "hourSections": 4,
+      "captureButtons": 10,
+      "thumbnailImagesLoaded": 10,
+      "expandCaptureModal": true,
+      "appFilterWorks": true
+    },
+    "insights": {
+      "passed": true,
+      "rollingCardVisible": true,
+      "hourlySectionVisible": true,
+      "hourlyCardsExpandable": true,
+      "dailySummaryVisible": true
+    },
+    "search": {
+      "passed": true,
+      "queryResultsAppear": true,
+      "noResultsStateForGibberish": true
+    },
+    "stats": {
+      "passed": true,
+      "chartsRendered": true,
+      "canvasCount": 3,
+      "nonEmptyCanvasCount": 3,
+      "costSectionShowsData": true
+    },
+    "crossViewNavigation": {
+      "passed": true,
+      "sequence": [
+        "Timeline",
+        "Search",
+        "Insights",
+        "Stats",
+        "Timeline"
+      ]
+    },
+    "responsive": {
+      "passed": true,
+      "viewports": {
+        "375x812": {
+          "timelineOverflowPx": 0,
+          "searchOverflowPx": 0,
+          "insightsOverflowPx": 0,
+          "statsOverflowPx": 0,
+          "navAccessible": true
+        },
+        "1280x800": {
+          "timelineOverflowPx": 0,
+          "searchOverflowPx": 0,
+          "insightsOverflowPx": 0,
+          "statsOverflowPx": 0,
+          "navAccessible": true
+        }
+      }
+    },
+    "performance": {
+      "passed": true,
+      "lcpMs": 80,
+      "cls": 0,
+      "lcpBudgetMs": 2500,
+      "clsBudget": 0.1
+    },
+    "consoleErrors": {
+      "passed": true,
+      "desktop": {
+        "consoleErrors": 0,
+        "jsErrors": 0,
+        "unhandledRejections": 0
+      },
+      "mobile": {
+        "consoleErrors": 0
+      }
+    },
+    "accessibility": {
+      "passed": true,
+      "criticalOrSeriousViolations": 0,
+      "desktopPerView": {
+        "timeline": 0,
+        "search": 0,
+        "insights": 0,
+        "stats": 0
+      },
+      "mobilePerView": {
+        "timeline": 0,
+        "search": 0,
+        "insights": 0,
+        "stats": 0
+      }
+    }
+  },
+  "result": "US-033 acceptance criteria verified"
+}

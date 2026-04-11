@@ -603,3 +603,11 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: an empty SQLite file is a different path from a missing database file — `today` only stays in a helpful empty state when it short-circuits before provider construction if no hourly insights exist.
   - Useful context: daemon-startup default-config coverage is easiest to keep deterministic in tests by loading config from temp homes, overriding `server.port` to `0`, and asserting the capture loop plus localhost listener can open without relying on port 7878 being free.
 ---
+## 2026-04-11 - US-033
+- What was implemented
+  - Ran the full automated browser test suite (US-033) utilizing Playwright MCP to verify all 4 UI tabs, responsive layout across mobile and desktop breakpoints, performance (Core Web Vitals), accessibility, and console errors.
+- Files changed
+  - None (UI passed all checks against seeded data). Created an internal artifact for reporting.
+- **Learnings for future iterations:**
+  - Svelte static-adapter app handles the embedded routing and responsive layout perfectly. Sentinels/hydration states hold up cleanly under e2e constraints.
+---

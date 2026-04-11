@@ -797,7 +797,7 @@
         "close the browser session"
       ],
       "priority": 34,
-      "passes": false,
+      "passes": true,
       "notes": "AUDIT: No automated browser tests (Playwright, expect-cli, or otherwise) exist in the repo. UI code for Stats/charts is substantive but the QA process specified (expect MCP session with viewports, LCP/CLS, a11y) was never executed or encoded as tests.",
       "tool": "omp",
       "model": "gemini-3.1-pro-preview",

@@ -825,6 +825,185 @@
       "model": "gpt-5.4",
       "provider": "github-copilot",
       "thinking": "high"
+    },
+    {
+      "id": "US-035",
+      "title": "Fix capture display ID enumeration",
+      "description": "Fix the real capture path to use true macOS display IDs (CGDirectDisplayID) instead of array indices when invoking the Swift screenshot bridge.",
+      "acceptanceCriteria": [
+        "Daemon capture loop uses capture::screenshot::display_ids() instead of 0..display_count indexing",
+        "Each capture call passes the real display ID returned by the bridge to capture_screenshot",
+        "Stored captures.display_id values match real display IDs",
+        "Screenshot filenames remain HHMMSS-{display_id}.jpg and use actual display IDs",
+        "Multi-monitor capture writes one row per display ID in a single transaction",
+        "cargo test --features mock-capture passes",
+        "Manual real-capture check on multi-monitor no longer errors with invalid display ID"
+      ],
+      "priority": 35,
+      "passes": true,
+      "notes": "P0 audit finding: daemon passes display indices while Swift resolves by SCDisplay.displayID. Fix this first because it can break real capture.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-036",
+      "title": "Add POST /api/analyze endpoint",
+      "description": "Implement ad-hoc analysis for a caller-specified time range so users can run on-demand AI analysis without waiting for scheduled jobs.",
+      "acceptanceCriteria": [
+        "POST /api/analyze route is registered in api router",
+        "Endpoint accepts a time range and optional analysis query/prompt",
+        "Implementation reuses existing extraction and synthesis pipeline helpers where possible",
+        "Response returns structured analysis payload with window metadata",
+        "Errors are typed and return actionable messages for invalid ranges or unavailable providers",
+        "Integration tests cover success and representative failure paths"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": "Spec system endpoints include POST /api/analyze for on-demand time-range analysis.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-037",
+      "title": "Unified search across extractions and insights",
+      "description": "Update /api/search to return fused full-text results from both extraction records and insight narratives, with server-side activity filtering.",
+      "acceptanceCriteria": [
+        "GET /api/search returns matches from both extraction FTS and insights FTS",
+        "Results include enough metadata for UI rendering (source type, timestamp, narrative fields)",
+        "Server-side activity_type filter is supported and documented in request params",
+        "Existing filters (app, project, from, to, limit) continue to work",
+        "Ranking is deterministic and tested for mixed extraction + insight results",
+        "Storage helper remains typed and keeps SQL in StorageDb"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": "Spec requires full-text search across extractions and insights. Current /api/search is extraction-only.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-038",
+      "title": "Add MCP ask_about_activity tool",
+      "description": "Expose a new MCP tool that answers free-form activity questions by routing through the existing semantic/synthesis logic with contextual data.",
+      "acceptanceCriteria": [
+        "MCP tool list includes ask_about_activity",
+        "Tool schema accepts a question plus optional time-window filters",
+        "Handler reuses existing semantic/synthesis pipeline used by CLI ask where appropriate",
+        "Responses include grounded citations or supporting context references from activity data",
+        "Tool errors are structured and do not crash MCP transport",
+        "MCP integration tests cover happy path and missing-provider behavior"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": "Spec tool surface lists ask_about_activity as a first-class MCP tool.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-039",
+      "title": "Implement screencap config command",
+      "description": "Replace the config command scaffold with a working command that opens config.toml in the user's editor and bootstraps defaults when missing.",
+      "acceptanceCriteria": [
+        "screencap config no longer prints scaffold placeholder text",
+        "Command opens resolved config path in $VISUAL or $EDITOR, with a sensible fallback",
+        "Default config file is created if absent before editor launch",
+        "Helpful output is printed when editor launch fails",
+        "Command is covered by CLI tests (including no-config initial state)"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": "Spec CLI includes screencap config to open config in editor.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-040",
+      "title": "Enrich status and stats with pipeline health and cost",
+      "description": "Expand CLI status and API stats to include pipeline health signals and cost telemetry expected by the spec.",
+      "acceptanceCriteria": [
+        "DaemonStatus includes pipeline health fields (last extraction, last synthesis, pending captures or equivalent)",
+        "CLI screencap status prints pipeline health and cost-so-far-today",
+        "GET /api/stats includes pipeline health and cost tracking fields",
+        "Stats endpoint preserves read-only DB behavior",
+        "Output has sane empty-state defaults when no data exists",
+        "Unit/integration tests validate new fields and formatting"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": "Spec calls for status/stats to report pipeline health and cost, not only capture/storage counters.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-041",
+      "title": "Menu bar: Preferences, launchd controls, rolling-context tooltip",
+      "description": "Bring the menu bar app to spec by adding Preferences, launchd auto-start controls, and tooltip narrative from rolling context.",
+      "acceptanceCriteria": [
+        "Menu includes Preferences item and opens config/preferences flow",
+        "Menu includes launchd install/uninstall controls with clear state",
+        "Tooltip shows latest rolling context summary rather than only pid/capture counters",
+        "Existing Start/Stop/Open Timeline/Open Data Folder/Quit behavior remains correct",
+        "Owned-daemon shutdown semantics remain unchanged and tested",
+        "Swift tests cover menu action wiring and tooltip state mapping where practical"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": "Spec menu bar section explicitly requires Preferences, launchd management, and rolling-context tooltip.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-042",
+      "title": "Web search semantic toggle and server-side activity filtering",
+      "description": "Upgrade Search UI to support semantic mode and push activity-type filtering to the API instead of client-only post-filtering.",
+      "acceptanceCriteria": [
+        "Search view has explicit toggle between keyword search and semantic search",
+        "Semantic mode calls /api/search/semantic with query and window filters",
+        "Activity type filter is sent to /api/search and applied server-side",
+        "Client-side only activity filter fallback text/logic is removed",
+        "Debounce and stale-request cancellation behavior remains intact",
+        "Browser verification confirms both modes and filter chips behave correctly"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": "Spec search view requires semantic option and activity-type filters that reflect server-ranked results.",
+      "tool": "omp",
+      "model": "gemini-3.1-pro-preview",
+      "provider": "github-copilot",
+      "thinking": "high"
+    },
+    {
+      "id": "US-043",
+      "title": "Harden e2e provider stubs against deadlock",
+      "description": "Fix e2e test harness blocking behavior so provider stubs cannot deadlock test runs when no request arrives.",
+      "acceptanceCriteria": [
+        "VisionProviderServer no longer blocks indefinitely on accept() during teardown",
+        "Drop/join path has timeout or cancellation so tests always terminate",
+        "Failure mode emits clear diagnostics instead of hanging",
+        "cargo test (default features) does not deadlock in e2e capture/API suites",
+        "Mock-capture test suites continue to pass unchanged"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": "Audit found potential deadlock in tests/e2e_capture_api.rs when provider thread blocks on accept and Drop joins forever.",
+      "tool": "omp",
+      "model": "gpt-5.4",
+      "provider": "github-copilot",
+      "thinking": "high"
     }
   ]
 }

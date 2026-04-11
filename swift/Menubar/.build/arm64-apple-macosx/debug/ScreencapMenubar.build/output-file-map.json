@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/primary.swiftdeps"
+  },
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/ScreencapApp.swift": {
+    "dependencies": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.d",
+    "object": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swift.o",
+    "swiftmodule": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp~partial.swiftmodule",
+    "swift-dependencies": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swiftdeps",
+    "diagnostics": "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.dia"
+  }
+}

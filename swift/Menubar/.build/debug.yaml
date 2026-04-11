@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "PackageStructure": ["<PackageStructure>"]
+  "ScreencapMenubar-arm64-apple-macosx-debug.exe": ["<ScreencapMenubar-arm64-apple-macosx-debug.exe>"]
+  "ScreencapMenubar-arm64-apple-macosx-debug.module": ["<ScreencapMenubar-arm64-apple-macosx-debug.module>"]
+  "main": ["<ScreencapMenubar-arm64-apple-macosx-debug.exe>","<ScreencapMenubar-arm64-apple-macosx-debug.module>"]
+  "test": ["<ScreencapMenubar-arm64-apple-macosx-debug.exe>","<ScreencapMenubar-arm64-apple-macosx-debug.module>"]
+default: "main"
+nodes:
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar":
+    is-mutated: true
+commands:
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar-entitlement.plist"]
+    description: "Write auxiliary file /Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar-entitlement.plist"
+
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/chrisporat/Development/personal/screencap/swift/Menubar/ScreencapApp.swift"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/sources"]
+    description: "Write auxiliary file /Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/sources"
+
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swift.o"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.product/Objects.LinkFileList"
+
+  "/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+
+  "<ScreencapMenubar-arm64-apple-macosx-debug.exe>":
+    tool: phony
+    inputs: ["<ScreencapMenubar-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    outputs: ["<ScreencapMenubar-arm64-apple-macosx-debug.exe>"]
+
+  "<ScreencapMenubar-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swift.o","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/Modules/ScreencapMenubar.swiftmodule"]
+    outputs: ["<ScreencapMenubar-arm64-apple-macosx-debug.module>"]
+
+  "C.ScreencapMenubar-arm64-apple-macosx-debug.exe":
+    tool: shell
+    inputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swift.o","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.product/Objects.LinkFileList"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/ScreencapMenubar"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug","-o","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar","-module-name","ScreencapMenubar","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_ScreencapMenubar_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-Xlinker","-add_ast_path","-Xlinker","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/Modules/ScreencapMenubar.swiftmodule","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.ScreencapMenubar-arm64-apple-macosx-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar-entitlement.plist"]
+    outputs: ["<ScreencapMenubar-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/ScreencapMenubar"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar-entitlement.plist","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar"]
+
+  "C.ScreencapMenubar-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/ScreencapApp.swift","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/sources"]
+    outputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/ScreencapApp.swift.o","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/Modules/ScreencapMenubar.swiftmodule"]
+    description: "Compiling Swift Module 'ScreencapMenubar' (1 sources)"
+    args: ["/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","ScreencapMenubar","-emit-dependencies","-emit-module","-emit-module-path","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/Modules/ScreencapMenubar.swiftmodule","-output-file-map","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/output-file-map.json","-incremental","-c","@/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar.build/sources","-I","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","ScreencapMenubar_main","-parse-as-library","-swift-version","5","-plugin-path","/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk","-F","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk","-Xcc","-F","-Xcc","/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","menubar"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/chrisporat/Development/personal/screencap/swift/Menubar/","/Users/chrisporat/Development/personal/screencap/swift/Menubar/Package.swift","/Users/chrisporat/Development/personal/screencap/swift/Menubar/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

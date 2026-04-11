@@ -4,6 +4,7 @@ Project: Screencap v1
 Branch: ralph/v1-implementation
 
 ## Codebase Patterns
+- Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
 - MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
@@ -354,4 +355,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: expose retention windows through a dedicated `prune_older_than` path so CLI and daemon auto-prune share the same pruning semantics.
   - Gotchas encountered: prune must apply cascading deletes for dependent rows and call `std::fs::remove_file` while ignoring `NotFound` so repeated runs remain idempotent.
   - Useful context: integration coverage should assert both SQLite row deletion and on-disk screenshot deletion in the same test to prevent DB/filesystem drift.
+---
+
+## [2026-04-11 11:03:25 UTC] - US-023
+- What was implemented (Menu bar app scaffolding using SwiftUI): added menu bar app scaffolding with status icon state, Start/Stop Capture actions, Open Timeline/Data Folder actions, and graceful quit behavior around `screencap` daemon commands.
+- Files changed: menubar/.gitignore, menubar/Package.swift, menubar/Sources/ScreencapMenu/main.swift, menubar/Sources/ScreencapMenu/AppDelegate.swift, menubar/Tests/ScreencapMenuTests/ScreencapMenuTests.swift, swift/Menubar/Package.swift, swift/Menubar/ScreencapApp.swift, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: menu bar lifecycle is most reliable when `NSApplication` runs in accessory mode with explicit `NSStatusItem` menu wiring and periodic daemon-status polling.
+  - Gotchas encountered: command discovery for `screencap` must check common install paths plus `which` fallback, otherwise status/start/stop actions silently degrade when PATH differs between shell and GUI launch contexts.
+  - Useful context: keep daemon stop handling idempotent on quit (`screencap stop` best-effort) so closing the menu bar app does not leave ambiguous capture state.
 ---

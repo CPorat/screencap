@@ -574,7 +574,7 @@
         "Builds with swift build or xcodebuild"
       ],
       "priority": 24,
-      "passes": false,
+      "passes": true,
       "notes": "Keep this minimal. ~200 lines of Swift. No storyboards, just programmatic SwiftUI menu bar.",
       "tool": "omp",
       "model": "gpt-5.4",

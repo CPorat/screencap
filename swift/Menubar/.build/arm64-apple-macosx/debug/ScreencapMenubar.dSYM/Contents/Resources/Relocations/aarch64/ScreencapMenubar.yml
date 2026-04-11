@@ -1,0 +1,38 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/chrisporat/Development/personal/screencap/swift/Menubar/.build/arm64-apple-macosx/debug/ScreencapMenubar'
+relocations:
+  - { offset: 0xDDFA5, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV4bodyQrvg', symObjAddr: 0x0, symBinAddr: 0x100001010, symSize: 0x1C4 }
+  - { offset: 0xDE04F, size: 0x8, addend: 0x0, symName: ___swift_instantiateConcreteTypeFromMangledNameV2, symObjAddr: 0x1C4, symBinAddr: 0x1000011D4, symSize: 0x80 }
+  - { offset: 0xDE063, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI9TupleViewVyAA15ModifiedContentVyAA4TextVAA24_ForegroundStyleModifierVyAA017HierarchicalShapeI0VGG_AA7DividerVAA0D0PAAE16keyboardShortcut_9modifiersQrAA13KeyEquivalentV_AA14EventModifiersVtFQOyAA6ButtonVyAGG_Qo_tGACyxGAapAWl', symObjAddr: 0x778, symBinAddr: 0x100001788, symSize: 0x74 }
+  - { offset: 0xDE077, size: 0x8, addend: 0x0, symName: ___swift_instantiateConcreteTypeFromMangledNameAbstractV2, symObjAddr: 0x7EC, symBinAddr: 0x1000017FC, symSize: 0x78 }
+  - { offset: 0xDE08B, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI12MenuBarExtraVyAA5LabelVyAA4TextVAA5ImageVGAA9TupleViewVyAA15ModifiedContentVyAgA24_ForegroundStyleModifierVyAA017HierarchicalShapeN0VGG_AA7DividerVAA0J0PAAE16keyboardShortcut_9modifiersQrAA13KeyEquivalentV_AA14EventModifiersVtFQOyAA6ButtonVyAGG_Qo_tGGACyxq_GAA5SceneAAWl', symObjAddr: 0xC70, symBinAddr: 0x100001C80, symSize: 0x74 }
+  - { offset: 0xDE09F, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppVAC7SwiftUI0C0AAWl', symObjAddr: 0xD18, symBinAddr: 0x100001D28, symSize: 0x68 }
+  - { offset: 0xDE0B3, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV7SwiftUI0C0AA4BodyAdEP_AD5ScenePWT', symObjAddr: 0xDC4, symBinAddr: 0x100001DD4, symSize: 0x24 }
+  - { offset: 0xDE0C7, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppVMa', symObjAddr: 0xDE8, symBinAddr: 0x100001DF8, symSize: 0x14 }
+  - { offset: 0xDE0DB, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI22HierarchicalShapeStyleVAcA0dE0AAWl', symObjAddr: 0xE10, symBinAddr: 0x100001E20, symSize: 0x64 }
+  - { offset: 0xDE0EF, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI4TextVWOh', symObjAddr: 0xE74, symBinAddr: 0x100001E84, symSize: 0x40 }
+  - { offset: 0xDE103, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI4TextV7StorageOWOe', symObjAddr: 0xEB4, symBinAddr: 0x100001EC4, symSize: 0x48 }
+  - { offset: 0xDE117, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI15ModifiedContentVyAA4TextVAA24_ForegroundStyleModifierVyAA017HierarchicalShapeG0VGGACyxq_GAA4ViewA2aMRzAA0kH0R_rlWl', symObjAddr: 0xEFC, symBinAddr: 0x100001F0C, symSize: 0x8C }
+  - { offset: 0xDE12B, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI24_ForegroundStyleModifierVyAA017HierarchicalShapeD0VGACyxGAA04ViewE0AAWl', symObjAddr: 0xF88, symBinAddr: 0x100001F98, symSize: 0x74 }
+  - { offset: 0xDE13F, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI15ModifiedContentVyAA4TextVAA24_ForegroundStyleModifierVyAA017HierarchicalShapeG0VGGWOh', symObjAddr: 0xFFC, symBinAddr: 0x10000200C, symSize: 0x40 }
+  - { offset: 0xDE153, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI7DividerVAcA4ViewAAWl', symObjAddr: 0x103C, symBinAddr: 0x10000204C, symSize: 0x6C }
+  - { offset: 0xDE167, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI6ButtonVyAA4TextVGACyxGAA4ViewAAWl', symObjAddr: 0x10A8, symBinAddr: 0x1000020B8, symSize: 0x74 }
+  - { offset: 0xDE17B, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI15ModifiedContentVyAA4TextVAA24_ForegroundStyleModifierVyAA017HierarchicalShapeG0VGGWOc', symObjAddr: 0x111C, symBinAddr: 0x10000212C, symSize: 0x84 }
+  - { offset: 0xDE18F, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI4TextV7StorageOWOy', symObjAddr: 0x11A0, symBinAddr: 0x1000021B0, symSize: 0x48 }
+  - { offset: 0xDE1A3, size: 0x8, addend: 0x0, symName: ___swift_project_boxed_opaque_existential_0, symObjAddr: 0x11E8, symBinAddr: 0x1000021F8, symSize: 0x4C }
+  - { offset: 0xDE1B7, size: 0x8, addend: 0x0, symName: ___swift_destroy_boxed_opaque_existential_0, symObjAddr: 0x1234, symBinAddr: 0x100002244, symSize: 0x60 }
+  - { offset: 0xDE1D7, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV4bodyQrvg', symObjAddr: 0x0, symBinAddr: 0x100001010, symSize: 0x1C4 }
+  - { offset: 0xDE1FB, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV4bodyQrvg7SwiftUI9TupleViewVyAE0H0PAEE15foregroundStyleyQrqd__AE05ShapeJ0Rd__lFQOyAE4TextV_AE012HierarchicalkJ0VQo__AE7DividerVAiEE16keyboardShortcut_9modifiersQrAE13KeyEquivalentV_AE14EventModifiersVtFQOyAE6ButtonVyAMG_Qo_tGyXEfU_', symObjAddr: 0x244, symBinAddr: 0x100001254, symSize: 0x534 }
+  - { offset: 0xDE215, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV4bodyQrvg7SwiftUI9TupleViewVyAE0H0PAEE15foregroundStyleyQrqd__AE05ShapeJ0Rd__lFQOyAE4TextV_AE012HierarchicalkJ0VQo__AE7DividerVAiEE16keyboardShortcut_9modifiersQrAE13KeyEquivalentV_AE14EventModifiersVtFQOyAE6ButtonVyAMG_Qo_tGyXEfU_yyScMYccfU_', symObjAddr: 0x8BC, symBinAddr: 0x1000018CC, symSize: 0x128 }
+  - { offset: 0xDE2E6, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI10ShapeStylePA2A012HierarchicalcD0VRszrlE9secondaryAEvgZ', symObjAddr: 0x864, symBinAddr: 0x100001874, symSize: 0x14 }
+  - { offset: 0xDE310, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI11ViewBuilderV15buildExpressionyxxAA0C0RzlFZ', symObjAddr: 0x878, symBinAddr: 0x100001888, symSize: 0x44 }
+  - { offset: 0xDE332, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI4ViewPAAE16keyboardShortcut_9modifiersQrAA13KeyEquivalentV_AA14EventModifiersVtFfA0_', symObjAddr: 0x9E4, symBinAddr: 0x1000019F4, symSize: 0x20 }
+  - { offset: 0xDE35F, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI11ViewBuilderV10buildBlockyAA05TupleC0VyxxQp_tGxxQpRvzAA0C0RzlFZ', symObjAddr: 0xA04, symBinAddr: 0x100001A14, symSize: 0x228 }
+  - { offset: 0xDE3BC, size: 0x8, addend: 0x0, symName: '_$s7SwiftUI12SceneBuilderV15buildExpressionyxxAA0C0RzlFZ', symObjAddr: 0xC2C, symBinAddr: 0x100001C3C, symSize: 0x44 }
+  - { offset: 0xDE3F5, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV5$mainyyFZ', symObjAddr: 0xCE4, symBinAddr: 0x100001CF4, symSize: 0x34 }
+  - { offset: 0xDE415, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppVACycfC', symObjAddr: 0xD80, symBinAddr: 0x100001D90, symSize: 0x4 }
+  - { offset: 0xDE436, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV7SwiftUI0C0AadEP4body4BodyQzvgTW', symObjAddr: 0xD84, symBinAddr: 0x100001D94, symSize: 0x14 }
+  - { offset: 0xDE455, size: 0x8, addend: 0x0, symName: '_$s16ScreencapMenubar0A3AppV7SwiftUI0C0AadEPxycfCTW', symObjAddr: 0xD98, symBinAddr: 0x100001DA8, symSize: 0x14 }
+  - { offset: 0xDE48A, size: 0x8, addend: 0x0, symName: _ScreencapMenubar_main, symObjAddr: 0xDAC, symBinAddr: 0x100001DBC, symSize: 0x18 }
+...

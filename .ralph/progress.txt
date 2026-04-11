@@ -36,6 +36,8 @@ Branch: ralph/v1-implementation
 - When OpenAI-compatible providers expose usage cost metadata (such as OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that do not report cost should stay `None` rather than fabricating values.
 - Native Anthropic provider implementations should post one user message whose content array combines base64 image blocks with the prompt text block, then derive `total_tokens` from `input_tokens + output_tokens` because the Messages API omits a combined total field.
 - Native Google provider implementations should call `/v1beta/models/{model}:generateContent` with `x-goog-api-key` auth, send screenshots as `inline_data` parts plus the prompt text part, and derive `TokenUsage` from `usageMetadata` without fabricating cost data.
+- Native Ollama provider implementations should call `/api/chat` with `stream: false`, send screenshots as base64 strings in the user message `images` array plus the prompt text, derive `TokenUsage` from `prompt_eval_count` and `eval_count`, and turn connection-refused failures into actionable local-daemon guidance instead of generic socket errors.
+
 
 - LLM JSON parsers should tolerate optional markdown code fences from model output, but they should still validate invariants like unique capture IDs before persisting so downstream jobs can trust the parsed batch.
 - Extraction batches should persist atomically: write the `extraction_batches` summary/debug row, all per-frame `extractions`, the matching `captures` status/link updates, and the shared FTS refresh in one SQLite transaction; if parsing fails after an LLM call, still store the raw response before marking those captures failed.
@@ -549,4 +551,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: Gemini Developer API requests are single-turn `generateContent` calls with `inline_data` image parts and `usageMetadata` token counts; keep that contract isolated in the native provider module.
   - Gotchas encountered: Google REST examples mix model path styles (`models/...` in endpoints vs bare model IDs in SDKs), so trimming an optional `models/` prefix at the provider boundary keeps config ergonomic without duplicating endpoint logic elsewhere.
   - Useful context: Gemini Developer API responses currently omit cost metadata, so downstream persistence should keep `cost_cents=None` instead of guessing.
+---
+
+## [2026-04-11 16:02:11 UTC] - US-028
+- What was implemented: added a native Ollama provider in `src/ai/ollama.rs` that talks to `/api/chat`, supports base64 vision inputs for local vision models, parses `prompt_eval_count`/`eval_count` into token usage, and returns a clear local-daemon hint when Ollama is not running.
+- Files changed: AGENTS.md, src/ai/ollama.rs, src/ai/provider.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: Ollama fits the shared `LlmProvider` contract cleanly when the provider module owns its `/api/chat` request shape instead of trying to force it through the OpenAI-compatible client.
+  - Gotchas encountered: local Ollama does not require an API key, so provider construction must not reuse the cloud-provider `load_api_key` path or local configs inherit false startup failures.
+  - Useful context: Ollama responses report token usage as `prompt_eval_count` and `eval_count`, not an OpenAI-style nested usage object, and they do not include cost metadata.
 ---

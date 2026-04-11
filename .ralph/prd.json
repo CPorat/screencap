@@ -678,7 +678,7 @@
         "cargo test passes"
       ],
       "priority": 29,
-      "passes": false,
+      "passes": true,
       "notes": "AUDIT: src/ai/ollama.rs is empty. Not wired in create_provider. Config allows provider='ollama' but runtime returns UnsupportedProvider error.",
       "tool": "omp",
       "model": "gpt-5.4",

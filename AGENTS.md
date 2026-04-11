@@ -46,6 +46,8 @@ Three-layer pipeline:
 - When an OpenAI-compatible backend returns usage cost metadata (for example OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that omit cost should leave it `None` rather than guessing.
 - Native Anthropic provider code should call `/v1/messages` with one user message whose content array contains base64 image blocks plus the prompt text block, and derive `total_tokens` from `input_tokens + output_tokens` because the Messages API reports usage without a combined total.
 - Native Google provider code should call `/v1beta/models/{model}:generateContent` with `x-goog-api-key` auth, send screenshots as `inline_data` parts plus the prompt text part, and derive `TokenUsage` from `usageMetadata` without inventing cost metadata.
+- Native Ollama provider code should call `/api/chat` with `stream: false`, send screenshots as base64 strings in the user message `images` array plus the prompt text, derive `TokenUsage` from `prompt_eval_count` and `eval_count`, and surface connect failures as actionable local-daemon guidance without requiring an API key or inventing cost metadata.
+
 
 - Daemon startup should spawn extraction/synthesis schedulers as separate shutdown-aware tasks, but missing or unsupported AI provider configuration must degrade those schedulers to a logged no-op instead of blocking capture/API startup; users should still be able to collect screenshots before configuring networked pipelines.
 - Writable SQLite connections should set a busy timeout and enable WAL mode, because the daemon runs capture, API, and pipeline schedulers with concurrent database connections and should wait briefly instead of failing with `database is locked`.

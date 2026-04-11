@@ -6,7 +6,8 @@ use thiserror::Error;
 use crate::config::{AiProvider, ExtractionConfig, SynthesisConfig};
 
 use super::{
-    anthropic::AnthropicClient, google::GoogleClient, openai_compat::OpenAiCompatClient,
+    anthropic::AnthropicClient, google::GoogleClient, ollama::OllamaClient,
+    openai_compat::OpenAiCompatClient,
 };
 
 pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
@@ -170,9 +171,7 @@ pub fn create_provider(config: &LlmProviderConfig) -> ProviderResult<Box<dyn Llm
         }
         AiProvider::Anthropic => Ok(Box::new(AnthropicClient::new(config.clone())?)),
         AiProvider::Google => Ok(Box::new(GoogleClient::new(config.clone())?)),
-        provider => Err(ProviderError::UnsupportedProvider {
-            provider: provider_name(provider),
-        }),
+        AiProvider::Ollama => Ok(Box::new(OllamaClient::new(config.clone())?)),
     }
 }
 
@@ -204,9 +203,7 @@ pub fn supported_base_url(provider: AiProvider) -> ProviderResult<&'static str> 
         AiProvider::Anthropic => Ok("https://api.anthropic.com"),
         AiProvider::Google => Ok("https://generativelanguage.googleapis.com"),
         AiProvider::Lmstudio => Ok("http://localhost:1234/v1"),
-        provider => Err(ProviderError::UnsupportedProvider {
-            provider: provider_name(provider),
-        }),
+        AiProvider::Ollama => Ok("http://localhost:11434"),
     }
 }
 
@@ -257,7 +254,12 @@ mod tests {
         create_provider(&config).expect("create provider");
     }
 
+    #[test]
+    fn create_provider_accepts_ollama_config() {
+        let config = LlmProviderConfig::new(AiProvider::Ollama, "llama3.2", "IGNORED", "");
 
+        create_provider(&config).expect("create provider");
+    }
 
     #[test]
     fn resolved_base_url_uses_lm_studio_default() {
@@ -290,6 +292,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolved_base_url_uses_ollama_default() {
+        let config = LlmProviderConfig::new(AiProvider::Ollama, "llama3.2", "IGNORED", "");
+
+        assert_eq!(
+            resolved_base_url(&config).expect("resolve base url"),
+            "http://localhost:11434"
+        );
+    }
 
     #[test]
     fn load_api_key_rejects_missing_values() {

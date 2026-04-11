@@ -327,3 +327,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: optional screenshot-copy behavior should stay explicit and report copy counts/paths so export summaries remain truthful.
   - Useful context: defaulting to stdout is convenient for ad-hoc use, but honoring configured daily export roots avoids surprising file placement in automated runs.
 ---
+
+## [2026-04-11 10:42:15 UTC] - US-021
+- Completed US-021 bookkeeping: verified Markdown export and daily log file delivery status, and marked the story as passing in `.ralph/prd.json`.
+- Files changed: .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: keep the markdown export template centralized so CLI export and auto-export paths produce identical section ordering and headings.
+  - Gotchas encountered: treat stdout as the default sink only when no explicit output path is provided; otherwise branch cleanly to file/directory writes by export mode.
+  - Useful context: Obsidian vault sync should remain a post-write copy step so primary export success/failure is reported independently from secondary sync behavior.
+---

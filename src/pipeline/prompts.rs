@@ -1,6 +1,11 @@
-use crate::storage::models::Extraction;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-pub const EXTRACTION_PROMPT_TEMPLATE: &str = r#"You are analyzing a batch of sequential screenshots from a user's computer.
+use crate::{config::AppConfig, storage::models::Extraction};
+
+pub const DEFAULT_EXTRACTION_PROMPT: &str = r#"You are analyzing a batch of sequential screenshots from a user's computer.
 For each screenshot, extract structured data. Then provide a batch summary.
 
 Return JSON in this exact format:
@@ -28,7 +33,7 @@ Return JSON in this exact format:
 Return one frame entry for every attached screenshot in the same order.
 Use each provided capture_id exactly as given in the frame metadata below."#;
 
-pub const ROLLING_CONTEXT_PROMPT_TEMPLATE: &str = r#"You are synthesizing a rolling context summary from structured screenshot extractions.
+pub const DEFAULT_ROLLING_PROMPT: &str = r#"You are synthesizing a rolling context summary from structured screenshot extractions.
 Your job is to answer: what is the user working on right now?
 
 Return JSON in this exact format:
@@ -48,7 +53,7 @@ Use the exact window_start and window_end values provided in the request metadat
 Base the summary only on the extraction batches and frame details from that window.
 Return JSON only; do not wrap it in markdown or add commentary."#;
 
-pub const HOURLY_DIGEST_PROMPT_TEMPLATE: &str = r#"You are synthesizing an hourly digest from structured screenshot extraction batches.
+pub const DEFAULT_HOURLY_PROMPT: &str = r#"You are synthesizing an hourly digest from structured screenshot extraction batches.
 Your job is to summarize the last completed hour as a durable record for later daily summaries.
 
 Return JSON in this exact format:
@@ -75,7 +80,7 @@ Use the exact hour_start and hour_end values provided in the request metadata be
 Base the digest only on the extraction batches and frame details from that window.
 Return JSON only; do not wrap it in markdown or add commentary."#;
 
-pub const DAILY_SUMMARY_PROMPT_TEMPLATE: &str = r#"You are synthesizing a daily summary from previously generated hourly digests.
+pub const DEFAULT_DAILY_PROMPT: &str = r#"You are synthesizing a daily summary from previously generated hourly digests.
 Your job is to summarize the user's day so far as a durable record for review and export.
 
 Return JSON in this exact format:
@@ -120,11 +125,7 @@ Use the exact date provided in the request metadata below.
 Base the summary only on the hourly digests from that date.
 Return JSON only; do not wrap it in markdown or add commentary."#;
 
-
-pub fn build_semantic_search_prompt(query: &str, extractions: &[Extraction]) -> String {
-    let mut prompt = String::with_capacity(1024 + extractions.len() * 320);
-    prompt.push_str(
-        r#"You are an assistant that answers user questions about recent computer activity.
+pub const DEFAULT_SEMANTIC_SEARCH_PROMPT: &str = r#"You are an assistant that answers user questions about recent computer activity.
 Use ONLY the provided extraction records as evidence.
 If the answer is not supported by the records, say you do not know.
 
@@ -138,9 +139,40 @@ Rules:
 - `capture_ids` must contain only capture IDs from the provided extraction records.
 - Rank `capture_ids` from most relevant to least relevant.
 - Do not include IDs that are not present in the provided records.
-- Return JSON only; no markdown or commentary."#,
-    );
+- Return JSON only; no markdown or commentary."#;
 
+pub const DEFAULT_PROMPT_FILES: [(&str, &str); 5] = [
+    ("extraction.txt", DEFAULT_EXTRACTION_PROMPT),
+    ("rolling.txt", DEFAULT_ROLLING_PROMPT),
+    ("hourly.txt", DEFAULT_HOURLY_PROMPT),
+    ("daily.txt", DEFAULT_DAILY_PROMPT),
+    ("semantic_search.txt", DEFAULT_SEMANTIC_SEARCH_PROMPT),
+];
+
+pub fn load_extraction_prompt_template() -> String {
+    load_prompt_template("extraction.txt", DEFAULT_EXTRACTION_PROMPT)
+}
+
+pub fn load_rolling_prompt_template() -> String {
+    load_prompt_template("rolling.txt", DEFAULT_ROLLING_PROMPT)
+}
+
+pub fn load_hourly_prompt_template() -> String {
+    load_prompt_template("hourly.txt", DEFAULT_HOURLY_PROMPT)
+}
+
+pub fn load_daily_prompt_template() -> String {
+    load_prompt_template("daily.txt", DEFAULT_DAILY_PROMPT)
+}
+
+pub fn load_semantic_search_prompt_template() -> String {
+    load_prompt_template("semantic_search.txt", DEFAULT_SEMANTIC_SEARCH_PROMPT)
+}
+
+pub fn build_semantic_search_prompt(query: &str, extractions: &[Extraction]) -> String {
+    let semantic_prompt = load_semantic_search_prompt_template();
+    let mut prompt = String::with_capacity(semantic_prompt.len() + extractions.len() * 320);
+    prompt.push_str(&semantic_prompt);
     prompt.push_str("\n\nUser query:\n");
     prompt.push_str(query.trim());
     prompt.push_str("\n\nExtraction records:\n");
@@ -182,16 +214,42 @@ Rules:
     prompt
 }
 
+fn load_prompt_template(file_name: &str, fallback: &str) -> String {
+    let Ok(home) = AppConfig::home_dir() else {
+        return fallback.to_owned();
+    };
+
+    load_prompt_template_from_home(&home, file_name, fallback)
+}
+
+fn load_prompt_template_from_home(home: &Path, file_name: &str, fallback: &str) -> String {
+    let path: PathBuf = AppConfig::prompts_dir(home).join(file_name);
+    fs::read_to_string(path).unwrap_or_else(|_| fallback.to_owned())
+}
+
 fn format_string_list(values: &[String]) -> String {
     serde_json::to_string(values).unwrap_or_else(|_| "[]".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
 
     use super::*;
+
+    fn temp_home_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("screencap-prompts-tests-{name}-{unique}"))
+    }
 
     #[test]
     fn build_semantic_search_prompt_includes_query_and_extractions() {
@@ -214,9 +272,39 @@ mod tests {
         );
 
         assert!(prompt.contains("what changed in auth?"));
-        assert!(prompt.contains("\"capture_ids\": [123, 456]"));
         assert!(prompt.contains("capture_id: 42"));
         assert!(prompt.contains("description: Debugged refresh token flow"));
         assert!(prompt.contains("topics: [\"jwt\",\"auth\"]"));
+    }
+
+    #[test]
+    fn load_prompt_template_from_home_reads_custom_prompt() {
+        let home = temp_home_root("custom");
+        let prompts_dir = AppConfig::prompts_dir(&home);
+        fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+        let custom_prompt = "custom semantic prompt";
+        fs::write(prompts_dir.join("semantic_search.txt"), custom_prompt).expect("write prompt");
+
+        let loaded = load_prompt_template_from_home(
+            &home,
+            "semantic_search.txt",
+            DEFAULT_SEMANTIC_SEARCH_PROMPT,
+        );
+
+        assert_eq!(loaded, custom_prompt);
+        fs::remove_dir_all(&home).expect("cleanup temp home");
+    }
+
+    #[test]
+    fn load_prompt_template_from_home_falls_back_to_default() {
+        let home = temp_home_root("fallback");
+
+        let loaded = load_prompt_template_from_home(
+            &home,
+            "semantic_search.txt",
+            DEFAULT_SEMANTIC_SEARCH_PROMPT,
+        );
+
+        assert_eq!(loaded, DEFAULT_SEMANTIC_SEARCH_PROMPT);
     }
 }

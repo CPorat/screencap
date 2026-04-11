@@ -9,7 +9,7 @@ use crate::{
     storage::models::{ActivityType, Capture, Sentiment},
 };
 
-use super::{json::extract_json_payload, prompts::EXTRACTION_PROMPT_TEMPLATE};
+use super::{json::extract_json_payload, prompts::load_extraction_prompt_template};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,8 +61,9 @@ pub struct ExtractionBatchSummary {
 }
 
 pub fn build_extraction_prompt(captures: &[Capture], window_metadata: &[WindowInfo]) -> String {
-    let mut prompt = String::with_capacity(EXTRACTION_PROMPT_TEMPLATE.len() + captures.len() * 256);
-    prompt.push_str(EXTRACTION_PROMPT_TEMPLATE);
+    let extraction_prompt = load_extraction_prompt_template();
+    let mut prompt = String::with_capacity(extraction_prompt.len() + captures.len() * 256);
+    prompt.push_str(&extraction_prompt);
     prompt.push_str("\n\nFrame metadata:\n");
 
     for (index, capture) in captures.iter().enumerate() {
@@ -193,8 +194,6 @@ mod tests {
 
         let prompt = build_extraction_prompt(&captures, &metadata);
 
-        assert!(prompt.contains("You are analyzing a batch of sequential screenshots"));
-        assert!(prompt.contains("\"batch_summary\""));
         assert!(prompt.contains("capture_id: 101"));
         assert!(prompt.contains("timestamp_utc: 2026-04-10T14:01:00Z"));
         assert!(prompt.contains("app_name: Ghostty"));

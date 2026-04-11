@@ -187,6 +187,7 @@ impl Drop for PidFileGuard {
 
 pub async fn run_foreground(config: &AppConfig) -> Result<()> {
     let home = runtime_home_dir()?;
+    AppConfig::ensure_prompts_dir(&home)?;
     run_foreground_at_home(config, &home).await
 }
 
@@ -733,17 +734,13 @@ impl CaptureLoop {
     }
 
     fn is_excluded(&self, active_window: &WindowInfo) -> bool {
-        self.config
-            .capture
-            .excluded_apps
-            .iter()
-            .any(|app_name| app_name == &active_window.app_name)
+        self.config.capture.excluded_apps.contains(&active_window.app_name)
             || self
                 .config
                 .capture
                 .excluded_window_titles
                 .iter()
-                .any(|title| title == &active_window.window_title)
+                .any(|title| active_window.window_title.contains(title))
     }
 
     fn duplicate_capture(
@@ -865,6 +862,28 @@ mod tests {
         fs::remove_dir_all(&home)?;
         Ok(())
     }
+
+    #[test]
+    fn excluded_window_title_pattern_is_skipped() -> Result<()> {
+        let home = temp_home_root("excluded-window-title");
+        let mut config = test_config(&home);
+        config.capture.excluded_window_titles = vec!["Mock".into()];
+        let timestamp = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+
+        let mut capture_loop = CaptureLoop::open(config, home.clone())?;
+        let outcome = capture_loop.capture_once_at(timestamp)?;
+        assert!(matches!(
+            outcome,
+            CaptureCycleOutcome::SkippedExcluded { ref window_title, .. }
+                if window_title == "Mock Window"
+        ));
+        assert!(capture_loop.db.get_pending_captures()?.is_empty());
+
+        drop(capture_loop);
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
 
     #[test]
     fn dedup_skips_unchanged_context_within_idle_interval() -> Result<()> {

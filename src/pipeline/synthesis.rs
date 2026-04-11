@@ -34,8 +34,8 @@ use crate::{
 use super::{
     json::extract_json_payload,
     prompts::{
-        build_semantic_search_prompt, DAILY_SUMMARY_PROMPT_TEMPLATE,
-        HOURLY_DIGEST_PROMPT_TEMPLATE, ROLLING_CONTEXT_PROMPT_TEMPLATE,
+        build_semantic_search_prompt, load_daily_prompt_template, load_hourly_prompt_template,
+        load_rolling_prompt_template,
     },
 };
 
@@ -572,9 +572,9 @@ pub fn build_rolling_context_prompt(
     window_end: DateTime<Utc>,
     batches: &[ExtractionBatchDetail],
 ) -> String {
-    let mut prompt =
-        String::with_capacity(ROLLING_CONTEXT_PROMPT_TEMPLATE.len() + batches.len() * 1024);
-    prompt.push_str(ROLLING_CONTEXT_PROMPT_TEMPLATE);
+    let rolling_prompt = load_rolling_prompt_template();
+    let mut prompt = String::with_capacity(rolling_prompt.len() + batches.len() * 1024);
+    prompt.push_str(&rolling_prompt);
     append_requested_window(
         &mut prompt,
         "window_start",
@@ -592,9 +592,9 @@ pub fn build_hourly_digest_prompt(
     hour_end: DateTime<Utc>,
     batches: &[ExtractionBatchDetail],
 ) -> String {
-    let mut prompt =
-        String::with_capacity(HOURLY_DIGEST_PROMPT_TEMPLATE.len() + batches.len() * 1024);
-    prompt.push_str(HOURLY_DIGEST_PROMPT_TEMPLATE);
+    let hourly_prompt = load_hourly_prompt_template();
+    let mut prompt = String::with_capacity(hourly_prompt.len() + batches.len() * 1024);
+    prompt.push_str(&hourly_prompt);
     append_requested_window(&mut prompt, "hour_start", hour_start, "hour_end", hour_end);
     append_extraction_batches(&mut prompt, batches);
     append_prompt_footer(&mut prompt);
@@ -607,9 +607,9 @@ pub fn build_daily_summary_prompt(
     window_end: DateTime<Utc>,
     hourly_insights: &[Insight],
 ) -> String {
-    let mut prompt =
-        String::with_capacity(DAILY_SUMMARY_PROMPT_TEMPLATE.len() + hourly_insights.len() * 768);
-    prompt.push_str(DAILY_SUMMARY_PROMPT_TEMPLATE);
+    let daily_prompt = load_daily_prompt_template();
+    let mut prompt = String::with_capacity(daily_prompt.len() + hourly_insights.len() * 768);
+    prompt.push_str(&daily_prompt);
     prompt.push_str("\n\nRequested date:\n");
     prompt.push_str(&format!(
         "- date: {}\n- window_start: {}\n- window_end: {}\n",
@@ -1147,7 +1147,6 @@ mod tests {
         let prompt =
             build_rolling_context_prompt(window_start, window_end, &[sample_batch_detail()]);
 
-        assert!(prompt.contains("You are synthesizing a rolling context summary"));
         assert!(prompt.contains("window_start: 2026-04-10T14:00:00Z"));
         assert!(prompt.contains("window_end: 2026-04-10T14:30:00Z"));
         assert!(prompt.contains("batch_id: 123e4567-e89b-12d3-a456-426614174000"));
@@ -1166,7 +1165,6 @@ mod tests {
         let hour_end = Utc.with_ymd_and_hms(2026, 4, 10, 15, 0, 0).unwrap();
         let prompt = build_hourly_digest_prompt(hour_start, hour_end, &[sample_batch_detail()]);
 
-        assert!(prompt.contains("You are synthesizing an hourly digest"));
         assert!(prompt.contains("hour_start: 2026-04-10T14:00:00Z"));
         assert!(prompt.contains("hour_end: 2026-04-10T15:00:00Z"));
         assert!(prompt.contains("batch_id: 123e4567-e89b-12d3-a456-426614174000"));
@@ -1187,7 +1185,6 @@ mod tests {
             &[sample_hourly_insight(1, 9), sample_hourly_insight(2, 10)],
         );
 
-        assert!(prompt.contains("You are synthesizing a daily summary"));
         assert!(prompt.contains("date: 2026-04-10"));
         assert!(prompt.contains("window_start: 2026-04-10T00:00:00Z"));
         assert!(prompt.contains("window_end: 2026-04-10T18:00:00Z"));

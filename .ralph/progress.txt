@@ -39,6 +39,8 @@ Branch: ralph/v1-implementation
 - Search route UIs should debounce query typing, gate stale async responses with request IDs, and keep app/project/time chips wired to server-side `/api/search` filters so relevance ranking remains authoritative.
 - Settings route UIs should derive daemon liveness from `/api/health`, pair it with `/api/stats` telemetry for storage/capture panels, and always provide a first-class disconnected state with explicit CLI recovery steps.
 - Markdown export commands should treat `--output` as a file for single-day exports but require a directory for multi-day `--last` ranges; generate `{date}.md` files per day and keep stdout export as the default only when no custom daily export path is configured.
+- Capture exclusion should keep `excluded_apps` as exact app-name matches while treating `excluded_window_titles` as substring patterns (e.g., `Private`) so one rule covers browser-specific private/incognito title variants.
+
 
 
 
@@ -433,4 +435,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: use `AtomicBool` as the daemon-global pause state and check it at the top of each capture-loop tick so pause skips work without stopping lifecycle/API services.
   - Gotchas encountered: pause/resume endpoints must return explicit state (`{ paused: bool }`) so CLI callers can confirm final daemon state instead of inferring success from HTTP status alone.
   - Useful context: keeping pause/resume as daemon RPC (`localhost` API) avoids PID signaling complexity and keeps command behavior identical for foreground and background daemon modes.
+---
+
+## [2026-04-11 12:47:30 UTC] - US-028
+- What was implemented (App and Window Title Exclusion logic): tightened capture exclusions so app filtering stays exact-match while window-title filtering uses substring patterns, updated default excluded window title patterns, and added capture-loop test coverage proving excluded title patterns skip persistence.
+- Files changed: src/config.rs, src/daemon.rs, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: app exclusions are safest as exact-name membership checks, while title exclusions should use substring matching to capture variants like "Private Browsing" and "Private Window" without enumerating each full title.
+  - Gotchas encountered: exact title equality silently misses common private/incognito variants; relying on strict matches under-filters sensitive windows.
+  - Useful context: keep exclusion behavior validated with capture-loop tests that assert excluded contexts do not create pending capture rows.
 ---

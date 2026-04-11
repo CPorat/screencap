@@ -6,6 +6,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::pipeline::prompts::DEFAULT_PROMPT_FILES;
 const DEFAULT_DAILY_EXPORT_PATH: &str = "~/.screencap/daily/";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -21,14 +22,46 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load() -> Result<Self> {
-        let home = home_dir()?;
+        let home = Self::home_dir()?;
         let root = default_app_root(&home);
         Self::load_from_root_and_home(&root, &home)
     }
 
+    pub fn home_dir() -> Result<PathBuf> {
+        resolve_home_dir()
+    }
+
     pub fn default_config_path() -> Result<PathBuf> {
-        let home = home_dir()?;
+        let home = Self::home_dir()?;
         Ok(default_app_root(&home).join("config.toml"))
+    }
+
+    pub fn prompts_dir(home: &Path) -> PathBuf {
+        default_app_root(home).join("prompts")
+    }
+
+    pub fn ensure_prompts_dir(home: &Path) -> Result<PathBuf> {
+        let prompts_dir = Self::prompts_dir(home);
+        fs::create_dir_all(&prompts_dir).with_context(|| {
+            format!(
+                "failed to create runtime directory at {}",
+                prompts_dir.display()
+            )
+        })?;
+
+        for (file_name, default_template) in DEFAULT_PROMPT_FILES {
+            let prompt_path = prompts_dir.join(file_name);
+            if !prompt_path.exists() {
+                fs::write(&prompt_path, default_template).with_context(|| {
+                    format!(
+                        "failed to write default prompt template at {}",
+                        prompt_path.display()
+                    )
+                })?;
+            }
+        }
+
+        Ok(prompts_dir)
     }
 
     pub fn pid_file_path(home: &Path) -> PathBuf {
@@ -56,6 +89,7 @@ impl AppConfig {
         };
 
         config.ensure_runtime_dirs(home)?;
+        Self::ensure_prompts_dir(home)?;
         Ok(config)
     }
 
@@ -135,7 +169,7 @@ impl Default for CaptureConfig {
             event_settle_ms: 500,
             jpeg_quality: 75,
             excluded_apps: vec!["1Password".into(), "Keychain Access".into()],
-            excluded_window_titles: vec!["Private Browsing".into(), "Incognito".into()],
+            excluded_window_titles: vec!["Private".into(), "Incognito".into()],
         }
     }
 }
@@ -242,7 +276,7 @@ impl Default for ExportConfig {
     }
 }
 
-fn home_dir() -> Result<PathBuf> {
+fn resolve_home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -289,6 +323,17 @@ mod tests {
         env::temp_dir().join(format!("screencap-config-tests-{name}-{unique}"))
     }
 
+    fn assert_prompt_templates_exist(home: &Path) {
+        let prompts_dir = AppConfig::prompts_dir(home);
+        assert!(prompts_dir.exists());
+
+        for (file_name, default_template) in DEFAULT_PROMPT_FILES {
+            let prompt_path = prompts_dir.join(file_name);
+            let content = fs::read_to_string(&prompt_path).expect("read prompt template");
+            assert_eq!(content, default_template);
+        }
+    }
+
     #[test]
     fn load_defaults_when_config_is_missing() {
         let home = temp_home_root("missing");
@@ -302,6 +347,7 @@ mod tests {
         assert!(config.daily_export_root(&home).exists());
         assert!(!config.has_custom_daily_export_path());
         assert!(config.obsidian_vault_root(&home).is_none());
+        assert_prompt_templates_exist(&home);
 
         fs::remove_dir_all(&home).expect("cleanup temp home");
     }
@@ -374,9 +420,29 @@ markdown_template = "compact"
         assert!(config.daily_export_root(&home).exists());
         assert!(config.has_custom_daily_export_path());
         assert_eq!(config.obsidian_vault_root(&home), Some(home.join("Notes")));
+        assert_prompt_templates_exist(&home);
 
         fs::remove_dir_all(&home).expect("cleanup temp home");
     }
+
+    #[test]
+    fn ensure_prompts_dir_keeps_existing_custom_files() {
+        let home = temp_home_root("custom-prompts");
+
+        AppConfig::ensure_prompts_dir(&home).expect("create default prompts");
+
+        let custom_prompt = "custom extraction prompt";
+        let custom_prompt_path = AppConfig::prompts_dir(&home).join("extraction.txt");
+        fs::write(&custom_prompt_path, custom_prompt).expect("write custom prompt");
+
+        AppConfig::ensure_prompts_dir(&home).expect("re-run prompt initialization");
+
+        let persisted_prompt = fs::read_to_string(&custom_prompt_path).expect("read prompt");
+        assert_eq!(persisted_prompt, custom_prompt);
+
+        fs::remove_dir_all(&home).expect("cleanup temp home");
+    }
+
 
     #[test]
     fn invalid_toml_returns_error() {

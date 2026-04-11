@@ -998,7 +998,7 @@
         "Mock-capture test suites continue to pass unchanged"
       ],
       "priority": 43,
-      "passes": false,
+      "passes": true,
       "notes": "Audit found potential deadlock in tests/e2e_capture_api.rs when provider thread blocks on accept and Drop joins forever.",
       "tool": "omp",
       "model": "gpt-5.4",

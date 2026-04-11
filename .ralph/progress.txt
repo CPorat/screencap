@@ -15,6 +15,9 @@ Branch: ralph/v1-implementation
 
 - Time-dependent pipeline schedulers should expose explicit `run_once_at(...)` entry points so integration tests and backfills can drive fixed rolling/hourly/daily windows deterministically without wall-clock sleeps or midnight-boundary flake.
 
+- Thread-backed HTTP provider stubs in integration tests should live behind a shared helper that polls `accept()` in nonblocking mode, bounds request reads, and enforces a teardown deadline before `join()`, so deadlocks fail fast with diagnostics instead of hanging the suite.
+
+
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
 - Menu bar daemon controllers should parse the `state:` line from `screencap status` and track whether the current daemon was launched by the menu bar, so icon state stays truthful and quitting the app only tears down the child it started.
@@ -727,4 +730,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: thread-backed test harnesses that block on `TcpListener::accept()` need an explicit cancellation path (shutdown flag + wake-up connection) before `join()`, otherwise Drop can deadlock when no request arrives.
   - Gotchas encountered: joining test helper threads without first unblocking `accept()` hides failures as process hangs; emitting explicit panic context during join gives actionable diagnostics when the helper thread fails.
   - Useful context: child-process Drop guards (`kill` + `wait`) remain appropriate for daemon teardown in these suites; the deadlock risk came from mock HTTP provider threads waiting on `accept()` forever.
+---
+## [2026-04-11 23:12:31 UTC] - US-043
+- What was implemented: replaced the ad hoc extraction/synthesis provider listener threads with a shared `tests/support` HTTP stub helper that uses nonblocking `accept()` polling, bounded request reads, and timeout-guarded teardown diagnostics, then migrated `tests/e2e_capture_api.rs` and `tests/e2e_daemon_ui_api.rs` onto it.
+- Files changed: AGENTS.md, tests/e2e_capture_api.rs, tests/e2e_daemon_ui_api.rs, tests/support/mod.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: e2e HTTP provider doubles are safer when one shared helper owns socket wake-up, request framing, and bounded join semantics instead of each test reimplementing thread shutdown.
+  - Gotchas encountered: a nonblocking `accept()` loop alone is not enough; if the helper thread can block forever in `read()`, `Drop` still hangs unless request reads are timeout-bounded too.
+  - Useful context: polling `JoinHandle::is_finished()` before `join()` gives a clear shutdown deadline and panic site without needing to block the main test thread indefinitely.
 ---

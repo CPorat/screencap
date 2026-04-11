@@ -2,15 +2,9 @@ mod support;
 
 use std::{
     fs,
-    io::{Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    thread,
     time::{Duration, Instant},
 };
 
@@ -134,96 +128,50 @@ impl Drop for ForegroundDaemon {
 }
 
 struct SynthesisProviderServer {
-    address: SocketAddr,
-    shutdown: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
+    server: support::StubHttpServer,
 }
 
 impl SynthesisProviderServer {
     fn spawn() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind synthesis listener");
-        listener
-            .set_nonblocking(true)
-            .expect("set synthesis listener nonblocking");
-        let address = listener.local_addr().expect("synthesis listener addr");
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let thread_shutdown = Arc::clone(&shutdown);
-        let handle = thread::spawn(move || {
-            let mut served_requests = 0;
-            loop {
-                if thread_shutdown.load(Ordering::Relaxed) {
-                    return;
-                }
+        let mut served_requests = 0;
+        let server = support::StubHttpServer::spawn("synthesis provider", move |request| {
+            let prompt = extract_prompt_from_http_request(&request);
+            let content = if prompt.contains("You are synthesizing a rolling context summary") {
+                let window_start = prompt_metadata_value(&prompt, "window_start")
+                    .expect("rolling prompt window_start");
+                let window_end = prompt_metadata_value(&prompt, "window_end")
+                    .expect("rolling prompt window_end");
+                rolling_success_response_json(&window_start, &window_end)
+            } else if prompt.contains("You are synthesizing a daily summary") {
+                let date =
+                    prompt_metadata_value(&prompt, "date").expect("daily prompt requested date");
+                daily_success_response_json(&date)
+            } else {
+                panic!("unexpected synthesis prompt: {prompt}");
+            };
 
-                let (mut stream, _) = match listener.accept() {
-                    Ok(connection) => connection,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    }
-                    Err(error) => panic!("accept synthesis request failed: {error}"),
-                };
-                if thread_shutdown.load(Ordering::Relaxed) {
-                    return;
+            let body = openai_chat_response(&content);
+            served_requests += 1;
+            let action = if served_requests == 2 {
+                support::StubHttpAction {
+                    response: support::json_http_response(200, &body),
+                    keep_running: false,
                 }
-                stream
-                    .set_nonblocking(false)
-                    .expect("set synthesis stream blocking");
-                let mut buffer = [0_u8; 65_536];
-                let bytes_read = stream.read(&mut buffer).expect("read synthesis request");
-                let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-                let prompt = extract_prompt_from_http_request(&request);
-                let content = if prompt.contains("You are synthesizing a rolling context summary") {
-                    let window_start = prompt_metadata_value(&prompt, "window_start")
-                        .expect("rolling prompt window_start");
-                    let window_end = prompt_metadata_value(&prompt, "window_end")
-                        .expect("rolling prompt window_end");
-                    rolling_success_response_json(&window_start, &window_end)
-                } else if prompt.contains("You are synthesizing a daily summary") {
-                    let date = prompt_metadata_value(&prompt, "date")
-                        .expect("daily prompt requested date");
-                    daily_success_response_json(&date)
-                } else {
-                    panic!("unexpected synthesis prompt: {prompt}");
-                };
+            } else {
+                support::StubHttpAction {
+                    response: support::json_http_response(200, &body),
+                    keep_running: true,
+                }
+            };
 
-                let body = openai_chat_response(&content);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                stream
-                    .write_all(response.as_bytes())
-                    .expect("write synthesis response");
-                served_requests += 1;
-                if served_requests == 2 {
-                    return;
-                }
-            }
+            Ok(action)
         });
 
-        Self {
-            address,
-            shutdown,
-            handle: Some(handle),
-        }
+        Self { server }
     }
 
     fn base_url(&self) -> String {
-        format!("http://{}", self.address)
-    }
-}
-
-impl Drop for SynthesisProviderServer {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
-        let _ = TcpStream::connect(self.address);
-        if let Some(handle) = self.handle.take() {
-            handle.join().unwrap_or_else(|panic| {
-                panic!("synthesis server thread panicked during shutdown: {panic:?}")
-            });
-        }
+        self.server.base_url()
     }
 }
 

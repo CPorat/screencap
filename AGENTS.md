@@ -104,6 +104,7 @@ Three-layer pipeline:
 - The capture layer is hard to unit test (requires screen recording permission); test it manually or with integration tests that mock the Swift bridge.
 - Time-dependent pipeline schedulers should expose explicit `run_once_at(...)` entry points so integration tests and backfills can drive rolling/hourly/daily windows deterministically without wall-clock sleeps.
 - Daemon smoke tests should launch the real `screencap` binary with an isolated `HOME`, poll `/api/health` on the configured port, then send `SIGTERM` and assert both PID-file cleanup and panic-free stderr so startup/shutdown regressions are caught end-to-end.
+- Thread-backed HTTP provider stubs in integration tests should use a shared helper that polls `TcpListener::accept()` in nonblocking mode, bounds request reads with socket timeouts, and enforces a shutdown deadline before `join()`, so harness failures surface as explicit panics instead of hung test runs.
 
 
 

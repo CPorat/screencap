@@ -618,7 +618,7 @@
       ],
       "priority": 26,
       "passes": true,
-      "notes": "Completed: native CGEventTap/app-switch callbacks now feed Rust trigger detection in src/capture/events.rs, and the daemon debounces captures with timer fallback preserved."
+      "notes": "Completed: native CGEventTap/app-switch callbacks now feed Rust trigger detection in src/capture/events.rs, and the daemon debounces captures with timer fallback preserved.",
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

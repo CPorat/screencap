@@ -28,6 +28,8 @@ Branch: ralph/v1-implementation
 - When resolving frontmost window titles from `CGWindowListCopyWindowInfo`, stop at the first layer-0 window for the active app PID; if it is untitled, propagate an empty string instead of falling through to another window from the same app.
 - When one capture cycle spans multiple displays, stage every JPEG for that timestamp and persist the matching `captures` rows in one SQLite transaction; if any write fails, remove the new files so the screenshot tree and database cannot diverge.
 - Daemon lifecycle should use a PID file under `~/.screencap/` that stores both `pid` and `started_at`; `start`, `stop`, and `status` should verify process liveness so stale PID files self-heal instead of blocking future runs.
+- LaunchAgents should point at the current `screencap` executable with the hidden `__daemon-child` subcommand and set `HOME` explicitly, so login autostart reuses the same runtime root without recursively invoking the backgrounding `start` command.
+
 - REST API read endpoints should open SQLite read-only and return empty/404 responses without creating `screencap.db`; read traffic must not mutate runtime state.
 - CLI read commands should open SQLite read-only when possible, return helpful empty-state output without creating `screencap.db`, and label capture-count-based project breakdowns explicitly so terminal summaries do not overclaim time accuracy.
 - Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
@@ -560,4 +562,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: Ollama fits the shared `LlmProvider` contract cleanly when the provider module owns its `/api/chat` request shape instead of trying to force it through the OpenAI-compatible client.
   - Gotchas encountered: local Ollama does not require an API key, so provider construction must not reuse the cloud-provider `load_api_key` path or local configs inherit false startup failures.
   - Useful context: Ollama responses report token usage as `prompt_eval_count` and `eval_count`, not an OpenAI-style nested usage object, and they do not include cost metadata.
+---
+## [2026-04-11 16:11:59 UTC] - US-029
+- Implemented launchd auto-start plumbing for daemon lifecycle commands: `screencap start --install` now writes `~/Library/LaunchAgents/dev.screencap.daemon.plist` with `RunAtLoad` + `KeepAlive`, and `screencap stop --uninstall` removes that plist while preserving the existing start/stop behavior.
+- Extended daemon status reporting to surface `launchd_installed`, added a reusable config helper for the LaunchAgents plist path, and updated daemon/CLI tests to cover plist rendering plus install/uninstall lifecycle behavior.
+- Files changed: AGENTS.md, src/config.rs, src/daemon.rs, src/main.rs, tests/daemon_cli.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: launchd install flows are safest when status reporting exposes install state separately from process liveness, so menu/CLI callers do not infer autostart from the PID file alone.
+  - Gotchas encountered: LaunchAgents must invoke the hidden foreground daemon entrypoint (`__daemon-child`) rather than `start`, or login autostart would recurse into the backgrounding path.
+  - Useful context: integration coverage should read the generated plist and assert `RunAtLoad`, `KeepAlive`, and the daemon-child argument so launchd regressions are caught without needing a live `launchctl` session.
 ---

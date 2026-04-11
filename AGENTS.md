@@ -64,6 +64,7 @@ Three-layer pipeline:
 - Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
 - When full-text search content spans multiple tables, keep a dedicated FTS table keyed by the canonical row id and update it from storage helpers; do not use an external-content FTS table tied to only one source table if some indexed fields come from joins.
 - Daemon lifecycle should keep its PID file under `~/.screencap/`, store both `pid` and `started_at`, and have `start`/`stop`/`status` heal stale PID files by checking process liveness before trusting on-disk state.
+- LaunchAgents should invoke the current `screencap` executable with the hidden `__daemon-child` subcommand and an explicit `HOME` environment value, so login-launched daemons reuse the same runtime root and never recurse through the backgrounding `start` command.
 - REST API read endpoints should open SQLite in read-only mode when possible and return empty/404 results without creating `screencap.db`; GET traffic must not mutate runtime state.
 - CLI read commands should likewise open SQLite read-only when possible, print helpful empty-state text instead of creating `screencap.db` on empty homes, and label any capture-count-based project breakdowns explicitly instead of implying minute-accurate time tracking.
 - Search and insight read APIs should expose typed storage helpers that join back to the canonical `captures` rows, so callers can filter by capture metadata and render screenshot context without follow-up lookups.

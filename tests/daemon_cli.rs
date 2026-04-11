@@ -64,6 +64,13 @@ impl TestHome {
     fn db_path(&self) -> PathBuf {
         self.path.join(".screencap").join("screencap.db")
     }
+
+    fn launch_agent_path(&self) -> PathBuf {
+        self.path
+            .join("Library")
+            .join("LaunchAgents")
+            .join("dev.screencap.daemon.plist")
+    }
 }
 
 impl Drop for TestHome {
@@ -453,6 +460,60 @@ fn start_status_stop_manage_background_daemon() -> Result<()> {
     );
     assert!(
         stdout.contains("pid: -"),
+        "unexpected status output: {stdout}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn start_install_and_stop_uninstall_manage_launch_agent() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("launchd-install")?;
+    let launch_agent_path = home.launch_agent_path();
+
+    let start = run_cli(home.path(), &["start", "--install"])?;
+    assert_success(&start, "start --install");
+    assert!(
+        launch_agent_path.exists(),
+        "launch agent plist should be created"
+    );
+
+    let plist = fs::read_to_string(&launch_agent_path)?;
+    assert!(plist.contains("<key>RunAtLoad</key>"));
+    assert!(plist.contains("<key>KeepAlive</key>"));
+    assert!(plist.contains("__daemon-child"));
+
+    wait_for(
+        || Ok(home.pid_path().exists()),
+        "pid file after launch-agent background start",
+    )?;
+
+    let status = run_cli(home.path(), &["status"])?;
+    assert_success(&status, "status after start --install");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("launchd_installed: true"),
+        "unexpected status output: {stdout}"
+    );
+
+    let stop = run_cli(home.path(), &["stop", "--uninstall"])?;
+    assert_success(&stop, "stop --uninstall");
+
+    wait_for(
+        || Ok(!home.pid_path().exists()),
+        "pid file removal after stop --uninstall",
+    )?;
+    assert!(
+        !launch_agent_path.exists(),
+        "launch agent plist should be removed by stop --uninstall"
+    );
+
+    let status = run_cli(home.path(), &["status"])?;
+    assert_success(&status, "status after stop --uninstall");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("launchd_installed: false"),
         "unexpected status output: {stdout}"
     );
 

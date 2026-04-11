@@ -68,6 +68,12 @@ impl AppConfig {
         default_app_root(home).join("screencap.pid")
     }
 
+    pub fn launch_agent_path(home: &Path) -> PathBuf {
+        home.join("Library")
+            .join("LaunchAgents")
+            .join("dev.screencap.daemon.plist")
+    }
+
     pub fn load_from_root_and_home(root: impl AsRef<Path>, home: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref();
         let home = home.as_ref();

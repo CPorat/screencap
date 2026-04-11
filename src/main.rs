@@ -32,10 +32,22 @@ struct Cli {
     command: Option<Command>,
 }
 
+#[derive(Debug, Args)]
+struct StartArgs {
+    #[arg(long)]
+    install: bool,
+}
+
+#[derive(Debug, Args)]
+struct StopArgs {
+    #[arg(long)]
+    uninstall: bool,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
-    Start,
-    Stop,
+    Start(StartArgs),
+    Stop(StopArgs),
     Status,
     Pause,
     Resume,
@@ -116,16 +128,8 @@ async fn main() -> Result<()> {
                 AppConfig::default_config_path()?.display()
             )),
         ),
-        Some(Command::Start) => {
-            let config = AppConfig::load()?;
-            let pid = daemon::start_background(&config).await?;
-            println!("started daemon pid {pid}");
-        }
-        Some(Command::Stop) => {
-            let config = AppConfig::load()?;
-            let pid = daemon::stop(&config).await?;
-            println!("stopped daemon pid {pid}");
-        }
+        Some(Command::Start(args)) => handle_start(args).await?,
+        Some(Command::Stop(args)) => handle_stop(args).await?,
         Some(Command::Status) => {
             let config = AppConfig::load()?;
             print_daemon_status(&daemon::status(&config)?);
@@ -182,6 +186,68 @@ fn print_daemon_status(status: &daemon::DaemonStatus) {
     println!("uptime_secs: {}", status.uptime_secs);
     println!("captures_today: {}", status.captures_today);
     println!("storage_bytes: {}", status.storage_bytes);
+    println!("launchd_installed: {}", status.launchd_installed);
+}
+
+async fn handle_start(args: StartArgs) -> Result<()> {
+    let config = AppConfig::load()?;
+    let status = daemon::status(&config)?;
+
+    if args.install {
+        let path = daemon::install_launch_agent()?;
+        println!("installed launchd agent at {}", path.display());
+    }
+
+    if matches!(status.state, daemon::DaemonState::Running) {
+        if args.install {
+            match status.pid {
+                Some(pid) => println!("daemon already running pid {pid}"),
+                None => println!("daemon already running"),
+            }
+            return Ok(());
+        }
+
+        match status.pid {
+            Some(pid) => bail!("daemon is already running with pid {pid}"),
+            None => bail!("daemon is already running"),
+        }
+    }
+
+    let pid = daemon::start_background(&config).await?;
+    println!("started daemon pid {pid}");
+    Ok(())
+}
+
+async fn handle_stop(args: StopArgs) -> Result<()> {
+    let config = AppConfig::load()?;
+    let status = daemon::status(&config)?;
+
+    let stopped_pid = if matches!(status.state, daemon::DaemonState::Running) {
+        Some(daemon::stop(&config).await?)
+    } else {
+        None
+    };
+
+    if args.uninstall {
+        let removed = daemon::uninstall_launch_agent()?;
+        if removed {
+            println!("removed launchd agent");
+        } else {
+            println!("launchd agent was not installed");
+        }
+    }
+
+    if let Some(pid) = stopped_pid {
+        println!("stopped daemon pid {pid}");
+        return Ok(());
+    }
+
+    if args.uninstall {
+        println!("daemon already stopped");
+        return Ok(());
+    }
+
+    bail!("daemon is not running")
 }
 
 async fn handle_today() -> Result<()> {

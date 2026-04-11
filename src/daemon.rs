@@ -22,8 +22,7 @@ use crate::{
     ai::provider::ProviderError,
     api,
     capture::{
-        events,
-        screenshot,
+        events, screenshot,
         window::{self, WindowInfo},
     },
     config::AppConfig,
@@ -41,6 +40,7 @@ const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const PID_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const DAILY_PRUNE_HOUR_UTC: u32 = 2;
+const LAUNCHD_AGENT_LABEL: &str = "dev.screencap.daemon";
 
 pub static CAPTURE_PAUSED: AtomicBool = AtomicBool::new(false);
 
@@ -124,6 +124,7 @@ pub struct DaemonStatus {
     pub uptime_secs: u64,
     pub captures_today: u64,
     pub storage_bytes: u64,
+    pub launchd_installed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +218,124 @@ pub async fn stop(config: &AppConfig) -> Result<u32> {
 pub fn status(config: &AppConfig) -> Result<DaemonStatus> {
     let home = runtime_home_dir()?;
     status_at_home(config, &home)
+}
+
+pub fn install_launch_agent() -> Result<PathBuf> {
+    let home = runtime_home_dir()?;
+    install_launch_agent_at_home(&home)
+}
+
+pub fn uninstall_launch_agent() -> Result<bool> {
+    let home = runtime_home_dir()?;
+    uninstall_launch_agent_at_home(&home)
+}
+
+fn install_launch_agent_at_home(home: &Path) -> Result<PathBuf> {
+    let launch_agent_path = AppConfig::launch_agent_path(home);
+    let executable =
+        env::current_exe().context("failed to resolve current executable for launchd")?;
+    let executable = fs::canonicalize(&executable).unwrap_or(executable);
+    let plist = render_launch_agent_plist(&executable, home)?;
+
+    if let Some(parent) = launch_agent_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create launch agent directory at {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::write(&launch_agent_path, plist).with_context(|| {
+        format!(
+            "failed to write launch agent plist at {}",
+            launch_agent_path.display()
+        )
+    })?;
+
+    Ok(launch_agent_path)
+}
+
+fn uninstall_launch_agent_at_home(home: &Path) -> Result<bool> {
+    let launch_agent_path = AppConfig::launch_agent_path(home);
+    match fs::remove_file(&launch_agent_path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "failed to remove launch agent plist at {}",
+                launch_agent_path.display()
+            )
+        }),
+    }
+}
+
+fn launch_agent_installed_at_home(home: &Path) -> Result<bool> {
+    let launch_agent_path = AppConfig::launch_agent_path(home);
+    match fs::metadata(&launch_agent_path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "failed to inspect launch agent plist at {}",
+                launch_agent_path.display()
+            )
+        }),
+    }
+}
+
+fn render_launch_agent_plist(executable: &Path, home: &Path) -> Result<String> {
+    let executable = plist_path_string(executable, "launchd executable path")?;
+    let home = plist_path_string(home, "launchd home path")?;
+
+    Ok(format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+            "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+            "<plist version=\"1.0\">\n",
+            "  <dict>\n",
+            "    <key>Label</key>\n",
+            "    <string>{}</string>\n",
+            "    <key>ProgramArguments</key>\n",
+            "    <array>\n",
+            "      <string>{}</string>\n",
+            "      <string>{}</string>\n",
+            "    </array>\n",
+            "    <key>RunAtLoad</key>\n",
+            "    <true/>\n",
+            "    <key>KeepAlive</key>\n",
+            "    <true/>\n",
+            "    <key>WorkingDirectory</key>\n",
+            "    <string>{}</string>\n",
+            "    <key>EnvironmentVariables</key>\n",
+            "    <dict>\n",
+            "      <key>HOME</key>\n",
+            "      <string>{}</string>\n",
+            "    </dict>\n",
+            "  </dict>\n",
+            "</plist>\n"
+        ),
+        xml_escape(LAUNCHD_AGENT_LABEL),
+        xml_escape(executable),
+        xml_escape(INTERNAL_DAEMON_SUBCOMMAND),
+        xml_escape(home),
+        xml_escape(home),
+    ))
+}
+
+fn plist_path_string<'a>(path: &'a Path, field: &str) -> Result<&'a str> {
+    path.to_str()
+        .ok_or_else(|| anyhow!("{field} is not valid UTF-8: {}", path.display()))
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 async fn run_foreground_at_home(config: &AppConfig, home: &Path) -> Result<()> {
@@ -505,7 +624,8 @@ async fn run_capture_loop(
         }
     };
 
-    let mut wake_scheduler = CaptureWakeScheduler::new(time::Instant::now(), idle_interval, event_settle);
+    let mut wake_scheduler =
+        CaptureWakeScheduler::new(time::Instant::now(), idle_interval, event_settle);
     let mut event_listener_closed = false;
     let mut last_prune_date: Option<NaiveDate> = None;
     loop {
@@ -544,7 +664,11 @@ async fn run_capture_loop(
                 debug!("capture triggered by idle fallback timer");
             }
             Some(CaptureWakeReason::Event(trigger)) => {
-                debug!(?trigger, settle_ms = event_settle_ms, "capture triggered by settled event activity");
+                debug!(
+                    ?trigger,
+                    settle_ms = event_settle_ms,
+                    "capture triggered by settled event activity"
+                );
             }
             None => continue,
         }
@@ -638,6 +762,7 @@ async fn stop_at_home(_config: &AppConfig, home: &Path) -> Result<u32> {
 fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
     let pid_path = AppConfig::pid_file_path(home);
     let active = load_live_pid_record(&pid_path)?;
+    let launchd_installed = launch_agent_installed_at_home(home)?;
     let captures_today = count_captures_today(config, home)?;
     let storage_bytes = metrics::directory_size(&config.storage_root(home))?;
     let uptime_secs = active
@@ -658,6 +783,7 @@ fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
         uptime_secs,
         captures_today,
         storage_bytes,
+        launchd_installed,
     })
 }
 
@@ -1151,7 +1277,10 @@ mod wake_scheduler_tests {
         let mut scheduler = CaptureWakeScheduler::new(now, idle_interval, settle);
 
         assert_eq!(scheduler.timer_deadline(), Some(now));
-        scheduler.record_event(events::CaptureTrigger::AppSwitch, now + Duration::from_secs(1));
+        scheduler.record_event(
+            events::CaptureTrigger::AppSwitch,
+            now + Duration::from_secs(1),
+        );
 
         assert_eq!(scheduler.timer_deadline(), None);
         assert_eq!(
@@ -1166,7 +1295,10 @@ mod wake_scheduler_tests {
         let settle = Duration::from_millis(500);
         let mut scheduler = CaptureWakeScheduler::new(now, Duration::from_secs(300), settle);
 
-        scheduler.record_event(events::CaptureTrigger::AppSwitch, now + Duration::from_secs(1));
+        scheduler.record_event(
+            events::CaptureTrigger::AppSwitch,
+            now + Duration::from_secs(1),
+        );
         scheduler.record_event(
             events::CaptureTrigger::KeyboardBurst,
             now + Duration::from_secs(2),
@@ -1191,7 +1323,10 @@ mod wake_scheduler_tests {
         let settle = Duration::from_millis(500);
         let mut scheduler = CaptureWakeScheduler::new(now, idle_interval, settle);
 
-        scheduler.record_event(events::CaptureTrigger::MouseResume, now + Duration::from_secs(5));
+        scheduler.record_event(
+            events::CaptureTrigger::MouseResume,
+            now + Duration::from_secs(5),
+        );
         scheduler.capture_completed(now + Duration::from_secs(6));
 
         assert_eq!(
@@ -1201,7 +1336,6 @@ mod wake_scheduler_tests {
         assert_eq!(scheduler.event_deadline(), None);
     }
 }
-
 
 #[cfg(all(test, feature = "mock-capture"))]
 mod tests {
@@ -1214,7 +1348,11 @@ mod tests {
     use anyhow::Result;
     use chrono::TimeZone;
 
-    use super::{status_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord};
+    use super::{
+        install_launch_agent_at_home, render_launch_agent_plist, status_at_home,
+        uninstall_launch_agent_at_home, CaptureCycleOutcome, CaptureLoop, DaemonState, PidRecord,
+        INTERNAL_DAEMON_SUBCOMMAND, LAUNCHD_AGENT_LABEL,
+    };
     use crate::config::AppConfig;
 
     fn temp_home_root(name: &str) -> PathBuf {
@@ -1234,7 +1372,6 @@ mod tests {
         config.capture.excluded_window_titles.clear();
         config
     }
-
 
     #[test]
     fn invalid_excluded_window_title_regex_fails_capture_loop_open() {
@@ -1387,6 +1524,43 @@ mod tests {
         assert_eq!(status.state, DaemonState::Stopped);
         assert_eq!(status.pid, None);
         assert!(!pid_path.exists());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+    #[test]
+    fn render_launch_agent_plist_sets_keepalive_runatload_and_home() -> Result<()> {
+        let home = temp_home_root("launchd-render");
+        let executable = home.join("Applications").join("screencap");
+
+        let plist = render_launch_agent_plist(&executable, &home)?;
+
+        assert!(plist.contains(LAUNCHD_AGENT_LABEL));
+        assert!(plist.contains("<key>RunAtLoad</key>"));
+        assert!(plist.contains("<key>KeepAlive</key>"));
+        assert!(plist.contains(INTERNAL_DAEMON_SUBCOMMAND));
+        assert!(plist.contains(home.to_str().expect("temp path should be utf-8")));
+
+        Ok(())
+    }
+
+    #[test]
+    fn install_and_uninstall_launch_agent_updates_status() -> Result<()> {
+        let home = temp_home_root("launchd-status");
+        let config = test_config(&home);
+
+        let launch_agent_path = install_launch_agent_at_home(&home)?;
+        assert!(launch_agent_path.exists());
+
+        let installed = status_at_home(&config, &home)?;
+        assert!(installed.launchd_installed);
+
+        let removed = uninstall_launch_agent_at_home(&home)?;
+        assert!(removed);
+        assert!(!launch_agent_path.exists());
+
+        let uninstalled = status_at_home(&config, &home)?;
+        assert!(!uninstalled.launchd_installed);
 
         fs::remove_dir_all(&home)?;
         Ok(())

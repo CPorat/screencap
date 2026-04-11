@@ -43,6 +43,11 @@ export interface CaptureListResponse {
   offset: number;
 }
 
+export interface CaptureListOptions {
+  from?: string;
+  to?: string;
+  app?: string;
+}
 interface SearchHitResponse {
   capture: CaptureRecord;
   extraction: {
@@ -245,11 +250,30 @@ function mapSearchHitToCaptureRecord(hit: SearchHitResponse): CaptureRecord {
   };
 }
 
-export async function listCaptures(limit = 60, offset = 0): Promise<CaptureListResponse> {
+export async function listCaptures(
+  limit = 60,
+  offset = 0,
+  options: CaptureListOptions = {}
+): Promise<CaptureListResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
   });
+
+  const from = options.from?.trim();
+  if (from) {
+    params.set('from', from);
+  }
+
+  const to = options.to?.trim();
+  if (to) {
+    params.set('to', to);
+  }
+
+  const app = options.app?.trim();
+  if (app) {
+    params.set('app', app);
+  }
 
   const response = await fetch(`/api/captures?${params.toString()}`, {
     headers: {
@@ -269,9 +293,13 @@ export async function listCaptures(limit = 60, offset = 0): Promise<CaptureListR
   return payload;
 }
 
-export async function getCaptures(limit = 60, offset = 0): Promise<CaptureRecord[]> {
+export async function getCaptures(
+  limit = 60,
+  offset = 0,
+  options: CaptureListOptions = {}
+): Promise<CaptureRecord[]> {
   try {
-    const payload = await listCaptures(limit, offset);
+    const payload = await listCaptures(limit, offset, options);
     return payload.captures;
   } catch (error) {
     console.error('Failed to load captures', error);

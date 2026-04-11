@@ -50,11 +50,17 @@ var EMPTY_HEALTH = {
 	status: "offline",
 	uptime_secs: 0
 };
-async function listCaptures(limit = 60, offset = 0) {
+async function listCaptures(limit = 60, offset = 0, options = {}) {
 	const params = new URLSearchParams({
 		limit: String(limit),
 		offset: String(offset)
 	});
+	const from = options.from?.trim();
+	if (from) params.set("from", from);
+	const to = options.to?.trim();
+	if (to) params.set("to", to);
+	const app = options.app?.trim();
+	if (app) params.set("app", app);
 	const response = await fetch(`/api/captures?${params.toString()}`, { headers: { Accept: "application/json" } });
 	if (!response.ok) throw new Error(`captures request failed (${response.status})`);
 	const payload = await response.json();

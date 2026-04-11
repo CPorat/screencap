@@ -257,3 +257,13 @@ Branch: ralph/v1-implementation
   - Embedding `web/dist` with a server-side `index.html` fallback is the reliable deep-link strategy for SPA-style navigation under a Rust binary.
   - Pair browser-flow verification with accessibility checks during shell setup to catch navigation semantics regressions before feature views add complexity.
 ---
+
+## 2026-04-11 07:14:31 UTC - US-016
+- Implemented the Timeline view in Svelte with grouped capture rendering, timeline cards, and modal-based detail expansion for screenshot and extraction payloads.
+- Wired Timeline data loading through the shared API client, including `/api/captures` fetches, hour-level grouping, and detail hydration from `/api/captures/:id` for expanded records.
+- Verified behavior with Puppeteer against seeded SQLite capture/extraction data, confirming timeline card rendering, grouping correctness, and modal detail visibility.
+- Files changed: web/src/routes/+page.svelte, web/src/routes/Timeline.svelte, web/src/lib/components/CaptureCard.svelte, web/src/lib/components/CaptureDetailsModal.svelte, web/src/lib/api.ts, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Keep Timeline grouping and API normalization close to the view boundary so modal/detail components can stay presentation-focused and reusable.
+  - Seeded SQLite fixtures plus browser automation provide reliable verification for grouped timeline flows and expanded detail UX regressions.
+---

@@ -1,17 +1,15 @@
 <script lang="ts">
-  import type { CaptureRecord } from '$lib/api';
+  import { createEventDispatcher } from 'svelte';
+  import type { CaptureRecord, ExtractionRecord } from '$lib/api';
 
   export let capture: CaptureRecord;
+  export let extraction: ExtractionRecord | null = null;
+
+  const dispatch = createEventDispatcher<{ open: { captureId: number } }>();
 
   const timeFormatter = new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
     minute: '2-digit',
-  });
-
-  const dateFormatter = new Intl.DateTimeFormat(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
   });
 
   let imageFailed = false;
@@ -29,177 +27,136 @@
     return `/api/screenshots/${encodeURIComponent(normalizedPath)}`;
   }
 
-  function toMonogram(appName: string): string {
-    const parts = appName
-      .split(/\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.length === 0) {
-      return '??';
-    }
-
-    return parts
-      .slice(0, 2)
-      .map((part) => part.charAt(0).toUpperCase())
-      .join('');
+  function openDetails(): void {
+    dispatch('open', { captureId: capture.id });
   }
 
   $: capturedAt = new Date(capture.timestamp);
   $: hasTimestamp = Number.isFinite(capturedAt.getTime());
   $: timeLabel = hasTimestamp ? timeFormatter.format(capturedAt) : 'Unknown time';
-  $: dateLabel = hasTimestamp ? dateFormatter.format(capturedAt) : 'Timestamp unavailable';
-
   $: appLabel = capture.app_name?.trim() || 'Unknown app';
-  $: appGlyph = toMonogram(appLabel);
-  $: titleLabel = capture.window_title?.trim() || 'Untitled window';
-
-  $: activityLabel =
+  $: description =
+    extraction?.description?.trim() ||
+    extraction?.key_content?.trim() ||
     capture.primary_activity?.trim() ||
     capture.narrative?.trim() ||
     capture.batch_narrative?.trim() ||
-    'Processing...';
+    'No extraction description available.';
 
   $: screenshotSrc = imageFailed ? null : buildScreenshotSrc();
 </script>
 
-<article class="capture-card" aria-label={`Capture from ${timeLabel}`}>
-  <header class="capture-card__meta">
-    <p class="capture-card__time">{timeLabel}</p>
-    <p class="capture-card__date">{dateLabel}</p>
-  </header>
-
-  <div class="capture-card__app">
-    <span class="capture-card__glyph" aria-hidden="true">{appGlyph}</span>
-    <p>{appLabel}</p>
+<button class="capture-card" type="button" on:click={openDetails} aria-label={`Open capture from ${timeLabel}`}>
+  <div class="capture-card__thumb-wrap">
+    {#if screenshotSrc}
+      <img
+        class="capture-card__thumb"
+        src={screenshotSrc}
+        alt={`Capture from ${appLabel} at ${timeLabel}`}
+        loading="lazy"
+        on:error={() => {
+          imageFailed = true;
+        }}
+      />
+    {:else}
+      <div class="capture-card__thumb capture-card__thumb--fallback" role="img" aria-label="Screenshot unavailable">
+        Unavailable
+      </div>
+    {/if}
   </div>
 
-  <h3>{titleLabel}</h3>
-  <p class="capture-card__activity">{activityLabel}</p>
+  <div class="capture-card__meta">
+    <p class="capture-card__app" title={appLabel}>{appLabel}</p>
+    <time class="capture-card__time" datetime={capture.timestamp}>{timeLabel}</time>
+  </div>
 
-  {#if screenshotSrc}
-    <img
-      src={screenshotSrc}
-      alt={`Thumbnail for ${titleLabel}`}
-      loading="lazy"
-      on:error={() => {
-        imageFailed = true;
-      }}
-    />
-  {:else}
-    <div class="capture-card__placeholder" role="img" aria-label="Screenshot unavailable">
-      Thumbnail unavailable
-    </div>
-  {/if}
-</article>
+  <p class="capture-card__description" title={description}>{description}</p>
+</button>
 
 <style>
   .capture-card {
+    all: unset;
     display: grid;
-    gap: 0.72rem;
-    border: 2px solid rgb(246 241 231 / 38%);
-    border-radius: 0.95rem;
+    gap: 0.62rem;
+    padding: 0.72rem;
+    border-radius: 0.9rem;
+    border: 1px solid rgb(246 241 231 / 34%);
     background:
-      linear-gradient(165deg, rgb(76 87 122 / 42%), rgb(21 25 35 / 92%)),
-      radial-gradient(circle at 8% 8%, rgb(112 255 227 / 12%), transparent 42%);
-    padding: 0.92rem;
-    box-shadow: 0.38rem 0.38rem 0 rgb(10 12 18 / 90%);
+      linear-gradient(145deg, rgb(48 55 78 / 78%), rgb(14 17 26 / 96%)),
+      radial-gradient(circle at 20% 10%, rgb(255 179 71 / 18%), transparent 42%);
+    box-shadow: 0.3rem 0.3rem 0 rgb(8 10 16 / 90%);
+    cursor: pointer;
     min-width: 0;
-    animation: card-rise 260ms ease both;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
   }
 
-  @keyframes card-rise {
-    from {
-      opacity: 0;
-      transform: translateY(0.45rem);
-    }
+  .capture-card:hover,
+  .capture-card:focus-visible {
+    transform: translate(-0.05rem, -0.05rem);
+    border-color: var(--pulse);
+    box-shadow: 0.4rem 0.4rem 0 rgb(8 10 16 / 94%);
+    outline: none;
+  }
 
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+  .capture-card__thumb-wrap {
+    border-radius: 0.72rem;
+    overflow: hidden;
+    border: 1px solid rgb(246 241 231 / 24%);
+  }
+
+  .capture-card__thumb {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    display: block;
+    background: rgb(7 9 14 / 92%);
+  }
+
+  .capture-card__thumb--fallback {
+    display: grid;
+    place-content: center;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: rgb(240 232 219 / 76%);
   }
 
   .capture-card__meta {
     display: flex;
     justify-content: space-between;
-    gap: 0.8rem;
+    gap: 0.75rem;
     align-items: baseline;
+    min-width: 0;
+  }
+
+  .capture-card__app {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--paper-100);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .capture-card__time {
     font-family: var(--display-font);
-    font-size: 1rem;
-    letter-spacing: 0.03em;
-  }
-
-  .capture-card__date {
-    color: var(--paper-200);
-    font-size: 0.74rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-  }
-
-  .capture-card__app {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    width: fit-content;
-    border: 1px solid rgb(246 241 231 / 35%);
-    border-radius: 999px;
-    padding: 0.26rem 0.58rem 0.26rem 0.28rem;
-    background: rgb(14 17 26 / 76%);
-  }
-
-  .capture-card__app p {
-    font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-
-  .capture-card__glyph {
-    width: 1.52rem;
-    height: 1.52rem;
-    border-radius: 999px;
-    border: 1px solid rgb(112 255 227 / 44%);
+    font-size: 0.88rem;
     color: var(--pulse);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.66rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    background: rgb(9 13 18 / 78%);
+    flex-shrink: 0;
   }
 
-  h3 {
-    font-size: 1.02rem;
-    line-height: 1.1;
-  }
-
-  .capture-card__activity {
+  .capture-card__description {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.34;
     color: var(--paper-200);
-    font-size: 0.84rem;
-    line-height: 1.35;
-    min-height: 2.3em;
-  }
-
-  img,
-  .capture-card__placeholder {
-    width: 100%;
-    border-radius: 0.74rem;
-    border: 1px solid rgb(246 241 231 / 36%);
-    background: rgb(8 10 18 / 86%);
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-  }
-
-  .capture-card__placeholder {
-    display: grid;
-    place-content: center;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: rgb(221 213 198 / 72%);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    text-overflow: ellipsis;
+    min-height: 2.2em;
   }
 </style>

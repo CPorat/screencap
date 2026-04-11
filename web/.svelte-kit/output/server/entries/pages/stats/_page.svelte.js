@@ -1,4 +1,4 @@
-import { Y as attr, Z as escape_html, f as head } from "../../../chunks/index-server.js";
+import { Q as escape_html, X as attr, p as head } from "../../../chunks/index-server.js";
 import "../../../chunks/api.js";
 //#region src/routes/stats/+page.svelte
 function _page($$renderer, $$props) {

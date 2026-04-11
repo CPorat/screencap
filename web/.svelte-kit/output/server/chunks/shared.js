@@ -1,4 +1,4 @@
-import { i as hydratable } from "./index-server.js";
+import { a as hydratable } from "./index-server.js";
 import { HttpError, SvelteKitError } from "@sveltejs/kit/internal";
 import * as devalue from "devalue";
 //#region node_modules/@sveltejs/kit/src/runtime/utils.js

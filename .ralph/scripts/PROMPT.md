@@ -130,19 +130,22 @@ Do NOT skip browser verification. "npm run build succeeds" is necessary but NOT 
 - Keep changes focused to the single story you're implementing
 - Follow existing code patterns in the repo
 
-## Stop Condition
+## CRITICAL: One Story Only — Then STOP
 
-After completing a user story, check if ALL stories have `passes: true`.
+**You MUST complete exactly ONE user story per invocation, then STOP immediately.**
 
-If ALL stories are complete, reply with:
-<promise>COMPLETE</promise>
+After completing steps 1–10 above for a single story:
 
-If there are still stories with `passes: false`, end your response normally.
+1. If ALL stories now have `passes: true`, reply with: `<promise>COMPLETE</promise>`
+2. If there are still stories with `passes: false`, reply with a short summary of what you did and **STOP. END YOUR RESPONSE. DO NOT pick up the next story.**
 
-## Important
+**DO NOT** continue to the next story. **DO NOT** loop through multiple stories. **DO NOT** "keep going because there's more work." An external orchestration loop manages iteration — it will re-invoke you for the next story with the correct model and configuration. If you do more than one story, you break the model routing and waste resources.
 
-- Work on ONE story per iteration
-- Commit frequently
+This is not a suggestion. This is a hard constraint. One story. One commit. One PRD update. Then stop.
+
+## Other Guidelines
+
+- Commit frequently within the one story
 - Keep CI green
 - Read the Codebase Patterns section in `.ralph/progress.txt` before starting
 - Reference SPEC.md for exact schema definitions, API shapes, and prompt templates

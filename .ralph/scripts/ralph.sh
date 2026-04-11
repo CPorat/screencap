@@ -208,7 +208,7 @@ run_agent() {
       [ -n "$use_model" ] && omp_args+=(--model "$use_model")
       [ -n "$use_thinking" ] && omp_args+=(--thinking "$use_thinking")
       omp "${omp_args[@]}" @"$prompt_file" \
-        > >(tee "$ITER_LOG_DIR/events.jsonl") \
+        >"$ITER_LOG_DIR/events.jsonl" \
         2>"$ITER_LOG_DIR/stderr.log"
       ;;
   esac

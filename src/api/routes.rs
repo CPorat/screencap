@@ -28,7 +28,8 @@ use crate::{
         models::{
             ActivityType, AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction,
             ExtractionSearchHit, ExtractionStatus, Insight, InsightData, InsightType,
-            ProjectTimeAllocation, SearchHit, SearchQuery, TopicFrequency,
+            PipelineCostSummary, PipelineHealth, ProjectTimeAllocation, SearchHit, SearchQuery,
+            TopicFrequency,
         },
         screenshots::{
             read_screenshot_file, relative_screenshot_path, sanitize_relative_screenshot_path,
@@ -90,8 +91,9 @@ struct StatsResponse {
     captures_today: u64,
     storage_bytes: u64,
     uptime_secs: u64,
+    pipeline: PipelineHealth,
+    cost_today: PipelineCostSummary,
 }
-
 #[derive(Debug, Serialize)]
 struct CapturePausedResponse {
     paused: bool,
@@ -362,6 +364,7 @@ async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
 }
 
 async fn stats(State(state): State<ApiState>) -> Result<Json<StatsResponse>, ApiError> {
+    let now = Utc::now();
     let storage_bytes = metrics::directory_size(&state.storage_root).map_err(ApiError::internal)?;
     let Some(db) = state.open_db().map_err(ApiError::internal)? else {
         return Ok(Json(StatsResponse {
@@ -369,17 +372,24 @@ async fn stats(State(state): State<ApiState>) -> Result<Json<StatsResponse>, Api
             captures_today: 0,
             storage_bytes,
             uptime_secs: state.uptime_secs(),
+            pipeline: PipelineHealth::default(),
+            cost_today: PipelineCostSummary::default(),
         }));
     };
     let capture_count = db.count_captures().map_err(ApiError::internal)?;
-    let captures_today =
-        metrics::count_captures_today(&db, Utc::now()).map_err(ApiError::internal)?;
+    let captures_today = metrics::count_captures_today(&db, now).map_err(ApiError::internal)?;
+    let pipeline = db.summarize_pipeline_health().map_err(ApiError::internal)?;
+    let cost_today = db
+        .summarize_reported_costs_for_date(now.date_naive())
+        .map_err(ApiError::internal)?;
 
     Ok(Json(StatsResponse {
         capture_count,
         captures_today,
         storage_bytes,
         uptime_secs: state.uptime_secs(),
+        pipeline,
+        cost_today,
     }))
 }
 

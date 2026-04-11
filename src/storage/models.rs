@@ -402,7 +402,7 @@ pub struct TopicFrequency {
     pub capture_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CostSummary {
     pub tokens_used: u64,
     pub reported_cost_cents: f64,
@@ -421,6 +421,20 @@ pub struct CostBreakdown {
     pub extraction: CostSummary,
     pub synthesis: CostSummary,
     pub by_day: Vec<DailyCostSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PipelineCostSummary {
+    pub total: CostSummary,
+    pub extraction: CostSummary,
+    pub synthesis: CostSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PipelineHealth {
+    pub pending_captures: u64,
+    pub last_extraction_at: Option<DateTime<Utc>>,
+    pub last_synthesis_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

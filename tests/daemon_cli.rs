@@ -18,8 +18,8 @@ use screencap::{
     storage::{
         db::StorageDb,
         models::{
-            ActivityType, HourlyProjectSummary, InsightData, InsightType, NewCapture, NewExtraction,
-            NewExtractionBatch, NewInsight, Sentiment,
+            ActivityType, HourlyProjectSummary, InsightData, InsightType, NewCapture,
+            NewExtraction, NewExtractionBatch, NewInsight, Sentiment,
         },
     },
 };
@@ -58,9 +58,9 @@ impl TestHome {
             fs::create_dir_all(&app_root).with_context(|| {
                 format!("failed to create test app root at {}", app_root.display())
             })?;
-            fs::write(home.config_path(), format!("[server]\nport = {port}\n")).with_context(|| {
-                format!("failed to write test config at {}", app_root.display())
-            })?;
+            fs::write(home.config_path(), format!("[server]\nport = {port}\n")).with_context(
+                || format!("failed to write test config at {}", app_root.display()),
+            )?;
         }
 
         Ok(home)
@@ -392,6 +392,61 @@ fn seed_cost_data(db_path: &Path, now: chrono::DateTime<Utc>) -> Result<()> {
     Ok(())
 }
 
+fn seed_status_pipeline_data(
+    db_path: &Path,
+    now: chrono::DateTime<Utc>,
+) -> Result<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
+    let mut db = StorageDb::open_at_path(db_path)?;
+    let capture_time = now - ChronoDuration::minutes(35);
+    let batch_end = now - ChronoDuration::minutes(30);
+    let rolling_end = now - ChronoDuration::minutes(5);
+    let rolling_start = rolling_end - ChronoDuration::minutes(30);
+
+    db.insert_capture(&NewCapture {
+        timestamp: capture_time,
+        app_name: Some("Code".into()),
+        window_title: Some("Pipeline telemetry".into()),
+        bundle_id: Some("com.microsoft.VSCode".into()),
+        display_id: Some(1),
+        screenshot_path: "screenshots/2026/04/11/status.jpg".into(),
+    })?;
+
+    db.insert_extraction_batch(&NewExtractionBatch {
+        id: Uuid::new_v4(),
+        batch_start: batch_end - ChronoDuration::minutes(10),
+        batch_end,
+        capture_count: 1,
+        primary_activity: Some("coding".into()),
+        project_context: Some("screencap".into()),
+        narrative: Some("Status telemetry extraction batch".into()),
+        raw_response: None,
+        model_used: Some("mock-vision-model".into()),
+        tokens_used: Some(90),
+        cost_cents: Some(0.30),
+    })?;
+
+    db.insert_insight(&NewInsight {
+        insight_type: InsightType::Rolling,
+        window_start: rolling_start,
+        window_end: rolling_end,
+        data: InsightData::Rolling {
+            window_start: rolling_start,
+            window_end: rolling_end,
+            current_focus: "Checking status telemetry".into(),
+            active_project: Some("screencap".into()),
+            apps_used: std::collections::BTreeMap::from([("Code".into(), "30 min".into())]),
+            context_switches: 0,
+            mood: "focused".into(),
+            summary: "Validated pipeline status output.".into(),
+        },
+        model_used: Some("mock-synthesis-model".into()),
+        tokens_used: Some(210),
+        cost_cents: Some(0.21),
+    })?;
+
+    Ok((batch_end, rolling_end))
+}
+
 struct TestServer {
     address: SocketAddr,
     handle: Option<thread::JoinHandle<()>>,
@@ -475,6 +530,14 @@ fn start_status_stop_manage_background_daemon() -> Result<()> {
         stdout.contains("storage_bytes: "),
         "unexpected status output: {stdout}"
     );
+    assert!(
+        stdout.contains("pending_captures: "),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("cost_today: "),
+        "unexpected status output: {stdout}"
+    );
 
     let stop = run_cli(home.path(), &["stop"])?;
     assert_success(&stop, "stop");
@@ -498,6 +561,54 @@ fn start_status_stop_manage_background_daemon() -> Result<()> {
     );
     assert!(
         stdout.contains("pid: -"),
+        "unexpected status output: {stdout}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn status_reports_pipeline_health_and_cost_for_today() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("status-pipeline")?;
+    let now = Utc::now();
+    let (batch_end, rolling_end) = seed_status_pipeline_data(&home.db_path(), now)?;
+
+    let output = run_cli(home.path(), &["status"])?;
+    assert_success(&output, "status pipeline telemetry");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("state: stopped"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("pending_captures: 1"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "last_extraction_at: {}",
+            batch_end.format("%Y-%m-%d %H:%M UTC")
+        )),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "last_synthesis_at: {}",
+            rolling_end.format("%Y-%m-%d %H:%M UTC")
+        )),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("cost_today: 0.51¢ ($0.0051) across 300 tokens"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("cost_today_extraction: 0.30¢ ($0.0030) across 90 tokens"),
+        "unexpected status output: {stdout}"
+    );
+    assert!(
+        stdout.contains("cost_today_synthesis: 0.21¢ ($0.0021) across 210 tokens"),
         "unexpected status output: {stdout}"
     );
 
@@ -647,7 +758,10 @@ fn config_creates_default_file_and_prefers_visual_editor() -> Result<()> {
     )?;
     assert_success(&output, "config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!("opened config at {}", home.config_path().display())));
+    assert!(stdout.contains(&format!(
+        "opened config at {}",
+        home.config_path().display()
+    )));
     assert!(
         !stdout.contains("scaffolded but not implemented"),
         "unexpected config output: {stdout}",
@@ -679,7 +793,11 @@ fn config_uses_open_fallback_when_editor_env_is_missing() -> Result<()> {
     let fake_bin = fake_open
         .parent()
         .context("fake open script should have a parent directory")?;
-    let path = format!("{}:{}", fake_bin.display(), env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        env::var("PATH").unwrap_or_default()
+    );
 
     let output = run_cli_with_env(
         home.path(),

@@ -24,8 +24,8 @@ use super::models::{
     ActivityType, AppCaptureCount, Capture, CaptureDetail, CaptureQuery, CostBreakdown,
     CostSummary, DailyCostSummary, Extraction, ExtractionBatch, ExtractionBatchDetail,
     ExtractionFrameDetail, ExtractionSearchHit, ExtractionStatus, Insight, InsightData,
-    InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, ProjectTimeAllocation,
-    SearchHit, SearchQuery, Sentiment, TopicFrequency,
+    InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, PipelineCostSummary,
+    PipelineHealth, ProjectTimeAllocation, SearchHit, SearchQuery, Sentiment, TopicFrequency,
 };
 
 const SCHEMA: &str = r#"
@@ -1268,6 +1268,84 @@ impl StorageDb {
         })
     }
 
+    pub fn summarize_pipeline_health(&self) -> Result<PipelineHealth> {
+        let pending_captures: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM captures WHERE extraction_status = ?1",
+                params![ExtractionStatus::Pending.as_str()],
+                |row| row.get(0),
+            )
+            .context("failed to count pending captures")?;
+        let pending_captures =
+            u64::try_from(pending_captures).context("pending capture count overflowed u64")?;
+
+        let last_extraction_at = query_optional_timestamp(
+            &self.conn,
+            "SELECT batch_end
+             FROM extraction_batches
+             ORDER BY batch_end DESC, created_at DESC, id DESC
+             LIMIT 1",
+        )?;
+        let last_synthesis_at = query_optional_timestamp(
+            &self.conn,
+            "SELECT window_end
+             FROM insights
+             ORDER BY window_end DESC, created_at DESC, id DESC
+             LIMIT 1",
+        )?;
+
+        Ok(PipelineHealth {
+            pending_captures,
+            last_extraction_at,
+            last_synthesis_at,
+        })
+    }
+
+    pub fn summarize_reported_costs_for_date(
+        &self,
+        date: NaiveDate,
+    ) -> Result<PipelineCostSummary> {
+        let day_start = date
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+        let day_end = date
+            .succ_opt()
+            .ok_or_else(|| anyhow!("failed to compute next day for reported cost summary"))?
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight should be representable")
+            .and_utc();
+        let day_start = format_db_timestamp(&day_start);
+        let day_end = format_db_timestamp(&day_end);
+
+        let extraction = query_reported_cost_summary_with_params(
+            &self.conn,
+            "SELECT SUM(tokens_used), SUM(cost_cents)
+             FROM extraction_batches
+             WHERE batch_end >= ?1 AND batch_end < ?2
+               AND (tokens_used IS NOT NULL OR cost_cents IS NOT NULL)",
+            params![&day_start, &day_end],
+        )?;
+        let synthesis = query_reported_cost_summary_with_params(
+            &self.conn,
+            "SELECT SUM(tokens_used), SUM(cost_cents)
+             FROM insights
+             WHERE window_end >= ?1 AND window_end < ?2
+               AND (tokens_used IS NOT NULL OR cost_cents IS NOT NULL)",
+            params![&day_start, &day_end],
+        )?;
+
+        Ok(PipelineCostSummary {
+            total: CostSummary {
+                tokens_used: extraction.tokens_used.saturating_add(synthesis.tokens_used),
+                reported_cost_cents: extraction.reported_cost_cents + synthesis.reported_cost_cents,
+            },
+            extraction,
+            synthesis,
+        })
+    }
+
     pub fn prune_old_data(&self, days: u32) -> Result<usize> {
         let cutoff = Utc::now() - chrono::Duration::days(i64::from(days));
         let cutoff_timestamp = format_db_timestamp(&cutoff);
@@ -1758,8 +1836,19 @@ fn initialize_connection(conn: &Connection) -> Result<()> {
 }
 
 fn query_reported_cost_summary(conn: &Connection, sql: &str) -> Result<CostSummary> {
+    query_reported_cost_summary_with_params(conn, sql, [])
+}
+
+fn query_reported_cost_summary_with_params<P>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+) -> Result<CostSummary>
+where
+    P: rusqlite::Params,
+{
     let (tokens_used, reported_cost_cents): (Option<i64>, Option<f64>) = conn
-        .query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?)))
+        .query_row(sql, params, |row| Ok((row.get(0)?, row.get(1)?)))
         .context("failed to query reported cost summary")?;
     let tokens_used = u64::try_from(tokens_used.unwrap_or_default())
         .context("reported cost tokens overflowed u64")?;
@@ -1768,6 +1857,17 @@ fn query_reported_cost_summary(conn: &Connection, sql: &str) -> Result<CostSumma
         tokens_used,
         reported_cost_cents: reported_cost_cents.unwrap_or(0.0),
     })
+}
+
+fn query_optional_timestamp(conn: &Connection, sql: &str) -> Result<Option<DateTime<Utc>>> {
+    let raw_timestamp = conn
+        .query_row(sql, [], |row| row.get::<_, String>(0))
+        .optional()
+        .context("failed to query optional timestamp")?;
+
+    raw_timestamp
+        .map(|value| parse_db_timestamp(&value).context("failed to parse queried timestamp"))
+        .transpose()
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -3196,6 +3296,82 @@ mod tests {
         assert_eq!(insight.insight_type, InsightType::Daily);
         assert_eq!(insight.window_start, window_start);
         assert_eq!(insight.window_end, window_end);
+    }
+
+    #[test]
+    fn summarizes_pipeline_health_and_daily_costs() {
+        let mut db = StorageDb::open_in_memory().expect("database should open");
+        let capture_time = Utc.with_ymd_and_hms(2026, 4, 10, 14, 0, 0).unwrap();
+        let batch_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 10, 0).unwrap();
+        let rolling_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
+        let rolling_start = rolling_end - chrono::Duration::minutes(30);
+
+        db.insert_capture(&NewCapture {
+            timestamp: capture_time,
+            app_name: Some("Code".into()),
+            window_title: Some("Pending pipeline work".into()),
+            bundle_id: Some("com.microsoft.VSCode".into()),
+            display_id: Some(1),
+            screenshot_path: "screenshots/2026/04/10/pending.jpg".into(),
+        })
+        .expect("pending capture should insert");
+
+        db.insert_extraction_batch(&NewExtractionBatch {
+            id: Uuid::new_v4(),
+            batch_start: batch_end - chrono::Duration::minutes(10),
+            batch_end,
+            capture_count: 1,
+            primary_activity: Some("coding".into()),
+            project_context: Some("screencap".into()),
+            narrative: Some("Processed a pending capture batch".into()),
+            raw_response: None,
+            model_used: Some("mock-vision-model".into()),
+            tokens_used: Some(90),
+            cost_cents: Some(0.30),
+        })
+        .expect("extraction batch should insert");
+
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Rolling,
+            window_start: rolling_start,
+            window_end: rolling_end,
+            data: InsightData::Rolling {
+                window_start: rolling_start,
+                window_end: rolling_end,
+                current_focus: "Reviewing pipeline telemetry".into(),
+                active_project: Some("screencap".into()),
+                apps_used: BTreeMap::from([("Code".into(), "30 min".into())]),
+                context_switches: 0,
+                mood: "focused".into(),
+                summary: "Validated status and stats telemetry.".into(),
+            },
+            model_used: Some("mock-synthesis-model".into()),
+            tokens_used: Some(210),
+            cost_cents: Some(0.21),
+        })
+        .expect("rolling insight should insert");
+
+        let health = db
+            .summarize_pipeline_health()
+            .expect("pipeline health should summarize");
+        assert_eq!(health.pending_captures, 1);
+        assert_eq!(health.last_extraction_at, Some(batch_end));
+        assert_eq!(health.last_synthesis_at, Some(rolling_end));
+
+        let cost = db
+            .summarize_reported_costs_for_date(batch_end.date_naive())
+            .expect("daily reported cost should summarize");
+        assert_eq!(cost.extraction.tokens_used, 90);
+        assert!((cost.extraction.reported_cost_cents - 0.30).abs() < f64::EPSILON);
+        assert_eq!(cost.synthesis.tokens_used, 210);
+        assert!((cost.synthesis.reported_cost_cents - 0.21).abs() < f64::EPSILON);
+        assert_eq!(cost.total.tokens_used, 300);
+        assert!((cost.total.reported_cost_cents - 0.51).abs() < f64::EPSILON);
+
+        let empty_cost = db
+            .summarize_reported_costs_for_date(batch_end.date_naive().succ_opt().unwrap())
+            .expect("future daily reported cost should summarize");
+        assert_eq!(empty_cost, PipelineCostSummary::default());
     }
 
     #[test]

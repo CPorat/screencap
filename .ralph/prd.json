@@ -939,7 +939,7 @@
         "Unit/integration tests validate new fields and formatting"
       ],
       "priority": 40,
-      "passes": false,
+      "passes": true,
       "notes": "Spec calls for status/stats to report pipeline health and cost, not only capture/storage counters.",
       "tool": "omp",
       "model": "gpt-5.4",

@@ -30,7 +30,7 @@ use crate::{
     storage::{
         db::StorageDb,
         metrics,
-        models::{Capture, NewCapture},
+        models::{Capture, NewCapture, PipelineCostSummary, PipelineHealth},
         prune,
     },
 };
@@ -117,7 +117,7 @@ impl DaemonState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DaemonStatus {
     pub state: DaemonState,
     pub pid: Option<u32>,
@@ -125,6 +125,15 @@ pub struct DaemonStatus {
     pub captures_today: u64,
     pub storage_bytes: u64,
     pub launchd_installed: bool,
+    pub pipeline: PipelineHealth,
+    pub cost_today: PipelineCostSummary,
+}
+
+#[derive(Debug, Clone)]
+struct StatusMetrics {
+    captures_today: u64,
+    pipeline: PipelineHealth,
+    cost_today: PipelineCostSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -760,15 +769,16 @@ async fn stop_at_home(_config: &AppConfig, home: &Path) -> Result<u32> {
 }
 
 fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
+    let now = Utc::now();
     let pid_path = AppConfig::pid_file_path(home);
     let active = load_live_pid_record(&pid_path)?;
     let launchd_installed = launch_agent_installed_at_home(home)?;
-    let captures_today = count_captures_today(config, home)?;
+    let status_metrics = load_status_metrics(config, home, now)?;
     let storage_bytes = metrics::directory_size(&config.storage_root(home))?;
     let uptime_secs = active
         .as_ref()
         .map(|record| {
-            let elapsed = Utc::now().signed_duration_since(record.started_at);
+            let elapsed = now.signed_duration_since(record.started_at);
             u64::try_from(elapsed.num_seconds().max(0)).unwrap_or(0)
         })
         .unwrap_or(0);
@@ -781,9 +791,11 @@ fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
         },
         pid: active.as_ref().map(|record| record.pid),
         uptime_secs,
-        captures_today,
+        captures_today: status_metrics.captures_today,
         storage_bytes,
         launchd_installed,
+        pipeline: status_metrics.pipeline,
+        cost_today: status_metrics.cost_today,
     })
 }
 
@@ -863,16 +875,27 @@ async fn shutdown_signal() -> Result<()> {
     }
 }
 
-fn count_captures_today(config: &AppConfig, home: &Path) -> Result<u64> {
+fn load_status_metrics(
+    config: &AppConfig,
+    home: &Path,
+    now: DateTime<Utc>,
+) -> Result<StatusMetrics> {
     let db_path = config.storage_root(home).join("screencap.db");
-    if !db_path.exists() {
-        return Ok(0);
-    }
+    let Some(db) = StorageDb::open_existing_at_path(&db_path)
+        .with_context(|| format!("failed to open capture database at {}", db_path.display()))?
+    else {
+        return Ok(StatusMetrics {
+            captures_today: 0,
+            pipeline: PipelineHealth::default(),
+            cost_today: PipelineCostSummary::default(),
+        });
+    };
 
-    let db = StorageDb::open_at_path(&db_path)
-        .with_context(|| format!("failed to open capture database at {}", db_path.display()))?;
-
-    metrics::count_captures_today(&db, Utc::now())
+    Ok(StatusMetrics {
+        captures_today: metrics::count_captures_today(&db, now)?,
+        pipeline: db.summarize_pipeline_health()?,
+        cost_today: db.summarize_reported_costs_for_date(now.date_naive())?,
+    })
 }
 
 fn runtime_home_dir() -> Result<PathBuf> {

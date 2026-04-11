@@ -73,6 +73,8 @@ Three-layer pipeline:
 - API handlers that use `rusqlite` connections must gather SQLite-backed evidence before the first `.await` and drop the connection before any async LLM call, because axum handlers need `Send` futures and `rusqlite::Connection` is not `Send`.
 
 - CLI read commands should likewise open SQLite read-only when possible, print helpful empty-state text instead of creating `screencap.db` on empty homes, and label any capture-count-based project breakdowns explicitly instead of implying minute-accurate time tracking.
+- Status and stats telemetry should reuse read-only storage helpers that derive pipeline freshness from the latest `extraction_batches.batch_end` / `insights.window_end` timestamps and derive day-scoped cost from those same window timestamps, so `screencap status`, `/api/stats`, and `screencap costs` report one consistent notion of pipeline recency and spend.
+
 - Search and insight read APIs should expose typed storage helpers that join back to the canonical `captures` rows, so callers can filter by capture metadata and render screenshot context without follow-up lookups.
 - When search combines results from different FTS tables (for example extractions plus insights), do not compare raw `bm25()` values across tables as if they shared one scale; query each source with its own FTS rank, then fuse the typed results in Rust with one deterministic cross-source ordering.
 - When serving screenshots over HTTP, accept only sanitized paths relative to the screenshots root and walk them with `openat(..., O_NOFOLLOW)` so traversal or symlink escapes cannot leave the screenshot tree.

@@ -182,6 +182,30 @@ fn print_daemon_status(status: &daemon::DaemonStatus) {
     println!("captures_today: {}", status.captures_today);
     println!("storage_bytes: {}", status.storage_bytes);
     println!("launchd_installed: {}", status.launchd_installed);
+    println!("pending_captures: {}", status.pipeline.pending_captures);
+    println!(
+        "last_extraction_at: {}",
+        format_optional_timestamp(status.pipeline.last_extraction_at.as_ref())
+    );
+    println!(
+        "last_synthesis_at: {}",
+        format_optional_timestamp(status.pipeline.last_synthesis_at.as_ref())
+    );
+    println!(
+        "cost_today: {} across {} tokens",
+        format_cost_cents(status.cost_today.total.reported_cost_cents),
+        status.cost_today.total.tokens_used
+    );
+    println!(
+        "cost_today_extraction: {} across {} tokens",
+        format_cost_cents(status.cost_today.extraction.reported_cost_cents),
+        status.cost_today.extraction.tokens_used
+    );
+    println!(
+        "cost_today_synthesis: {} across {} tokens",
+        format_cost_cents(status.cost_today.synthesis.reported_cost_cents),
+        status.cost_today.synthesis.tokens_used
+    );
 }
 
 async fn handle_start(args: StartArgs) -> Result<()> {
@@ -909,6 +933,12 @@ fn print_cost_breakdown(costs: &CostBreakdown) {
 
 fn format_timestamp(timestamp: &DateTime<Utc>) -> String {
     timestamp.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn format_optional_timestamp(timestamp: Option<&DateTime<Utc>>) -> String {
+    timestamp
+        .map(format_timestamp)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn format_hours(hours: f64) -> String {

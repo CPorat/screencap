@@ -43,6 +43,8 @@ Branch: ralph/v1-implementation
 - API routes that need both SQLite reads and async LLM calls should collect all DB-backed evidence before the first `.await` and drop the `rusqlite` connection before awaiting, because axum handler futures must be `Send` while `rusqlite::Connection` is not.
 
 - CLI read commands should open SQLite read-only when possible, return helpful empty-state output without creating `screencap.db`, and label capture-count-based project breakdowns explicitly so terminal summaries do not overclaim time accuracy.
+- Status and stats surfaces should reuse read-only storage helpers that derive pipeline freshness from the latest `extraction_batches.batch_end` / `insights.window_end` timestamps and derive day-scoped spend from those same window timestamps, so CLI/API telemetry stays consistent with the cost breakdown command.
+
 - Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
 - When search spans multiple FTS tables, keep each source’s SQL/ranking inside `StorageDb`, then fuse the typed rows in Rust with an explicit deterministic cross-source order; raw `bm25()` values from different FTS tables are not directly comparable.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
@@ -689,4 +691,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: first-run config commands should create the default config file before invoking the editor, so the launched tool always receives a real file path instead of an implied future write.
   - Gotchas encountered: editor environment variables often contain command lines rather than bare executables, so the CLI must parse `$VISUAL`/`$EDITOR` as shell words instead of treating the whole string as one binary path.
   - Useful context: on macOS, `open -t` is a practical non-GUI-specific fallback for text config editing and can be safely stubbed in CLI tests by shadowing `open` earlier in `PATH`.
+---
+## [2026-04-11 22:34:13 UTC] - US-040
+- What was implemented: enriched daemon status and `/api/stats` telemetry with shared pipeline-health summaries (pending captures, latest extraction batch coverage, latest synthesis coverage) plus day-scoped reported AI cost totals and stage breakdowns.
+- Files changed: AGENTS.md, src/api/routes.rs, src/daemon.rs, src/main.rs, src/storage/db.rs, src/storage/models.rs, tests/api_server.rs, tests/daemon_cli.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: status/stats telemetry is most stable when CLI and API both read one storage-level summary instead of recomputing freshness/cost independently in each surface.
+  - Gotchas encountered: if status-style commands open SQLite in write mode, they can accidentally create runtime state while only trying to report telemetry; use read-only opens for these paths.
+  - Useful context: deriving pipeline freshness from `batch_end` / `window_end` reports how current the persisted analysis actually is, which is more useful for operators than raw row creation times.
 ---

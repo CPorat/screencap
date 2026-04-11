@@ -67,11 +67,33 @@ struct HealthResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct PipelineHealthResponse {
+    pending_captures: u64,
+    last_extraction_at: Option<DateTime<Utc>>,
+    last_synthesis_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CostSummaryResponse {
+    tokens_used: u64,
+    reported_cost_cents: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PipelineCostSummaryResponse {
+    total: CostSummaryResponse,
+    extraction: CostSummaryResponse,
+    synthesis: CostSummaryResponse,
+}
+
+#[derive(Debug, Deserialize)]
 struct StatsResponse {
     capture_count: u64,
     captures_today: u64,
     storage_bytes: u64,
     uptime_secs: u64,
+    pipeline: PipelineHealthResponse,
+    cost_today: PipelineCostSummaryResponse,
 }
 
 #[derive(Debug, Deserialize)]
@@ -532,6 +554,13 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     assert_eq!(empty_stats.capture_count, 0);
     assert_eq!(empty_stats.captures_today, 0);
     assert!(empty_stats.storage_bytes >= b"test-jpeg".len() as u64);
+    assert_eq!(empty_stats.pipeline.pending_captures, 0);
+    assert_eq!(empty_stats.pipeline.last_extraction_at, None);
+    assert_eq!(empty_stats.pipeline.last_synthesis_at, None);
+    assert_eq!(empty_stats.cost_today.total.tokens_used, 0);
+    assert_eq!(empty_stats.cost_today.extraction.tokens_used, 0);
+    assert_eq!(empty_stats.cost_today.synthesis.tokens_used, 0);
+    assert!((empty_stats.cost_today.total.reported_cost_cents - 0.0).abs() < f64::EPSILON);
     assert!(!db_path.exists(), "stats should not create the database");
 
     let empty_captures: CaptureListResponse = client
@@ -716,6 +745,28 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     assert_eq!(stats.captures_today, expected_captures_today);
     assert!(stats.storage_bytes >= b"test-jpeg".len() as u64);
     assert!(stats.uptime_secs <= 5);
+    assert_eq!(stats.pipeline.pending_captures, 1);
+    assert_eq!(
+        stats.pipeline.last_extraction_at,
+        Some(timestamp + ChronoDuration::minutes(5))
+    );
+    assert_eq!(
+        stats.pipeline.last_synthesis_at,
+        Some(
+            insight_date
+                .succ_opt()
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+        )
+    );
+    assert_eq!(stats.cost_today.total.tokens_used, 410);
+    assert_eq!(stats.cost_today.extraction.tokens_used, 0);
+    assert_eq!(stats.cost_today.synthesis.tokens_used, 410);
+    assert!((stats.cost_today.total.reported_cost_cents - 0.58).abs() < f64::EPSILON);
+    assert!((stats.cost_today.extraction.reported_cost_cents - 0.0).abs() < f64::EPSILON);
+    assert!((stats.cost_today.synthesis.reported_cost_cents - 0.58).abs() < f64::EPSILON);
 
     let from = (timestamp - ChronoDuration::minutes(1)).to_rfc3339();
     let to = (timestamp + ChronoDuration::minutes(1)).to_rfc3339();

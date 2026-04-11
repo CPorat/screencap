@@ -770,7 +770,7 @@
         "All cargo test passes"
       ],
       "priority": 33,
-      "passes": false,
+      "passes": true,
       "notes": "Many of these might already be covered by earlier story tests. This story is specifically to audit and fill gaps.",
       "tool": "omp",
       "model": "gpt-5.4",

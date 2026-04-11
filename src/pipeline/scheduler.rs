@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::{
     ai::provider::{
-        create_provider, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, TokenUsage,
+        create_provider, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, ProviderError,
+        TokenUsage,
     },
     config::AppConfig,
     storage::{
@@ -40,6 +41,7 @@ impl ExtractionRunReport {
 enum BatchDisposition {
     Processed,
     Failed,
+    Deferred,
 }
 
 struct BatchRecordFields<'a> {
@@ -143,6 +145,7 @@ impl ExtractionScheduler {
                     report.failed_batches += 1;
                     report.failed_captures += captures.len();
                 }
+                BatchDisposition::Deferred => break,
             }
         }
 
@@ -169,6 +172,15 @@ impl ExtractionScheduler {
         let response = match self.provider.complete(&prompt, &images).await {
             Ok(response) => response,
             Err(error) => {
+                if matches!(&error, ProviderError::Authentication { .. }) {
+                    error!(
+                        error = %error,
+                        capture_count = captures.len(),
+                        "vision extraction authentication failed; leaving captures pending"
+                    );
+                    return Ok(BatchDisposition::Deferred);
+                }
+
                 self.db.mark_captures_failed(&capture_ids)?;
                 error!(
                     error = %error,
@@ -630,6 +642,152 @@ mod tests {
         fs::remove_dir_all(&home)?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn run_once_is_idle_when_no_captures_are_pending() -> Result<()> {
+        let home = temp_home_root("scheduler-empty");
+        let config = test_config(&home, 8);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = create_scheduler(config, &home, provider.clone())?;
+
+        let report = scheduler.run_once().await?;
+        assert_eq!(report, ExtractionRunReport::default());
+        assert!(scheduler.db.get_pending_captures()?.is_empty());
+        assert!(provider.calls().is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_leaves_captures_pending_on_authentication_failure() -> Result<()> {
+        let home = temp_home_root("scheduler-auth-failure");
+        let config = test_config(&home, 8);
+        let provider = Arc::new(MockLlmProvider::with_responses([Err(
+            ProviderError::Authentication {
+                message: "bad api key".into(),
+            },
+        )]));
+        let mut scheduler = create_scheduler(config, &home, provider.clone())?;
+        let captures = seed_captures(&mut scheduler, 2)?;
+
+        let report = scheduler.run_once().await?;
+        assert_eq!(report, ExtractionRunReport::default());
+
+        let pending = scheduler.db.get_pending_captures()?;
+        assert_eq!(pending.len(), captures.len());
+        assert!(pending
+            .iter()
+            .all(|capture| capture.extraction_status == ExtractionStatus::Pending));
+
+        let batch_count: i64 = scheduler.db.connection().query_row(
+            "SELECT COUNT(*) FROM extraction_batches",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(batch_count, 0);
+
+        let calls = provider.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].images.len(), captures.len());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_marks_failed_captures_when_response_is_non_json() -> Result<()> {
+        let home = temp_home_root("scheduler-garbage-response");
+        let config = test_config(&home, 8);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = create_scheduler(config, &home, provider.clone())?;
+        let _captures = seed_captures(&mut scheduler, 2)?;
+        provider.push_response(Ok(LlmResponse::new("this is not json")));
+
+        let report = scheduler.run_once().await?;
+        assert_eq!(
+            report,
+            ExtractionRunReport {
+                processed_batches: 0,
+                processed_captures: 0,
+                failed_batches: 1,
+                failed_captures: 2,
+            }
+        );
+
+        let captures_after = scheduler.db.list_captures(&CaptureQuery {
+            from: None,
+            to: None,
+            app_name: None,
+            limit: 10,
+            offset: 0,
+        })?;
+        assert!(captures_after
+            .iter()
+            .all(|capture| capture.extraction_status == ExtractionStatus::Failed));
+
+        let batch_row = scheduler.db.connection().query_row(
+            "SELECT capture_count, narrative, raw_response FROM extraction_batches",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        assert_eq!(batch_row.0, 2);
+        assert_eq!(batch_row.1, None);
+        assert_eq!(batch_row.2.as_deref(), Some("this is not json"));
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_once_marks_missing_screenshot_captures_failed_without_calling_llm() -> Result<()> {
+        let home = temp_home_root("scheduler-missing-screenshot");
+        let config = test_config(&home, 8);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = create_scheduler(config, &home, provider.clone())?;
+        let captures = seed_captures(&mut scheduler, 1)?;
+        fs::remove_file(&captures[0].screenshot_path)?;
+
+        let report = scheduler.run_once().await?;
+        assert_eq!(
+            report,
+            ExtractionRunReport {
+                processed_batches: 0,
+                processed_captures: 0,
+                failed_batches: 1,
+                failed_captures: 1,
+            }
+        );
+
+        let captures_after = scheduler.db.list_captures(&CaptureQuery {
+            from: None,
+            to: None,
+            app_name: None,
+            limit: 10,
+            offset: 0,
+        })?;
+        assert_eq!(captures_after.len(), 1);
+        assert_eq!(captures_after[0].extraction_status, ExtractionStatus::Failed);
+        assert!(captures_after[0].extraction_id.is_none());
+
+        let batch_count: i64 = scheduler.db.connection().query_row(
+            "SELECT COUNT(*) FROM extraction_batches",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(batch_count, 0);
+        assert!(provider.calls().is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
 
     fn create_scheduler(
         config: AppConfig,

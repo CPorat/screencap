@@ -1373,6 +1373,45 @@ mod tests {
         config
     }
 
+    #[tokio::test]
+    async fn startup_components_open_with_defaults_when_config_is_missing() -> Result<()> {
+        let home = temp_home_root("missing-config-startup");
+        let mut config = test_config(&home);
+        config.server.port = 0;
+
+        let capture_loop = CaptureLoop::open(config.clone(), home.clone())?;
+        let listener = crate::api::server::bind(&config).await?;
+        assert!(listener.local_addr()?.port() > 0);
+
+        drop(listener);
+        drop(capture_loop);
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_components_open_with_defaults_when_config_is_empty() -> Result<()> {
+        let home = temp_home_root("empty-config-startup");
+        let app_root = home.join(".screencap");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("config.toml"), "")?;
+
+        let mut config = AppConfig::load_from_root_and_home(&app_root, &home)?;
+        config.capture.excluded_apps.clear();
+        config.capture.excluded_window_titles.clear();
+        config.server.port = 0;
+
+        let capture_loop = CaptureLoop::open(config.clone(), home.clone())?;
+        let listener = crate::api::server::bind(&config).await?;
+        assert!(listener.local_addr()?.port() > 0);
+
+        drop(listener);
+        drop(capture_loop);
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+
     #[test]
     fn invalid_excluded_window_title_regex_fails_capture_loop_open() {
         let home = temp_home_root("invalid-window-title-regex");

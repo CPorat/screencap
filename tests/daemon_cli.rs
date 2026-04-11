@@ -552,6 +552,40 @@ fn foreground_daemon_can_be_stopped_via_cli() -> Result<()> {
 }
 
 #[test]
+fn now_today_and_search_return_helpful_messages_on_empty_database() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("empty-read")?;
+    let _db = StorageDb::open_at_path(home.db_path())?;
+
+    let now = run_cli(home.path(), &["now"])?;
+    assert_success(&now, "now");
+    assert!(
+        String::from_utf8_lossy(&now.stdout).contains("no rolling context is available yet"),
+        "unexpected now output: {}",
+        String::from_utf8_lossy(&now.stdout),
+    );
+
+    let today = run_cli(home.path(), &["today"])?;
+    assert_success(&today, "today");
+    assert!(
+        String::from_utf8_lossy(&today.stdout).contains("no daily summary available for "),
+        "unexpected today output: {}",
+        String::from_utf8_lossy(&today.stdout),
+    );
+
+    let search = run_cli(home.path(), &["search", "jwt"])?;
+    assert_success(&search, "search");
+    assert!(
+        String::from_utf8_lossy(&search.stdout).contains("no search results found for \"jwt\""),
+        "unexpected search output: {}",
+        String::from_utf8_lossy(&search.stdout),
+    );
+
+    Ok(())
+}
+
+
+#[test]
 fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("today")?;

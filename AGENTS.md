@@ -50,6 +50,8 @@ Three-layer pipeline:
 
 
 - Daemon startup should spawn extraction/synthesis schedulers as separate shutdown-aware tasks, but missing or unsupported AI provider configuration must degrade those schedulers to a logged no-op instead of blocking capture/API startup; users should still be able to collect screenshots before configuring networked pipelines.
+- Extraction schedulers should treat provider authentication failures as recoverable operator misconfiguration: log the error, leave affected captures `pending`, and stop the current run so work can resume after credentials are fixed instead of being marked permanently failed.
+
 - Writable SQLite connections should set a busy timeout and enable WAL mode, because the daemon runs capture, API, and pipeline schedulers with concurrent database connections and should wait briefly instead of failing with `database is locked`.
 - Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
 - Config code should expose helpers that accept explicit root/home paths for tests, and create runtime directories from the resolved config values on load.

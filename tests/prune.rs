@@ -288,6 +288,30 @@ fn prune_command_deletes_old_rows_and_files() -> Result<()> {
 }
 
 #[test]
+fn prune_command_is_noop_when_no_rows_match() -> Result<()> {
+    let _lock = support::IntegrationTestLock::acquire()?;
+    let home = TestHome::new("noop", 90)?;
+    let _db = StorageDb::open_at_path(home.db_path())?;
+
+    let output = run_cli(home.path(), &["prune", "--older-than", "90d"])?;
+    assert_success(&output, "prune");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("pruned 0 rows older than 90d; reclaimed 0 bytes"),
+        "unexpected prune output: {stdout}"
+    );
+
+    let db = StorageDb::open_at_path(home.db_path())?;
+    let capture_count: i64 = db
+        .connection()
+        .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))?;
+    assert_eq!(capture_count, 0);
+
+    Ok(())
+}
+
+
+#[test]
 fn daemon_startup_auto_prunes_when_max_age_configured() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("startup", 30)?;

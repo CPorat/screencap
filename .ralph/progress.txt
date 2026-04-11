@@ -63,6 +63,8 @@ Branch: ralph/v1-implementation
 - Mock LLM providers used by daemon E2E tests should synthesize schema-valid default JSON (extraction + rolling/hourly/daily summaries) when response queues are empty, so full scheduler startup can run without external API keys or brittle per-call fixture setup.
 - Daemon runtime should spawn pipeline schedulers as independent shutdown-aware tasks, but treat missing/unsupported AI provider setup as a logged no-op so capture/API startup still succeeds while operator credentials are being configured.
 - Writable SQLite connections should enable a busy timeout plus WAL mode, because the daemon runs capture, API, and synthesis/extraction schedulers concurrently and should absorb brief lock contention instead of failing writes.
+- Extraction schedulers should leave captures `pending` on provider authentication failures and stop the current run, so transient operator misconfiguration can be fixed without permanently losing backlog.
+
 - Rolling synthesis windows should be truncated to whole seconds before prompt construction and response validation, because the prompt format serializes RFC3339 timestamps without subsecond precision.
 
 
@@ -592,4 +594,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: daemon smoke tests are more trustworthy when they capture stderr and assert shutdown is panic-free after a real `SIGTERM`, not just after the CLI stop path.
   - Gotchas encountered: readiness checks should use a short explicit deadline tied to `/api/health`; otherwise startup regressions can hide behind generous test timeouts.
   - Useful context: keeping extraction and synthesis disabled in the smoke-test config isolates lifecycle/API behavior from unrelated provider setup while still exercising the real foreground daemon path.
+---
+## [2026-04-11 16:38:16 UTC] - US-032
+- What was implemented: filled the remaining edge-case resilience gaps by adding extraction scheduler coverage for empty runs, authentication failures, garbage non-JSON responses, and missing screenshots; added rolling-synthesis empty-window coverage; added daemon startup tests for missing/empty config defaults; added CLI empty-database assertions for `now`, `today`, and `search`; and added a prune no-op test when nothing matches.
+- Files changed: AGENTS.md, src/daemon.rs, src/pipeline/scheduler.rs, src/pipeline/synthesis.rs, tests/daemon_cli.rs, tests/prune.rs, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: provider authentication failures should leave queued captures pending and abort only the current extraction run, so fixing credentials does not require recovering work from a failed state.
+  - Gotchas encountered: an empty SQLite file is a different path from a missing database file — `today` only stays in a helpful empty state when it short-circuits before provider construction if no hourly insights exist.
+  - Useful context: daemon-startup default-config coverage is easiest to keep deterministic in tests by loading config from temp homes, overriding `server.port` to `0`, and asserting the capture loop plus localhost listener can open without relying on port 7878 being free.
 ---

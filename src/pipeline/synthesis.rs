@@ -1586,6 +1586,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_once_skips_empty_rolling_windows() -> Result<()> {
+        let home = temp_home_root("rolling-empty");
+        let config = test_config(&home);
+        let provider = Arc::new(MockLlmProvider::new());
+        let mut scheduler = RollingContextScheduler::with_provider(config, &home, provider.clone())?;
+
+        let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
+        let insight = scheduler.run_once_at(window_end).await?;
+        assert!(insight.is_none());
+        assert!(provider.calls().is_empty());
+
+        fs::remove_dir_all(&home)?;
+        Ok(())
+    }
+
+
+    #[tokio::test]
     async fn run_once_skips_empty_hourly_windows() -> Result<()> {
         let home = temp_home_root("hourly-empty");
         let config = test_config(&home);

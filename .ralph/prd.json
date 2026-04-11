@@ -638,7 +638,7 @@
       ],
       "priority": 27,
       "passes": true,
-      "notes": "Completed: native Anthropic Messages API provider now supports text and vision requests, is wired through create_provider, and has focused request/response coverage."
+      "notes": "Completed: native Anthropic Messages API provider now supports text and vision requests, is wired through create_provider, and has focused request/response coverage.",
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

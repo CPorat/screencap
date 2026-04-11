@@ -253,6 +253,12 @@ print_omp_summary() {
 LOGS_DIR="$RALPH_DIR/logs"
 
 for i in $(seq 1 $MAX_ITERATIONS); do
+  # ── PRD validation guard ──────────────────────────────────────────
+  if ! jq . "$PRD_FILE" > /dev/null 2>&1; then
+    echo "Warning: prd.json is invalid JSON — reverting to last committed version"
+    git checkout HEAD -- "$PRD_FILE" 2>/dev/null || true
+  fi
+
   INCOMPLETE=$(jq '[.userStories[] | select(.passes == false)] | length' "$PRD_FILE")
 
   if [ "$INCOMPLETE" -eq 0 ]; then
@@ -282,6 +288,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   mkdir -p "$ITER_LOG_DIR"
   export ITER_LOG_DIR
 
+  COMMIT_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "")
+
   echo "═══════════════════════════════════════════════════"
   echo " Iteration $i/$MAX_ITERATIONS — Next: $NEXT_STORY"
   if [ -n "$TASK_TOOL" ] || [ -n "$TASK_MODEL" ]; then
@@ -291,22 +299,40 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 
   if [ "$USE_TOOL" = "omp" ]; then
     run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING" || true
-
-    OUTPUT=$(jq -rs '
-      [.[] | select(.type == "agent_end") | .messages[]
-       | select(.role == "assistant") | .content[]
-       | select(.type == "text") | .text] | last // ""
-    ' "$ITER_LOG_DIR/events.jsonl" 2>/dev/null)
-
     print_omp_summary "$ITER_LOG_DIR/events.jsonl"
   else
-    OUTPUT=$(run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING") || true
+    run_agent "$PROMPT_FILE" "$USE_TOOL" "$USE_MODEL" "$USE_PROVIDER" "$USE_THINKING" || true
   fi
 
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
-    echo ""
-    echo "Ralph completed all tasks after $i iterations!"
-    exit 0
+  # ── Detect story completion via git ───────────────────────────────
+  COMMIT_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "")
+  STORY_COMMITTED=false
+
+  if [ "$COMMIT_BEFORE" != "$COMMIT_AFTER" ]; then
+    if git log "$COMMIT_BEFORE".."$COMMIT_AFTER" --oneline | grep -q "$NEXT_STORY_ID"; then
+      STORY_COMMITTED=true
+    fi
+  fi
+
+  if [ "$STORY_COMMITTED" = true ]; then
+    echo " ✓ $NEXT_STORY_ID committed — marking passes: true"
+
+    # Revert any agent edits to prd.json, then apply our own clean update
+    git checkout HEAD -- "$PRD_FILE" 2>/dev/null || true
+    jq --arg id "$NEXT_STORY_ID" \
+      '(.userStories[] | select(.id == $id)).passes = true' \
+      "$PRD_FILE" > "$PRD_FILE.tmp" && mv "$PRD_FILE.tmp" "$PRD_FILE"
+    git add "$PRD_FILE"
+    git commit --amend --no-edit
+
+    INCOMPLETE=$(jq '[.userStories[] | select(.passes == false)] | length' "$PRD_FILE")
+    if [ "$INCOMPLETE" -eq 0 ]; then
+      echo ""
+      echo "Ralph completed all tasks after $i iterations!"
+      exit 0
+    fi
+  else
+    echo " ✗ $NEXT_STORY_ID — no matching commit found, will retry"
   fi
 
   echo ""

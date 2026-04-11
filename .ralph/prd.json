@@ -413,7 +413,7 @@
         "Browser verification via expect MCP: seed at least 3 captures with screenshot JPEGs + extraction rows directly into SQLite before opening browser, start daemon, open localhost:7878, navigate to Timeline, verify captures render (snapshot shows capture cards with app names and timestamps), click one capture and verify expansion shows full details, verify no console errors, run accessibility_audit with 0 critical/serious violations, close"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "The daemon must be running with seeded data for browser verification. Use expect MCP tools (open, playwright, screenshot, console_logs, accessibility_audit, close) — not raw browser tools. IMPORTANT: Read and follow the frontend-design skill at .agents/skills/frontend-design/SKILL.md before writing any Svelte/CSS code. Design must be distinctive and production-grade, not generic AI aesthetics.",
       "tool": "omp",
       "model": "gemini-3.1-pro-preview",

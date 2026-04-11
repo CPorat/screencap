@@ -1,3 +1,5 @@
+<script lang="ts"></script>
+
 <section class="view">
   <p class="view__kicker">Search</p>
   <h2 class="view__title">Ask precise questions, get exact slices.</h2>

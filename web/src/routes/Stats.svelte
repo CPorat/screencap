@@ -1,3 +1,5 @@
+<script lang="ts"></script>
+
 <section class="view">
   <p class="view__kicker">Stats</p>
   <h2 class="view__title">Operational pulse in hard numbers.</h2>

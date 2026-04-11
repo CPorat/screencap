@@ -4,7 +4,7 @@
   import Insights from './routes/Insights.svelte';
   import Search from './routes/Search.svelte';
   import Stats from './routes/Stats.svelte';
-  import Timeline from './routes/Timeline.svelte';
+  import Timeline from './pages/Timeline.svelte';
 
   const routes = {
     '/': Timeline,

@@ -3,10 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::{
-    sync::mpsc,
-    task::JoinHandle,
-};
+use tokio::{sync::mpsc, task::JoinHandle};
 
 const NATIVE_EVENT_APP_SWITCH: u32 = 1;
 const NATIVE_EVENT_KEY_DOWN: u32 = 2;
@@ -184,7 +181,9 @@ impl TriggerDetector {
     fn observe(&mut self, event: NativeInputEvent) -> Option<CaptureTrigger> {
         let was_idle = self
             .last_input_at
-            .map(|last_input| event.observed_at.saturating_duration_since(last_input) >= self.idle_threshold)
+            .map(|last_input| {
+                event.observed_at.saturating_duration_since(last_input) >= self.idle_threshold
+            })
             .unwrap_or(true);
         self.last_input_at = Some(event.observed_at);
 
@@ -222,7 +221,11 @@ impl TriggerDetector {
         None
     }
 
-    fn observe_mouse_move(&mut self, position: CursorPosition, was_idle: bool) -> Option<CaptureTrigger> {
+    fn observe_mouse_move(
+        &mut self,
+        position: CursorPosition,
+        was_idle: bool,
+    ) -> Option<CaptureTrigger> {
         self.keyboard_burst = None;
 
         if was_idle {
@@ -355,7 +358,10 @@ mod tests {
 
         assert_eq!(detector.observe(key_event(base)), None);
         for offset_ms in [200_u64, 400, 600, 800] {
-            assert_eq!(detector.observe(key_event(base + Duration::from_millis(offset_ms))), None);
+            assert_eq!(
+                detector.observe(key_event(base + Duration::from_millis(offset_ms))),
+                None
+            );
         }
         assert_eq!(
             detector.observe(key_event(base + Duration::from_millis(1_000))),
@@ -368,9 +374,15 @@ mod tests {
         let base = std::time::Instant::now();
         let mut detector = TriggerDetector::new(Duration::from_secs(300));
 
-        assert_eq!(detector.observe(app_switch_event(base)), Some(CaptureTrigger::AppSwitch));
+        assert_eq!(
+            detector.observe(app_switch_event(base)),
+            Some(CaptureTrigger::AppSwitch)
+        );
         for offset_ms in [100_u64, 200, 300, 400, 500, 600] {
-            assert_eq!(detector.observe(key_event(base + Duration::from_millis(offset_ms))), None);
+            assert_eq!(
+                detector.observe(key_event(base + Duration::from_millis(offset_ms))),
+                None
+            );
         }
     }
 
@@ -380,9 +392,16 @@ mod tests {
         let base = std::time::Instant::now();
         let mut detector = TriggerDetector::new(idle_threshold);
 
-        assert_eq!(detector.observe(app_switch_event(base)), Some(CaptureTrigger::AppSwitch));
         assert_eq!(
-            detector.observe(mouse_event(base + idle_threshold + Duration::from_secs(1), 50.0, 50.0)),
+            detector.observe(app_switch_event(base)),
+            Some(CaptureTrigger::AppSwitch)
+        );
+        assert_eq!(
+            detector.observe(mouse_event(
+                base + idle_threshold + Duration::from_secs(1),
+                50.0,
+                50.0
+            )),
             None
         );
         assert_eq!(

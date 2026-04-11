@@ -114,11 +114,20 @@ struct TopicFrequencyResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct ApiSearchHit {
-    capture: ApiCapture,
-    extraction: Extraction,
-    batch_narrative: Option<String>,
-    rank: f64,
+#[serde(tag = "source_type", rename_all = "snake_case")]
+enum ApiSearchHit {
+    Extraction {
+        capture: ApiCapture,
+        extraction: Extraction,
+        batch_narrative: Option<String>,
+        rank: f64,
+    },
+    Insight {
+        primary_project: Option<String>,
+        primary_activity_type: Option<ActivityType>,
+        insight: Insight,
+        rank: f64,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,7 +182,6 @@ enum AnalyzePayload {
         cost_cents: Option<f64>,
     },
 }
-
 
 struct TestServer {
     address: SocketAddr,
@@ -330,7 +338,12 @@ fn seed_processed_capture(
 async fn start_test_api_server(
     config: &AppConfig,
     home: &Path,
- ) -> Result<(watch::Sender<bool>, tokio::task::JoinHandle<Result<()>>, Client, String)> {
+) -> Result<(
+    watch::Sender<bool>,
+    tokio::task::JoinHandle<Result<()>>,
+    Client,
+    String,
+)> {
     let listener = api::server::bind(config).await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let server = tokio::spawn(api::server::serve(
@@ -349,7 +362,7 @@ async fn stop_test_api_server(
     client: Client,
     shutdown_tx: watch::Sender<bool>,
     server: tokio::task::JoinHandle<Result<()>>,
- ) -> Result<()> {
+) -> Result<()> {
     drop(client);
     shutdown_tx
         .send(true)
@@ -357,7 +370,6 @@ async fn stop_test_api_server(
     server.await??;
     Ok(())
 }
-
 
 async fn wait_for_server(client: &Client, base_url: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -610,7 +622,7 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
                 apps_used: BTreeMap::from([("Code".into(), "30 min".into())]),
                 context_switches: 1,
                 mood: "focused".into(),
-                summary: "Focused API work on insight and search endpoints.".into(),
+                summary: "Focused API work on insight endpoints and search filters.".into(),
             },
             model_used: Some("mock-synthesis".into()),
             tokens_used: Some(210),
@@ -873,18 +885,70 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         .json()
         .await?;
     assert_eq!(search_results.limit, 5);
-    assert_eq!(search_results.results.len(), 1);
-    assert_eq!(search_results.results[0].capture.id, capture.id);
-    assert_eq!(search_results.results[0].extraction.id, extraction.id);
-    assert_eq!(
-        search_results.results[0].capture.screenshot_url.as_deref(),
-        Some(format!("/api/screenshots/{relative_screenshot_path}").as_str())
-    );
-    assert_eq!(
-        search_results.results[0].batch_narrative.as_deref(),
-        Some("Added API search and insight endpoints for the daemon.")
-    );
-    assert!(search_results.results[0].rank.is_finite());
+    assert_eq!(search_results.results.len(), 2);
+    match &search_results.results[0] {
+        ApiSearchHit::Extraction {
+            capture: hit_capture,
+            extraction: hit_extraction,
+            batch_narrative,
+            rank,
+            ..
+        } => {
+            assert_eq!(hit_capture.id, capture.id);
+            assert_eq!(hit_extraction.id, extraction.id);
+            assert_eq!(
+                hit_capture.screenshot_url.as_deref(),
+                Some(format!("/api/screenshots/{relative_screenshot_path}").as_str())
+            );
+            assert_eq!(
+                batch_narrative.as_deref(),
+                Some("Added API search and insight endpoints for the daemon.")
+            );
+            assert_eq!(*rank, 0.0);
+        }
+        other => panic!("expected extraction search hit, got {other:?}"),
+    }
+    match &search_results.results[1] {
+        ApiSearchHit::Insight {
+            primary_project,
+            primary_activity_type,
+            insight,
+            rank,
+            ..
+        } => {
+            assert_eq!(primary_project.as_deref(), Some("screencap"));
+            assert_eq!(*primary_activity_type, None);
+            assert_eq!(insight.insight_type, InsightType::Rolling);
+            assert_eq!(
+                insight.narrative,
+                "Focused API work on insight endpoints and search filters."
+            );
+            assert_eq!(*rank, 1.0);
+        }
+        other => panic!("expected insight search hit, got {other:?}"),
+    }
+    let activity_filtered_results: SearchResponse = client
+        .get(format!("{base_url}/api/search"))
+        .query(&[
+            ("q", "filters"),
+            ("app", "Code"),
+            ("project", "screencap"),
+            ("activity_type", "coding"),
+            ("from", from.as_str()),
+            ("to", to.as_str()),
+            ("limit", "5"),
+        ])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(activity_filtered_results.results.len(), 1);
+    assert!(matches!(
+        activity_filtered_results.results.first(),
+        Some(ApiSearchHit::Extraction { .. })
+    ));
+
     let semantic_results: SemanticSearchResponse = client
         .get(format!("{base_url}/api/search/semantic"))
         .query(&[
@@ -996,7 +1060,6 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn api_server_analyzes_time_range_with_summary_payload() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
@@ -1043,7 +1106,8 @@ async fn api_server_analyzes_time_range_with_summary_payload() -> Result<()> {
     write_screenshot_fixture(&screenshot_path)?;
     seed_processed_capture(&db_path, &screenshot_path, timestamp)?;
 
-    let (shutdown_tx, server, client, base_url) = start_test_api_server(&config, home.path()).await?;
+    let (shutdown_tx, server, client, base_url) =
+        start_test_api_server(&config, home.path()).await?;
     let response: AnalyzeResponse = client
         .post(format!("{base_url}/api/analyze"))
         .json(&serde_json::json!({
@@ -1132,9 +1196,11 @@ async fn api_server_analyze_accepts_prompt_alias() -> Result<()> {
     let db_path = config.storage_root(home.path()).join("screencap.db");
     let screenshot_path = sample_screenshot_path(&config, home.path());
     write_screenshot_fixture(&screenshot_path)?;
-    let (capture_id, extraction_id) = seed_processed_capture(&db_path, &screenshot_path, timestamp)?;
+    let (capture_id, extraction_id) =
+        seed_processed_capture(&db_path, &screenshot_path, timestamp)?;
 
-    let (shutdown_tx, server, client, base_url) = start_test_api_server(&config, home.path()).await?;
+    let (shutdown_tx, server, client, base_url) =
+        start_test_api_server(&config, home.path()).await?;
     let response: AnalyzeResponse = client
         .post(format!("{base_url}/api/analyze"))
         .json(&serde_json::json!({
@@ -1191,7 +1257,8 @@ async fn api_server_analyze_returns_actionable_errors() -> Result<()> {
     write_screenshot_fixture(&screenshot_path)?;
     seed_processed_capture(&db_path, &screenshot_path, timestamp)?;
 
-    let (shutdown_tx, server, client, base_url) = start_test_api_server(&config, home.path()).await?;
+    let (shutdown_tx, server, client, base_url) =
+        start_test_api_server(&config, home.path()).await?;
 
     let invalid_range = client
         .post(format!("{base_url}/api/analyze"))
@@ -1203,7 +1270,10 @@ async fn api_server_analyze_returns_actionable_errors() -> Result<()> {
         .await?;
     assert_eq!(invalid_range.status(), 400);
     let invalid_range: ErrorResponse = invalid_range.json().await?;
-    assert_eq!(invalid_range.error, "`from` must be less than or equal to `to`");
+    assert_eq!(
+        invalid_range.error,
+        "`from` must be less than or equal to `to`"
+    );
 
     let unavailable = client
         .post(format!("{base_url}/api/analyze"))

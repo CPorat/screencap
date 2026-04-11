@@ -8,10 +8,7 @@ use serde_json::{json, Map, Value};
 
 use crate::storage::{
     db::StorageDb,
-    models::{
-        ActivityQuery, AppCaptureCount, CaptureDetail, ExtractionSearchHit, ExtractionSearchQuery,
-        InsightType,
-    },
+    models::{ActivityQuery, AppCaptureCount, CaptureDetail, InsightType, SearchHit, SearchQuery},
     screenshots::{read_screenshot_file, relative_screenshot_path},
 };
 
@@ -99,7 +96,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "search_screen_history",
-            "description": "Search extracted screen history with optional time-range and app filters.",
+            "description": "Search extracted screen history and synthesized insights with optional time-range and app filters.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -247,16 +244,17 @@ fn call_search_screen_history(
             "to": to,
             "app": app,
             "limit": limit,
-            "result_source": "extractions",
+            "result_source": "history",
             "count": 0,
-            "results": Vec::<ExtractionSearchHit>::new(),
+            "results": Vec::<SearchHit>::new(),
         }));
     };
 
-    let results = db.search_extractions_filtered(&ExtractionSearchQuery {
+    let results = db.search_history_filtered(&SearchQuery {
         query: query.clone(),
         app_name: app.clone(),
         project: None,
+        activity_type: None,
         from,
         to,
         limit,
@@ -268,7 +266,7 @@ fn call_search_screen_history(
         "to": to,
         "app": app,
         "limit": limit,
-        "result_source": "extractions",
+        "result_source": "history",
         "count": results.len(),
         "results": results,
     }))

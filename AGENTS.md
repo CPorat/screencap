@@ -73,6 +73,7 @@ Three-layer pipeline:
 
 - CLI read commands should likewise open SQLite read-only when possible, print helpful empty-state text instead of creating `screencap.db` on empty homes, and label any capture-count-based project breakdowns explicitly instead of implying minute-accurate time tracking.
 - Search and insight read APIs should expose typed storage helpers that join back to the canonical `captures` rows, so callers can filter by capture metadata and render screenshot context without follow-up lookups.
+- When search combines results from different FTS tables (for example extractions plus insights), do not compare raw `bm25()` values across tables as if they shared one scale; query each source with its own FTS rank, then fuse the typed results in Rust with one deterministic cross-source ordering.
 - When serving screenshots over HTTP, accept only sanitized paths relative to the screenshots root and walk them with `openat(..., O_NOFOLLOW)` so traversal or symlink escapes cannot leave the screenshot tree.
 - Any feature that reads stored screenshots (HTTP, MCP, future exports) should first reduce stored paths to sanitized paths relative to the screenshots root, then reuse one shared `openat(..., O_NOFOLLOW)` walker so every surface enforces the same traversal and symlink boundary.
 - MCP servers should keep JSON-RPC/stdin-stdout transport in `src/mcp/server.rs` and put tool metadata, typed argument parsing, and storage-backed handlers in `src/mcp/tools.rs`, so protocol framing stays separate from business logic.

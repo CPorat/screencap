@@ -14,14 +14,14 @@
   });
 
   let imageFailed = false;
-  let previousCaptureId: number | null = null;
+  let previousRenderKey: string | null = null;
 
   function buildScreenshotSrc(): string | null {
-    if (result.capture.screenshot_url?.trim()) {
+    if (result.capture?.screenshot_url?.trim()) {
       return result.capture.screenshot_url;
     }
 
-    if (!result.capture.screenshot_path?.trim()) {
+    if (!result.capture?.screenshot_path?.trim()) {
       return null;
     }
 
@@ -42,37 +42,48 @@
   }
 
   function openDetails(): void {
-    dispatch('open', { result });
+    if (interactive) {
+      dispatch('open', { result });
+    }
   }
 
-  $: if (result.capture.id !== previousCaptureId) {
+  $: renderKey = `${result.sourceType}-${result.capture?.id ?? result.insight?.id ?? result.timestamp}`;
+  $: if (renderKey !== previousRenderKey) {
     imageFailed = false;
-    previousCaptureId = result.capture.id;
+    previousRenderKey = renderKey;
   }
 
-  $: capturedAt = new Date(result.capture.timestamp);
+  $: interactive = result.sourceType === 'extraction' && result.capture !== null;
+  $: capturedAt = new Date(result.timestamp);
   $: hasTimestamp = Number.isFinite(capturedAt.getTime());
   $: timestampLabel = hasTimestamp ? timestampFormatter.format(capturedAt) : 'Timestamp unavailable';
-
   $: screenshotSrc = imageFailed ? null : buildScreenshotSrc();
-  $: appLabel = result.capture.app_name?.trim() || 'Unknown app';
-  $: projectLabel = result.extraction.project?.trim() || 'Unassigned project';
-  $: activityLabel = humanizeActivity(result.extraction.activity_type);
-  $: descriptionLabel =
-    result.extraction.description?.trim() ||
-    result.extraction.key_content?.trim() ||
-    result.batchNarrative?.trim() ||
-    'No extraction description available.';
-  $: topics = result.extraction.topics;
+  $: appLabel =
+    result.capture?.app_name?.trim() || (result.sourceType === 'insight' ? 'Insight summary' : 'Unknown app');
+  $: projectLabel = result.primaryProject?.trim() || 'Unassigned project';
+  $: activityLabel = humanizeActivity(result.primaryActivityType);
+  $: descriptionLabel = result.narrative?.trim() || result.batchNarrative?.trim() || 'No indexed narrative available.';
+  $: topics = result.extraction?.topics ?? [];
+  $: sourceLabel =
+    result.sourceType === 'insight'
+      ? `${result.insight?.insight_type ?? 'search'} insight`
+      : 'extraction';
 </script>
 
-<button class="search-result" type="button" on:click={openDetails} aria-label={`Open search result ${position}`}>
+<button
+  class="search-result"
+  class:search-result--static={!interactive}
+  type="button"
+  disabled={!interactive}
+  on:click={openDetails}
+  aria-label={interactive ? `Open search result ${position}` : `Search result ${position}`}
+>
   <div class="search-result__thumb-wrap">
     {#if screenshotSrc}
       <img
         class="search-result__thumb"
         src={screenshotSrc}
-        alt={`Screenshot from ${appLabel} at ${timestampLabel}`}
+        alt={`Screenshot from ${appLabel} at ${timestampLabel}` }
         loading="lazy"
         on:error={() => {
           imageFailed = true;
@@ -80,7 +91,7 @@
       />
     {:else}
       <div class="search-result__thumb search-result__thumb--fallback" role="img" aria-label="Screenshot unavailable">
-        Screenshot unavailable
+        {sourceLabel}
       </div>
     {/if}
   </div>
@@ -90,7 +101,10 @@
     <p class="search-result__time">{timestampLabel}</p>
   </div>
 
-  <h3 class="search-result__summary" title={descriptionLabel}>{descriptionLabel}</h3>
+  <div class="search-result__headline">
+    <p class="search-result__source">{sourceLabel}</p>
+    <h3 class="search-result__summary" title={descriptionLabel}>{descriptionLabel}</h3>
+  </div>
 
   <dl class="search-result__facts">
     <div>
@@ -141,6 +155,17 @@
     outline: none;
   }
 
+  .search-result--static {
+    cursor: default;
+  }
+
+  .search-result--static:hover,
+  .search-result--static:focus-visible {
+    transform: none;
+    box-shadow: 0.34rem 0.34rem 0 rgb(8 10 16 / 88%);
+    border-color: rgb(246 241 231 / 30%);
+  }
+
   .search-result__thumb-wrap {
     border-radius: 0.72rem;
     overflow: hidden;
@@ -164,6 +189,8 @@
     letter-spacing: 0.12em;
     color: var(--paper-200);
     background: rgb(8 9 14 / 54%);
+    text-align: center;
+    padding: 0.8rem;
   }
 
   .search-result__meta {
@@ -185,6 +212,18 @@
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--paper-200);
+  }
+
+  .search-result__headline {
+    display: grid;
+    gap: 0.32rem;
+  }
+
+  .search-result__source {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--surge);
   }
 
   .search-result__summary {

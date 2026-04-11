@@ -14,8 +14,8 @@ use screencap::{
     storage::{
         db::StorageDb,
         models::{
-            CostBreakdown, ExtractionSearchHit, ExtractionSearchQuery, Insight, InsightData,
-            InsightType, ProjectTimeAllocation,
+            CostBreakdown, Insight, InsightData, InsightType, ProjectTimeAllocation, SearchHit,
+            SearchQuery,
         },
     },
 };
@@ -329,15 +329,16 @@ fn handle_search(args: SearchArgs) -> Result<()> {
     };
 
     let from = parse_optional_lookback_start(args.last.as_deref(), Utc::now())?;
-    let search_query = ExtractionSearchQuery {
+    let search_query = SearchQuery {
         query: query.to_owned(),
         app_name: trim_to_option(args.app),
         project: trim_to_option(args.project),
+        activity_type: None,
         from,
         to: None,
         limit: DEFAULT_SEARCH_LIMIT,
     };
-    let results = db.search_extractions_filtered(&search_query)?;
+    let results = db.search_history_filtered(&search_query)?;
     print_search_results(query, &search_query, &results);
 
     Ok(())
@@ -666,11 +667,7 @@ fn print_week_summaries(
     Ok(())
 }
 
-fn print_search_results(
-    query: &str,
-    search_query: &ExtractionSearchQuery,
-    results: &[ExtractionSearchHit],
-) {
+fn print_search_results(query: &str, search_query: &SearchQuery, results: &[SearchHit]) {
     if results.is_empty() {
         println!("no search results found for \"{query}\"");
         return;
@@ -689,32 +686,71 @@ fn print_search_results(
 
     for (index, hit) in results.iter().enumerate() {
         println!();
-        println!(
-            "{}. {} — {}",
-            index + 1,
-            format_timestamp(&hit.capture.timestamp),
-            hit.extraction
-                .description
-                .as_deref()
-                .unwrap_or("no description available")
-        );
-        if let Some(app_name) = hit.capture.app_name.as_deref() {
-            println!("   app: {app_name}");
-        }
-        if let Some(window_title) = hit.capture.window_title.as_deref() {
-            println!("   window: {window_title}");
-        }
-        if let Some(project) = hit.extraction.project.as_deref() {
-            println!("   project: {project}");
-        }
-        if !hit.extraction.topics.is_empty() {
-            println!("   topics: {}", hit.extraction.topics.join(", "));
-        }
-        if let Some(key_content) = hit.extraction.key_content.as_deref() {
-            println!("   key content: {key_content}");
-        }
-        if let Some(batch_narrative) = hit.batch_narrative.as_deref() {
-            println!("   batch: {batch_narrative}");
+        match hit {
+            SearchHit::Extraction {
+                timestamp,
+                capture,
+                extraction,
+                batch_narrative,
+                ..
+            } => {
+                println!(
+                    "{}. {} — {}",
+                    index + 1,
+                    format_timestamp(timestamp),
+                    extraction
+                        .description
+                        .as_deref()
+                        .unwrap_or("no description available")
+                );
+                if let Some(app_name) = capture.app_name.as_deref() {
+                    println!("   source: extraction");
+                    println!("   app: {app_name}");
+                } else {
+                    println!("   source: extraction");
+                }
+                if let Some(window_title) = capture.window_title.as_deref() {
+                    println!("   window: {window_title}");
+                }
+                if let Some(project) = extraction.project.as_deref() {
+                    println!("   project: {project}");
+                }
+                if !extraction.topics.is_empty() {
+                    println!("   topics: {}", extraction.topics.join(", "));
+                }
+                if let Some(key_content) = extraction.key_content.as_deref() {
+                    println!("   key content: {key_content}");
+                }
+                if let Some(batch_narrative) = batch_narrative.as_deref() {
+                    println!("   batch: {batch_narrative}");
+                }
+            }
+            SearchHit::Insight {
+                timestamp,
+                primary_project,
+                primary_activity_type,
+                insight,
+                ..
+            } => {
+                println!(
+                    "{}. {} — {}",
+                    index + 1,
+                    format_timestamp(timestamp),
+                    insight.narrative
+                );
+                println!("   source: {} insight", insight.insight_type.as_str());
+                println!(
+                    "   window: {} -> {}",
+                    format_timestamp(&insight.window_start),
+                    format_timestamp(&insight.window_end)
+                );
+                if let Some(project) = primary_project.as_deref() {
+                    println!("   project: {project}");
+                }
+                if let Some(activity_type) = primary_activity_type {
+                    println!("   activity: {}", activity_type.as_str());
+                }
+            }
         }
     }
 }

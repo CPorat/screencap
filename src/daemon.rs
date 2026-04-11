@@ -1111,7 +1111,10 @@ impl CaptureLoop {
         }
 
         let display_ids = screenshot::display_ids().context("failed to enumerate display ids")?;
-        ensure!(!display_ids.is_empty(), "capture bridge returned no displays");
+        ensure!(
+            !display_ids.is_empty(),
+            "capture bridge returned no displays"
+        );
 
         let mut screenshot_paths = Vec::with_capacity(display_ids.len());
         let mut captures = Vec::with_capacity(display_ids.len());
@@ -1408,7 +1411,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn invalid_excluded_window_title_regex_fails_capture_loop_open() {
         let home = temp_home_root("invalid-window-title-regex");
@@ -1580,7 +1582,10 @@ mod tests {
             captures.sort_by_key(|capture| capture.display_id);
             assert_eq!(captures.len(), 2);
             assert_eq!(
-                captures.iter().map(|capture| capture.display_id).collect::<Vec<_>>(),
+                captures
+                    .iter()
+                    .map(|capture| capture.display_id)
+                    .collect::<Vec<_>>(),
                 vec![Some(42), Some(84)]
             );
             assert_eq!(

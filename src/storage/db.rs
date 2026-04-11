@@ -23,9 +23,9 @@ use super::models::{
     decode_string_list, encode_string_list, format_db_timestamp, parse_db_timestamp, ActivityQuery,
     ActivityType, AppCaptureCount, Capture, CaptureDetail, CaptureQuery, CostBreakdown,
     CostSummary, DailyCostSummary, Extraction, ExtractionBatch, ExtractionBatchDetail,
-    ExtractionFrameDetail, ExtractionSearchHit, ExtractionSearchQuery, ExtractionStatus, Insight,
-    InsightData, InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight,
-    ProjectTimeAllocation, Sentiment, TopicFrequency,
+    ExtractionFrameDetail, ExtractionSearchHit, ExtractionStatus, Insight, InsightData,
+    InsightType, NewCapture, NewExtraction, NewExtractionBatch, NewInsight, ProjectTimeAllocation,
+    SearchHit, SearchQuery, Sentiment, TopicFrequency,
 };
 
 const SCHEMA: &str = r#"
@@ -1428,10 +1428,11 @@ impl StorageDb {
     }
 
     pub fn search_extractions(&self, query: &str) -> Result<Vec<ExtractionSearchHit>> {
-        self.search_extractions_filtered(&ExtractionSearchQuery {
+        self.search_extractions_filtered(&SearchQuery {
             query: query.to_owned(),
             app_name: None,
             project: None,
+            activity_type: None,
             from: None,
             to: None,
             limit: i64::MAX as usize,
@@ -1440,7 +1441,7 @@ impl StorageDb {
 
     pub fn search_extractions_filtered(
         &self,
-        query: &ExtractionSearchQuery,
+        query: &SearchQuery,
     ) -> Result<Vec<ExtractionSearchHit>> {
         let match_query = build_fts_match_query(&query.query)?;
         let mut sql = String::from(
@@ -1487,6 +1488,11 @@ impl StorageDb {
             params.push(Value::Text(project.clone()));
         }
 
+        if let Some(activity_type) = query.activity_type {
+            filters.push("e.activity_type = ?".to_string());
+            params.push(Value::Text(activity_type.as_str().to_owned()));
+        }
+
         if let Some(from) = query.from.as_ref() {
             filters.push("c.timestamp >= ?".to_string());
             params.push(Value::Text(format_db_timestamp(from)));
@@ -1517,6 +1523,192 @@ impl StorageDb {
 
         Ok(results)
     }
+
+    pub fn search_history_filtered(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        let extraction_hits = self.search_extractions_filtered(query)?;
+        let insight_hits = self.search_insights_filtered(query)?;
+        Ok(fuse_search_hits(extraction_hits, insight_hits, query.limit))
+    }
+
+    fn search_insights_filtered(&self, query: &SearchQuery) -> Result<Vec<RankedInsightSearchHit>> {
+        let match_query = build_fts_match_query(&query.query)?;
+        let candidate_limit = expanded_search_limit(query.limit);
+        let mut sql = String::from(
+            "SELECT
+                i.id,
+                i.type,
+                i.window_start,
+                i.window_end,
+                i.data,
+                i.narrative,
+                i.model_used,
+                i.tokens_used,
+                i.cost_cents,
+                i.created_at,
+                bm25(insights_fts) AS rank
+             FROM insights_fts
+             JOIN insights i ON i.id = insights_fts.insight_id",
+        );
+        let mut filters = vec!["insights_fts MATCH ?".to_string()];
+        let mut params = vec![Value::Text(match_query)];
+
+        if let Some(from) = query.from.as_ref() {
+            filters.push("i.window_end >= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(from)));
+        }
+
+        if let Some(to) = query.to.as_ref() {
+            filters.push("i.window_start <= ?".to_string());
+            params.push(Value::Text(format_db_timestamp(to)));
+        }
+
+        sql.push_str(" WHERE ");
+        sql.push_str(&filters.join(" AND "));
+        sql.push_str(" ORDER BY rank ASC, i.window_end DESC, i.id DESC LIMIT ?");
+        params.push(Value::Integer(
+            i64::try_from(candidate_limit).context("search query limit exceeds sqlite range")?,
+        ));
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("failed to prepare insight search query")?;
+
+        let rows = stmt
+            .query_map(params_from_iter(params.iter()), map_search_insight_row)
+            .with_context(|| format!("failed to search insights for `{}`", query.query))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to map insight search results")?;
+
+        Ok(rows
+            .into_iter()
+            .filter(|hit| {
+                query
+                    .app_name
+                    .as_deref()
+                    .is_none_or(|app_name| hit.insight.data.matches_app(app_name))
+            })
+            .filter(|hit| {
+                query
+                    .project
+                    .as_deref()
+                    .is_none_or(|project| hit.insight.data.matches_project(project))
+            })
+            .filter(|hit| {
+                query.activity_type.is_none_or(|activity_type| {
+                    hit.insight.data.matches_activity_type(activity_type)
+                })
+            })
+            .take(query.limit)
+            .collect())
+    }
+}
+
+#[derive(Debug)]
+struct RankedInsightSearchHit {
+    insight: Insight,
+}
+
+#[derive(Debug)]
+struct FusedSearchCandidate {
+    local_rank: usize,
+    timestamp: DateTime<Utc>,
+    source_order: u8,
+    record_id: i64,
+    hit: SearchHit,
+}
+
+fn expanded_search_limit(limit: usize) -> usize {
+    limit.saturating_mul(5).min(500)
+}
+
+fn fuse_search_hits(
+    extraction_hits: Vec<ExtractionSearchHit>,
+    insight_hits: Vec<RankedInsightSearchHit>,
+    limit: usize,
+) -> Vec<SearchHit> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let mut combined = Vec::with_capacity(extraction_hits.len() + insight_hits.len());
+    for (local_rank, hit) in extraction_hits.into_iter().enumerate() {
+        let timestamp = hit.capture.timestamp;
+        combined.push(FusedSearchCandidate {
+            local_rank,
+            timestamp,
+            source_order: 0,
+            record_id: hit.extraction.id,
+            hit: SearchHit::Extraction {
+                timestamp,
+                rank: 0.0,
+                capture: hit.capture,
+                extraction: hit.extraction,
+                batch_narrative: hit.batch_narrative,
+            },
+        });
+    }
+
+    for (local_rank, hit) in insight_hits.into_iter().enumerate() {
+        let timestamp = hit.insight.window_end;
+        let primary_project = hit.insight.data.primary_project().map(str::to_owned);
+        let primary_activity_type = hit.insight.data.primary_activity_type();
+        combined.push(FusedSearchCandidate {
+            local_rank,
+            timestamp,
+            source_order: 1,
+            record_id: hit.insight.id,
+            hit: SearchHit::Insight {
+                timestamp,
+                rank: 0.0,
+                primary_project,
+                primary_activity_type,
+                insight: hit.insight,
+            },
+        });
+    }
+
+    combined.sort_by(|left, right| {
+        left.local_rank
+            .cmp(&right.local_rank)
+            .then_with(|| right.timestamp.cmp(&left.timestamp))
+            .then_with(|| left.source_order.cmp(&right.source_order))
+            .then_with(|| right.record_id.cmp(&left.record_id))
+    });
+
+    combined
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(rank, candidate)| match candidate.hit {
+            SearchHit::Extraction {
+                timestamp,
+                capture,
+                extraction,
+                batch_narrative,
+                ..
+            } => SearchHit::Extraction {
+                timestamp,
+                rank: rank as f64,
+                capture,
+                extraction,
+                batch_narrative,
+            },
+            SearchHit::Insight {
+                timestamp,
+                primary_project,
+                primary_activity_type,
+                insight,
+                ..
+            } => SearchHit::Insight {
+                timestamp,
+                rank: rank as f64,
+                primary_project,
+                primary_activity_type,
+                insight,
+            },
+        })
+        .collect()
 }
 
 fn resolve_screenshot_path(raw_path: &str, storage_root: Option<&Path>) -> PathBuf {
@@ -1947,6 +2139,33 @@ fn map_extraction_row(row: &Row<'_>) -> rusqlite::Result<Extraction> {
         created_at: parse_timestamp_column(row.get("created_at")?)?,
     })
 }
+fn map_search_hit_row(row: &Row<'_>) -> rusqlite::Result<ExtractionSearchHit> {
+    Ok(ExtractionSearchHit {
+        capture: Capture {
+            id: row.get("search_capture_id")?,
+            timestamp: parse_timestamp_column(row.get("search_capture_timestamp")?)?,
+            app_name: row.get("search_capture_app_name")?,
+            window_title: row.get("search_capture_window_title")?,
+            bundle_id: row.get("search_capture_bundle_id")?,
+            display_id: row.get("search_capture_display_id")?,
+            screenshot_path: row.get("search_capture_screenshot_path")?,
+            extraction_status: parse_enum_column::<ExtractionStatus>(
+                row.get("search_capture_extraction_status")?,
+            )?,
+            extraction_id: row.get("search_capture_extraction_id")?,
+            created_at: parse_timestamp_column(row.get("search_capture_created_at")?)?,
+        },
+        extraction: map_extraction_row(row)?,
+        batch_narrative: row.get("batch_narrative")?,
+        rank: row.get("rank")?,
+    })
+}
+
+fn map_search_insight_row(row: &Row<'_>) -> rusqlite::Result<RankedInsightSearchHit> {
+    Ok(RankedInsightSearchHit {
+        insight: map_insight_row(row)?,
+    })
+}
 
 fn map_extraction_batch_row(row: &Row<'_>) -> rusqlite::Result<ExtractionBatch> {
     Ok(ExtractionBatch {
@@ -2012,28 +2231,6 @@ fn map_optional_detail_extraction_row(row: &Row<'_>) -> rusqlite::Result<Option<
         )?,
         created_at: parse_timestamp_column(row.get("detail_extraction_created_at")?)?,
     }))
-}
-
-fn map_search_hit_row(row: &Row<'_>) -> rusqlite::Result<ExtractionSearchHit> {
-    Ok(ExtractionSearchHit {
-        capture: Capture {
-            id: row.get("search_capture_id")?,
-            timestamp: parse_timestamp_column(row.get("search_capture_timestamp")?)?,
-            app_name: row.get("search_capture_app_name")?,
-            window_title: row.get("search_capture_window_title")?,
-            bundle_id: row.get("search_capture_bundle_id")?,
-            display_id: row.get("search_capture_display_id")?,
-            screenshot_path: row.get("search_capture_screenshot_path")?,
-            extraction_status: parse_enum_column::<ExtractionStatus>(
-                row.get("search_capture_extraction_status")?,
-            )?,
-            extraction_id: row.get("search_capture_extraction_id")?,
-            created_at: parse_timestamp_column(row.get("search_capture_created_at")?)?,
-        },
-        extraction: map_extraction_row(row)?,
-        batch_narrative: row.get("batch_narrative")?,
-        rank: row.get("rank")?,
-    })
 }
 
 fn map_insight_row(row: &Row<'_>) -> rusqlite::Result<Insight> {
@@ -2558,6 +2755,118 @@ mod tests {
         fs::remove_dir_all(parent).expect("temp storage directory should be removable");
     }
 
+    #[test]
+    fn history_search_returns_mixed_results_with_deterministic_order() {
+        let mut db = StorageDb::open_in_memory().expect("database should open");
+        let timestamp = Utc.with_ymd_and_hms(2026, 4, 10, 14, 5, 0).unwrap();
+        let batch = db
+            .insert_extraction_batch(&NewExtractionBatch {
+                id: Uuid::new_v4(),
+                batch_start: timestamp - chrono::Duration::minutes(5),
+                batch_end: timestamp + chrono::Duration::minutes(5),
+                capture_count: 1,
+                primary_activity: Some("coding".into()),
+                project_context: Some("screencap".into()),
+                narrative: Some("Added API search and insight endpoints for the daemon.".into()),
+                raw_response: None,
+                model_used: Some("mock-model".into()),
+                tokens_used: Some(100),
+                cost_cents: Some(0.4),
+            })
+            .expect("batch should insert");
+
+        let capture = db
+            .insert_capture(&sample_capture(timestamp, "history-search"))
+            .expect("capture should insert");
+        db.insert_extraction(&NewExtraction {
+            capture_id: capture.id,
+            batch_id: batch.id,
+            activity_type: Some(ActivityType::Coding),
+            description: Some("Implemented search endpoint filters for the API".into()),
+            app_context: Some("Editing axum routes and tests".into()),
+            project: Some("screencap".into()),
+            topics: vec!["api".into(), "search".into()],
+            people: vec![],
+            key_content: Some("GET /api/search?q=filters".into()),
+            sentiment: Some(Sentiment::Focused),
+        })
+        .expect("extraction should insert");
+
+        let rolling_start = timestamp - chrono::Duration::minutes(30);
+        let rolling_end = timestamp;
+        db.insert_insight(&NewInsight {
+            insight_type: InsightType::Rolling,
+            window_start: rolling_start,
+            window_end: rolling_end,
+            data: InsightData::Rolling {
+                window_start: rolling_start,
+                window_end: rolling_end,
+                current_focus: "Implementing API search".into(),
+                active_project: Some("screencap".into()),
+                apps_used: BTreeMap::from([("Code".into(), "30 min".into())]),
+                context_switches: 1,
+                mood: "focused".into(),
+                summary: "Focused API work on insight endpoints and search filters.".into(),
+            },
+            model_used: Some("mock-synthesis".into()),
+            tokens_used: Some(200),
+            cost_cents: Some(0.2),
+        })
+        .expect("rolling insight should insert");
+
+        let hits = db
+            .search_history_filtered(&SearchQuery {
+                query: "filters".into(),
+                app_name: Some("Code".into()),
+                project: Some("screencap".into()),
+                activity_type: None,
+                from: Some(timestamp - chrono::Duration::minutes(1)),
+                to: Some(timestamp + chrono::Duration::minutes(1)),
+                limit: 5,
+            })
+            .expect("history search should succeed");
+        assert_eq!(hits.len(), 2);
+        match &hits[0] {
+            SearchHit::Extraction {
+                extraction, rank, ..
+            } => {
+                assert_eq!(
+                    extraction.description.as_deref(),
+                    Some("Implemented search endpoint filters for the API")
+                );
+                assert_eq!(*rank, 0.0);
+            }
+            other => panic!("expected extraction hit first, got {other:?}"),
+        }
+        match &hits[1] {
+            SearchHit::Insight { insight, rank, .. } => {
+                assert_eq!(insight.insight_type, InsightType::Rolling);
+                assert_eq!(
+                    insight.narrative,
+                    "Focused API work on insight endpoints and search filters."
+                );
+                assert_eq!(*rank, 1.0);
+            }
+            other => panic!("expected insight hit second, got {other:?}"),
+        }
+
+        let activity_filtered_hits = db
+            .search_history_filtered(&SearchQuery {
+                query: "filters".into(),
+                app_name: Some("Code".into()),
+                project: Some("screencap".into()),
+                activity_type: Some(ActivityType::Coding),
+                from: Some(timestamp - chrono::Duration::minutes(1)),
+                to: Some(timestamp + chrono::Duration::minutes(1)),
+                limit: 5,
+            })
+            .expect("activity-filtered history search should succeed");
+        assert_eq!(activity_filtered_hits.len(), 1);
+        assert!(matches!(
+            activity_filtered_hits[0],
+            SearchHit::Extraction { .. }
+        ));
+    }
     #[test]
     fn capture_api_queries_return_filtered_results_and_details() {
         let mut db = StorageDb::open_in_memory().expect("database should open");

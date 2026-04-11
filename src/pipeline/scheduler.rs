@@ -773,7 +773,10 @@ mod tests {
             offset: 0,
         })?;
         assert_eq!(captures_after.len(), 1);
-        assert_eq!(captures_after[0].extraction_status, ExtractionStatus::Failed);
+        assert_eq!(
+            captures_after[0].extraction_status,
+            ExtractionStatus::Failed
+        );
         assert!(captures_after[0].extraction_id.is_none());
 
         let batch_count: i64 = scheduler.db.connection().query_row(
@@ -787,7 +790,6 @@ mod tests {
         fs::remove_dir_all(&home)?;
         Ok(())
     }
-
 
     fn create_scheduler(
         config: AppConfig,

@@ -2,8 +2,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::provider::{
-    ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, ProviderError, ProviderResult,
-    TokenUsage, load_api_key, resolved_base_url,
+    load_api_key, resolved_base_url, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse,
+    ProviderError, ProviderResult, TokenUsage,
 };
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,9 @@ impl GoogleClient {
             content: response
                 .text_content()
                 .ok_or(ProviderError::MissingContent)?,
-            usage: response.usage_metadata.and_then(UsageMetadata::into_token_usage),
+            usage: response
+                .usage_metadata
+                .and_then(UsageMetadata::into_token_usage),
             cost_cents: None,
         })
     }
@@ -226,9 +228,15 @@ struct UsageMetadata {
 
 impl UsageMetadata {
     fn into_token_usage(self) -> Option<TokenUsage> {
-        let prompt_tokens = match (self.prompt_token_count, self.candidates_token_count, self.total_token_count) {
+        let prompt_tokens = match (
+            self.prompt_token_count,
+            self.candidates_token_count,
+            self.total_token_count,
+        ) {
             (Some(prompt_tokens), _, _) => prompt_tokens,
-            (None, Some(completion_tokens), Some(total_tokens)) => total_tokens.checked_sub(completion_tokens)?,
+            (None, Some(completion_tokens), Some(total_tokens)) => {
+                total_tokens.checked_sub(completion_tokens)?
+            }
             _ => return None,
         };
 
@@ -294,7 +302,10 @@ mod tests {
         let config = LlmProviderConfig::new(AiProvider::Google, "gemini-2.5-flash", env_var, "");
 
         let client = GoogleClient::new(config).expect("create client");
-        assert_eq!(client.base_url(), "https://generativelanguage.googleapis.com");
+        assert_eq!(
+            client.base_url(),
+            "https://generativelanguage.googleapis.com"
+        );
         assert_eq!(client.model(), "gemini-2.5-flash");
     }
 
@@ -318,7 +329,10 @@ mod tests {
         let inline_data = &payload["contents"][0]["parts"][0]["inline_data"];
         assert_eq!(inline_data["mime_type"], "image/jpeg");
         assert_eq!(inline_data["data"], "ZmFrZS1qcGVn");
-        assert_eq!(payload["contents"][0]["parts"][1]["text"], "Describe this frame");
+        assert_eq!(
+            payload["contents"][0]["parts"][1]["text"],
+            "Describe this frame"
+        );
     }
 
     #[test]

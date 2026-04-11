@@ -380,10 +380,11 @@ pub struct ActivityQuery {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtractionSearchQuery {
+pub struct SearchQuery {
     pub query: String,
     pub app_name: Option<String>,
     pub project: Option<String>,
+    pub activity_type: Option<ActivityType>,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub limit: usize,
@@ -431,6 +432,25 @@ pub struct ExtractionSearchHit {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "source_type", rename_all = "snake_case")]
+pub enum SearchHit {
+    Extraction {
+        timestamp: DateTime<Utc>,
+        rank: f64,
+        capture: Capture,
+        extraction: Extraction,
+        batch_narrative: Option<String>,
+    },
+    Insight {
+        timestamp: DateTime<Utc>,
+        rank: f64,
+        primary_project: Option<String>,
+        primary_activity_type: Option<ActivityType>,
+        insight: Insight,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtractionFrameDetail {
     pub capture: Capture,
     pub extraction: Extraction,
@@ -457,6 +477,78 @@ impl InsightData {
             Self::Hourly { narrative, .. } => narrative,
             Self::Daily { narrative, .. } => narrative,
         }
+    }
+
+    pub fn primary_project(&self) -> Option<&str> {
+        match self {
+            Self::Rolling { active_project, .. } => active_project.as_deref(),
+            Self::Hourly { projects, .. } => {
+                projects.iter().find_map(|project| project.name.as_deref())
+            }
+            Self::Daily { projects, .. } => projects.first().map(|project| project.name.as_str()),
+        }
+    }
+
+    pub fn primary_activity_type(&self) -> Option<ActivityType> {
+        match self {
+            Self::Rolling { .. } => None,
+            Self::Hourly {
+                dominant_activity, ..
+            } => ActivityType::from_str(dominant_activity.trim()).ok(),
+            Self::Daily { .. } => None,
+        }
+    }
+
+    pub fn matches_app(&self, app_name: &str) -> bool {
+        match self {
+            Self::Rolling { apps_used, .. } => apps_used.keys().any(|app| app == app_name),
+            Self::Hourly { .. } | Self::Daily { .. } => false,
+        }
+    }
+
+    pub fn matches_project(&self, project: &str) -> bool {
+        match self {
+            Self::Rolling { active_project, .. } => active_project.as_deref() == Some(project),
+            Self::Hourly { projects, .. } => projects
+                .iter()
+                .filter_map(|entry| entry.name.as_deref())
+                .any(|entry| entry == project),
+            Self::Daily { projects, .. } => projects.iter().any(|entry| entry.name == project),
+        }
+    }
+
+    pub fn matches_activity_type(&self, activity_type: ActivityType) -> bool {
+        match self {
+            Self::Rolling { .. } => false,
+            Self::Hourly {
+                dominant_activity, ..
+            } => ActivityType::from_str(dominant_activity.trim())
+                .map(|value| value == activity_type)
+                .unwrap_or(false),
+            Self::Daily {
+                time_allocation, ..
+            } => time_allocation
+                .keys()
+                .any(|bucket| daily_activity_bucket_matches(bucket, activity_type)),
+        }
+    }
+}
+
+fn daily_activity_bucket_matches(bucket: &str, activity_type: ActivityType) -> bool {
+    let bucket = bucket.trim();
+    match activity_type {
+        ActivityType::Coding => bucket == "coding",
+        ActivityType::Browsing => {
+            bucket == "browsing" || bucket == "browsing_research" || bucket == "research"
+        }
+        ActivityType::Communication => bucket == "communication",
+        ActivityType::Reading => bucket == "reading",
+        ActivityType::Writing => bucket == "writing",
+        ActivityType::Design => bucket == "design",
+        ActivityType::Terminal => bucket == "terminal",
+        ActivityType::Meeting => bucket == "meeting" || bucket == "meetings",
+        ActivityType::Media => bucket == "media",
+        ActivityType::Other => bucket == "other",
     }
 }
 

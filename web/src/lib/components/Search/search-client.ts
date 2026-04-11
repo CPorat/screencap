@@ -1,6 +1,9 @@
 import type { CaptureRecord } from '$lib/api';
 
 interface SearchApiExtraction {
+  id: number;
+  capture_id: number;
+  batch_id: string;
   activity_type: string | null;
   description: string | null;
   app_context: string | null;
@@ -9,14 +12,36 @@ interface SearchApiExtraction {
   people: string[];
   key_content: string | null;
   sentiment: string | null;
+  created_at: string;
 }
 
-interface SearchApiHit {
+interface SearchApiInsight {
+  id: number;
+  insight_type: string;
+  window_start: string;
+  window_end: string;
+  narrative: string;
+}
+
+interface SearchApiExtractionHit {
+  source_type: 'extraction';
+  timestamp: string;
+  rank: number;
   capture: CaptureRecord;
   extraction: SearchApiExtraction;
   batch_narrative: string | null;
-  rank: number;
 }
+
+interface SearchApiInsightHit {
+  source_type: 'insight';
+  timestamp: string;
+  rank: number;
+  primary_project: string | null;
+  primary_activity_type: string | null;
+  insight: SearchApiInsight;
+}
+
+type SearchApiHit = SearchApiExtractionHit | SearchApiInsightHit;
 
 interface SearchApiResponse {
   results: SearchApiHit[];
@@ -26,19 +51,28 @@ export interface SearchRequest {
   query: string;
   app?: string | null;
   project?: string | null;
+  activityType?: string | null;
   from?: string | null;
   to?: string | null;
   limit?: number;
-
 }
 
 export interface SearchResult {
-  capture: CaptureRecord;
-  extraction: SearchApiExtraction;
-  batchNarrative: string | null;
+  sourceType: 'extraction' | 'insight';
+  timestamp: string;
   rank: number;
   relevance: number;
+  primaryProject: string | null;
+  primaryActivityType: string | null;
+  narrative: string | null;
+  batchNarrative: string | null;
+  capture: CaptureRecord | null;
+  extraction: SearchApiExtraction | null;
+  insight: SearchApiInsight | null;
 }
+
+type SearchResultBase = Omit<SearchResult, 'relevance'>;
+
 
 interface ProjectsResponse {
   projects: Array<{
@@ -81,6 +115,9 @@ function isSearchApiExtraction(value: unknown): value is SearchApiExtraction {
   }
 
   return (
+    typeof value.id === 'number' &&
+    typeof value.capture_id === 'number' &&
+    typeof value.batch_id === 'string' &&
     isStringOrNull(value.activity_type) &&
     isStringOrNull(value.description) &&
     isStringOrNull(value.app_context) &&
@@ -88,21 +125,47 @@ function isSearchApiExtraction(value: unknown): value is SearchApiExtraction {
     isStringArray(value.topics) &&
     isStringArray(value.people) &&
     isStringOrNull(value.key_content) &&
-    isStringOrNull(value.sentiment)
+    isStringOrNull(value.sentiment) &&
+    typeof value.created_at === 'string'
   );
 }
 
-function isSearchApiHit(value: unknown): value is SearchApiHit {
+function isSearchApiInsight(value: unknown): value is SearchApiInsight {
   if (!isRecord(value)) {
     return false;
   }
 
   return (
-    isCaptureRecord(value.capture) &&
-    isSearchApiExtraction(value.extraction) &&
-    (typeof value.batch_narrative === 'string' || value.batch_narrative === null || value.batch_narrative === undefined) &&
-    typeof value.rank === 'number'
+    typeof value.id === 'number' &&
+    typeof value.insight_type === 'string' &&
+    typeof value.window_start === 'string' &&
+    typeof value.window_end === 'string' &&
+    typeof value.narrative === 'string'
   );
+}
+
+function isSearchApiHit(value: unknown): value is SearchApiHit {
+  if (!isRecord(value) || typeof value.source_type !== 'string' || typeof value.timestamp !== 'string' || typeof value.rank !== 'number') {
+    return false;
+  }
+
+  if (value.source_type === 'extraction') {
+    return (
+      isCaptureRecord(value.capture) &&
+      isSearchApiExtraction(value.extraction) &&
+      (typeof value.batch_narrative === 'string' || value.batch_narrative === null || value.batch_narrative === undefined)
+    );
+  }
+
+  if (value.source_type === 'insight') {
+    return (
+      isStringOrNull(value.primary_project) &&
+      isStringOrNull(value.primary_activity_type) &&
+      isSearchApiInsight(value.insight)
+    );
+  }
+
+  return false;
 }
 
 function isSearchApiResponse(value: unknown): value is SearchApiResponse {
@@ -125,7 +188,37 @@ function normalizeLimit(limit: number | undefined): number {
   return Math.max(1, Math.min(MAX_LIMIT, Math.trunc(limit)));
 }
 
-function computeRelevance(sortedByRank: SearchApiHit[]): SearchResult[] {
+function normalizeHit(hit: SearchApiHit): SearchResultBase {
+  if (hit.source_type === 'extraction') {
+    return {
+      sourceType: 'extraction',
+      timestamp: hit.timestamp,
+      rank: hit.rank,
+      primaryProject: hit.extraction.project?.trim() || null,
+      primaryActivityType: hit.extraction.activity_type?.trim() || null,
+      narrative: hit.extraction.description?.trim() || hit.extraction.key_content?.trim() || hit.batch_narrative?.trim() || null,
+      batchNarrative: hit.batch_narrative ?? null,
+      capture: hit.capture,
+      extraction: hit.extraction,
+      insight: null,
+    };
+  }
+
+  return {
+    sourceType: 'insight',
+    timestamp: hit.timestamp,
+    rank: hit.rank,
+    primaryProject: hit.primary_project?.trim() || null,
+    primaryActivityType: hit.primary_activity_type?.trim() || null,
+    narrative: hit.insight.narrative?.trim() || null,
+    batchNarrative: null,
+    capture: null,
+    extraction: null,
+    insight: hit.insight,
+  };
+}
+
+function computeRelevance(sortedByRank: SearchResultBase[]): SearchResult[] {
   if (sortedByRank.length === 0) {
     return [];
   }
@@ -141,10 +234,7 @@ function computeRelevance(sortedByRank: SearchApiHit[]): SearchResult[] {
         : 100 - ((hit.rank - bestRank) / rankSpread) * 45;
 
     return {
-      capture: hit.capture,
-      extraction: hit.extraction,
-      batchNarrative: hit.batch_narrative ?? null,
-      rank: hit.rank,
+      ...hit,
       relevance: Math.max(1, Math.min(100, Math.round(relevance))),
     } satisfies SearchResult;
   });
@@ -169,6 +259,10 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
     params.set('project', request.project.trim());
   }
 
+  if (request.activityType?.trim()) {
+    params.set('activity_type', request.activityType.trim());
+  }
+
   if (request.from?.trim()) {
     params.set('from', request.from.trim());
   }
@@ -191,15 +285,17 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
     throw new Error('Unexpected search payload shape');
   }
 
-  const sorted = [...payload.results].sort((left, right) => {
-    if (left.rank !== right.rank) {
-      return left.rank - right.rank;
-    }
+  const sorted = payload.results
+    .map(normalizeHit)
+    .sort((left, right) => {
+      if (left.rank !== right.rank) {
+        return left.rank - right.rank;
+      }
 
-    const leftTime = new Date(left.capture.timestamp).getTime();
-    const rightTime = new Date(right.capture.timestamp).getTime();
-    return rightTime - leftTime;
-  });
+      const leftTime = new Date(left.timestamp).getTime();
+      const rightTime = new Date(right.timestamp).getTime();
+      return rightTime - leftTime;
+    });
 
   return computeRelevance(sorted);
 }
@@ -209,12 +305,12 @@ export function collectFacetValues(results: SearchResult[]): { apps: string[]; p
   const projects = new Set<string>();
 
   for (const result of results) {
-    const appName = result.capture.app_name?.trim();
+    const appName = result.capture?.app_name?.trim();
     if (appName) {
       apps.add(appName);
     }
 
-    const project = result.extraction.project?.trim();
+    const project = result.primaryProject?.trim();
     if (project) {
       projects.add(project);
     }

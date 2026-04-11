@@ -880,7 +880,7 @@
         "Storage helper remains typed and keeps SQL in StorageDb"
       ],
       "priority": 37,
-      "passes": false,
+      "passes": true,
       "notes": "Spec requires full-text search across extractions and insights. Current /api/search is extraction-only.",
       "tool": "omp",
       "model": "gpt-5.4",

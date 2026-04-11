@@ -26,9 +26,9 @@ use crate::{
         db::StorageDb,
         metrics,
         models::{
-            AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction, ExtractionSearchHit,
-            ExtractionSearchQuery, ExtractionStatus, Insight, InsightData, InsightType,
-            ProjectTimeAllocation, TopicFrequency,
+            ActivityType, AppCaptureCount, Capture, CaptureDetail, CaptureQuery, Extraction,
+            ExtractionSearchHit, ExtractionStatus, Insight, InsightData, InsightType,
+            ProjectTimeAllocation, SearchHit, SearchQuery, TopicFrequency,
         },
         screenshots::{
             read_screenshot_file, relative_screenshot_path, sanitize_relative_screenshot_path,
@@ -145,11 +145,22 @@ struct TopicFrequencyResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ApiSearchHit {
-    capture: ApiCapture,
-    extraction: Extraction,
-    batch_narrative: Option<String>,
-    rank: f64,
+#[serde(tag = "source_type", rename_all = "snake_case")]
+enum ApiSearchHit {
+    Extraction {
+        timestamp: DateTime<Utc>,
+        rank: f64,
+        capture: ApiCapture,
+        extraction: Extraction,
+        batch_narrative: Option<String>,
+    },
+    Insight {
+        timestamp: DateTime<Utc>,
+        rank: f64,
+        primary_project: Option<String>,
+        primary_activity_type: Option<ActivityType>,
+        insight: Insight,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -208,7 +219,6 @@ struct AnalyzeRequest {
     prompt: Option<String>,
 }
 
-
 #[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: String,
@@ -246,6 +256,7 @@ struct SearchParams {
     q: Option<String>,
     app: Option<String>,
     project: Option<String>,
+    activity_type: Option<String>,
     from: Option<String>,
     to: Option<String>,
     limit: Option<usize>,
@@ -328,7 +339,6 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/search", get(search_extractions))
         .route("/api/search/semantic", get(handle_semantic_search))
         .route("/api/analyze", post(analyze_time_range))
-
         .route("/", get(static_assets::root_handler))
         .route("/{*path}", get(static_assets::static_handler))
         .with_state(state)
@@ -622,14 +632,19 @@ async fn search_extractions(
         parse_query_params(raw_query.0.as_deref(), "invalid search query parameters")?;
     let from = parse_optional_timestamp("from", params.from.as_deref())?;
     let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    let activity_type = parse_optional_activity_type(
+        "activity_type",
+        trim_to_option(params.activity_type).as_deref(),
+    )?;
     validate_timestamp_range(from.as_ref(), to.as_ref())?;
 
     let query = trim_to_option(params.q)
         .ok_or_else(|| ApiError::bad_request("query parameter `q` is required"))?;
-    let search_query = ExtractionSearchQuery {
+    let search_query = SearchQuery {
         query,
         app_name: trim_to_option(params.app),
         project: trim_to_option(params.project),
+        activity_type,
         from,
         to,
         limit: params
@@ -645,7 +660,7 @@ async fn search_extractions(
         }));
     };
     let results = db
-        .search_extractions_filtered(&search_query)
+        .search_history_filtered(&search_query)
         .map_err(ApiError::internal)?
         .into_iter()
         .map(|hit| api_search_hit_from_model(&state, hit))
@@ -883,7 +898,6 @@ fn api_analyze_response_from_result(
     })
 }
 
-
 fn parse_capture_list_params(raw: Option<&str>) -> Result<CaptureListParams, ApiError> {
     parse_query_params(raw, "invalid capture query parameters")
 }
@@ -910,6 +924,24 @@ fn parse_optional_timestamp(
             .map_err(|_| {
                 ApiError::bad_request(format!(
                     "query parameter `{label}` must be a valid ISO 8601 timestamp"
+                ))
+            })
+    })
+    .transpose()
+}
+
+fn parse_optional_activity_type(
+    label: &str,
+    raw: Option<&str>,
+) -> Result<Option<ActivityType>, ApiError> {
+    raw.map(|value| {
+        value
+            .trim()
+            .to_ascii_lowercase()
+            .parse::<ActivityType>()
+            .map_err(|_| {
+                ApiError::bad_request(format!(
+                    "query parameter `{label}` must be one of: coding, browsing, communication, reading, writing, design, terminal, meeting, media, other"
                 ))
             })
     })
@@ -993,15 +1025,34 @@ fn api_capture_detail_from_model(
     })
 }
 
-fn api_search_hit_from_model(
-    state: &ApiState,
-    hit: ExtractionSearchHit,
-) -> Result<ApiSearchHit, ApiError> {
-    Ok(ApiSearchHit {
-        capture: api_capture_from_model(state, hit.capture)?,
-        extraction: hit.extraction,
-        batch_narrative: hit.batch_narrative,
-        rank: hit.rank,
+fn api_search_hit_from_model(state: &ApiState, hit: SearchHit) -> Result<ApiSearchHit, ApiError> {
+    Ok(match hit {
+        SearchHit::Extraction {
+            timestamp,
+            rank,
+            capture,
+            extraction,
+            batch_narrative,
+        } => ApiSearchHit::Extraction {
+            timestamp,
+            rank,
+            capture: api_capture_from_model(state, capture)?,
+            extraction,
+            batch_narrative,
+        },
+        SearchHit::Insight {
+            timestamp,
+            rank,
+            primary_project,
+            primary_activity_type,
+            insight,
+        } => ApiSearchHit::Insight {
+            timestamp,
+            rank,
+            primary_project,
+            primary_activity_type,
+            insight,
+        },
     })
 }
 

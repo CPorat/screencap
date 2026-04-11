@@ -23,8 +23,8 @@ use crate::{
     storage::{
         db::StorageDb,
         models::{
-            DailyProjectSummary, ExtractionBatchDetail, ExtractionSearchHit, ExtractionSearchQuery,
-            FocusBlock, HourlyProjectSummary, Insight, InsightData, InsightType, NewInsight,
+            DailyProjectSummary, ExtractionBatchDetail, ExtractionSearchHit, FocusBlock,
+            HourlyProjectSummary, Insight, InsightData, InsightType, NewInsight, SearchQuery,
         },
     },
 };
@@ -51,7 +51,6 @@ pub struct SemanticSearchResult {
     pub tokens_used: Option<u32>,
     pub cost_cents: Option<f64>,
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimeRangeAnalysisResult {
@@ -545,7 +544,6 @@ pub async fn answer_time_range_query(
     })
 }
 
-
 pub fn semantic_search_candidates(
     db: &StorageDb,
     query: &str,
@@ -556,10 +554,11 @@ pub fn semantic_search_candidates(
     let query = query.trim();
     ensure!(!query.is_empty(), "semantic search query must not be empty");
 
-    let base_query = ExtractionSearchQuery {
+    let base_query = SearchQuery {
         query: query.to_owned(),
         app_name: None,
         project: None,
+        activity_type: None,
         from,
         to,
         limit,
@@ -572,7 +571,7 @@ pub fn semantic_search_candidates(
     let mut hits = Vec::new();
     let mut seen_extraction_ids = HashSet::new();
     for term in semantic_search_fallback_terms(query) {
-        let term_hits = db.search_extractions_filtered(&ExtractionSearchQuery {
+        let term_hits = db.search_extractions_filtered(&SearchQuery {
             query: term,
             ..base_query.clone()
         })?;
@@ -640,7 +639,6 @@ fn empty_semantic_search_result() -> SemanticSearchResult {
         cost_cents: None,
     }
 }
-
 
 async fn semantic_search_from_candidates(
     provider: &dyn LlmProvider,
@@ -854,7 +852,6 @@ fn response_tokens_used(response: &LlmResponse) -> Option<u32> {
         .usage
         .and_then(|usage| u32::try_from(usage.total_tokens).ok())
 }
-
 
 fn build_new_synthesis_insight(
     config: &AppConfig,
@@ -1716,7 +1713,8 @@ mod tests {
         let home = temp_home_root("rolling-empty");
         let config = test_config(&home);
         let provider = Arc::new(MockLlmProvider::new());
-        let mut scheduler = RollingContextScheduler::with_provider(config, &home, provider.clone())?;
+        let mut scheduler =
+            RollingContextScheduler::with_provider(config, &home, provider.clone())?;
 
         let window_end = Utc.with_ymd_and_hms(2026, 4, 10, 14, 30, 0).unwrap();
         let insight = scheduler.run_once_at(window_end).await?;
@@ -1726,7 +1724,6 @@ mod tests {
         fs::remove_dir_all(&home)?;
         Ok(())
     }
-
 
     #[tokio::test]
     async fn run_once_skips_empty_hourly_windows() -> Result<()> {

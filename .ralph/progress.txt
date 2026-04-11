@@ -40,6 +40,7 @@ Branch: ralph/v1-implementation
 
 - CLI read commands should open SQLite read-only when possible, return helpful empty-state output without creating `screencap.db`, and label capture-count-based project breakdowns explicitly so terminal summaries do not overclaim time accuracy.
 - Search and insight read surfaces should return typed records that already include their joined capture context, so API/UI callers can filter by app/timestamp and render screenshot metadata without issuing per-hit follow-up queries.
+- When search spans multiple FTS tables, keep each source’s SQL/ranking inside `StorageDb`, then fuse the typed rows in Rust with an explicit deterministic cross-source order; raw `bm25()` values from different FTS tables are not directly comparable.
 - Screenshot-serving endpoints should sanitize relative paths and walk them with `openat(..., O_NOFOLLOW)` so symlinks and traversal attempts cannot escape the screenshots root.
 - OpenAI-compatible provider code should resolve default base URLs from the provider enum in one place and return structured response text plus optional token usage, so local backends that omit usage do not force fake cost data.
 - When OpenAI-compatible providers expose usage cost metadata (such as OpenRouter’s `usage.cost`), pass it through to persisted `cost_cents`; providers that do not report cost should stay `None` rather than fabricating values.
@@ -657,4 +658,13 @@ Branch: ralph/v1-implementation
   - Patterns discovered: on-demand API analysis can reuse rolling-context prompt/parsing for no-query summaries and semantic-search candidate selection for prompt-driven answers, giving one endpoint two grounded analysis modes without new prompt formats.
   - Gotchas encountered: axum handlers cannot hold `rusqlite` connections across `.await`; gather SQLite evidence first, drop the connection, then perform async provider calls.
   - Useful context: treating `query` and `prompt` as mutually exclusive aliases keeps the request contract simple while still supporting callers that think in terms of prompts instead of search queries.
+---
+
+## [2026-04-11 21:52:29 UTC] - US-037
+- What was implemented: unified search across extraction and insight FTS sources. `/api/search`, CLI search output, and MCP `search_screen_history` now use one typed history-search helper that merges extraction hits with rolling/hourly/daily insight narratives, supports `activity_type` filtering on the server side, and returns source-tagged results instead of pretending every hit is an extraction.
+- Files changed: AGENTS.md, src/ai/anthropic.rs, src/ai/google.rs, src/ai/openai_compat.rs, src/api/routes.rs, src/capture/events.rs, src/capture/screenshot.rs, src/daemon.rs, src/main.rs, src/mcp/tools.rs, src/pipeline/scheduler.rs, src/pipeline/synthesis.rs, src/storage/db.rs, src/storage/models.rs, tests/api_server.rs, tests/daemon_cli.rs, tests/prune.rs, web/src/lib/components/Search/SearchResultCard.svelte, web/src/lib/components/Search/SearchWorkspace.svelte, web/src/lib/components/Search/search-client.ts, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: when search combines multiple FTS tables, keep each source ranked independently in SQL and fuse the typed rows in Rust; cross-table `bm25()` values are not a shared scale.
+  - Gotchas encountered: server-side activity filters can exclude synthesized insight hits that do not carry that activity dimension (for example rolling summaries), so the API/UI must model source-specific metadata truthfully instead of coercing everything into extraction-shaped results.
+  - Useful context: insight search is practical with the existing `insights_fts` table if time/project/app/activity filtering happens after typed insight payloads are loaded, which keeps cross-table SQL contained in `StorageDb` without inventing lossy denormalized columns.
 ---

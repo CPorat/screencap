@@ -302,14 +302,13 @@ fn prune_command_is_noop_when_no_rows_match() -> Result<()> {
     );
 
     let db = StorageDb::open_at_path(home.db_path())?;
-    let capture_count: i64 = db
-        .connection()
-        .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))?;
+    let capture_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM captures", [], |row| row.get(0))?;
     assert_eq!(capture_count, 0);
 
     Ok(())
 }
-
 
 #[test]
 fn daemon_startup_auto_prunes_when_max_age_configured() -> Result<()> {

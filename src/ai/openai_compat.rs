@@ -2,8 +2,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use super::provider::{
-    ImageInput, LlmProvider, LlmProviderConfig, LlmResponse, ProviderError, ProviderResult,
-    TokenUsage, load_api_key, resolved_base_url,
+    load_api_key, resolved_base_url, ImageInput, LlmProvider, LlmProviderConfig, LlmResponse,
+    ProviderError, ProviderResult, TokenUsage,
 };
 
 #[derive(Debug, Clone)]

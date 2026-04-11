@@ -69,7 +69,7 @@
       return true;
     }
 
-    const activityType = result.extraction.activity_type?.trim().toLowerCase() ?? '';
+    const activityType = result.primaryActivityType?.trim().toLowerCase() ?? '';
     return activityType === normalizedSelectedActivity;
   });
 
@@ -152,7 +152,7 @@
     const values = new Set<string>();
 
     for (const entry of entries) {
-      const activity = entry.extraction.activity_type?.trim();
+      const activity = entry.primaryActivityType?.trim();
       if (activity) {
         values.add(activity);
       }
@@ -362,8 +362,12 @@
   }
 
   async function openResultDetails(result: SearchResult): Promise<void> {
+    if (result.sourceType !== 'extraction' || !result.capture) {
+      return;
+    }
+
     selectedCapture = result.capture;
-    selectedExtraction = null;
+    selectedExtraction = result.extraction;
     detailLoading = true;
 
     const requestId = ++detailRequestCounter;
@@ -374,14 +378,14 @@
         return;
       }
 
-      selectedExtraction = detail?.extraction ?? null;
+      selectedExtraction = detail?.extraction ?? result.extraction;
     } catch (error) {
       if (requestId !== detailRequestCounter) {
         return;
       }
 
       console.warn(`Failed to load capture detail for ${result.capture.id}`, error);
-      selectedExtraction = null;
+      selectedExtraction = result.extraction;
     } finally {
       if (requestId === detailRequestCounter) {
         detailLoading = false;
@@ -402,7 +406,7 @@
     <p class="panel__section">Search</p>
     <h2>Memory retrieval deck</h2>
     <p class="panel__summary">
-      Full-text query across indexed extraction descriptions, projects, and topics. Refine by app, project, activity type,
+      Full-text query across indexed capture extractions and synthesized insight narratives. Refine by app, project, activity type,
       and date range.
     </p>
   </header>
@@ -516,7 +520,7 @@
     <article class="chip-group">
       <header>
         <h3>Activity</h3>
-        <p>Client-side filter when API activity filtering is unavailable.</p>
+        <p>Narrow the currently loaded results by extracted activity type.</p>
       </header>
       <div class="chips">
         <button
@@ -573,7 +577,7 @@
       </div>
     </section>
   {:else if loading}
-    <p class="panel__state">Searching indexed captures…</p>
+    <p class="panel__state">Searching indexed history…</p>
   {:else if hasSearched && filteredResults.length === 0}
     <section class="empty-state" aria-label="No search results">
       <h3>No matches for this filter set</h3>
@@ -581,7 +585,7 @@
     </section>
   {:else}
     <div class="results-grid" aria-live="polite">
-      {#each visibleResults as result, index (result.capture.id)}
+      {#each visibleResults as result, index (`${result.sourceType}-${result.capture?.id ?? result.insight?.id ?? index}`)}
         <SearchResultCard {result} position={index + 1} on:open={(event) => void openResultDetails(event.detail.result)} />
       {/each}
     </div>

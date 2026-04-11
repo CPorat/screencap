@@ -584,7 +584,6 @@ fn now_today_and_search_return_helpful_messages_on_empty_database() -> Result<()
     Ok(())
 }
 
-
 #[test]
 fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;

@@ -168,7 +168,10 @@ mod native {
         display_ids: Vec<u32>,
         callback: impl FnOnce() -> T,
     ) -> T {
-        assert!(!display_ids.is_empty(), "mock display ids must not be empty");
+        assert!(
+            !display_ids.is_empty(),
+            "mock display ids must not be empty"
+        );
 
         struct ResetGuard<'a> {
             display_ids: &'a RefCell<Vec<u32>>,

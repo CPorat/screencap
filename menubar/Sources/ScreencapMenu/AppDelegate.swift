@@ -3,45 +3,33 @@ import Foundation
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private enum CaptureState {
-        case running
-        case stopped
-        case unavailable
-    }
-
-    private struct Command {
-        let executable: String
-        let prefixArguments: [String]
-    }
-
-    private struct CommandResult {
-        let exitCode: Int32
-        let stdout: String
-        let stderr: String
-    }
-
     private var statusItem: NSStatusItem!
     private var statusTimer: Timer?
-    private var screencapCommand: Command?
+    private let daemonController = ScreencapDaemonController()
     private var startItem = NSMenuItem(title: "Start Capture", action: #selector(startCapture), keyEquivalent: "")
     private var stopItem = NSMenuItem(title: "Stop Capture", action: #selector(stopCapture), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        refreshScreencapCommand()
         configureStatusItem()
-        refreshStatus()
+        applyStatus(daemonController.startCaptureIfNeeded())
 
-        statusTimer = Timer.scheduledTimer(timeInterval: 5.0, target: self, selector: #selector(statusTimerFired), userInfo: nil, repeats: true)
+        statusTimer = Timer.scheduledTimer(
+            timeInterval: 5.0,
+            target: self,
+            selector: #selector(statusTimerFired),
+            userInfo: nil,
+            repeats: true
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        stopIfPossible()
+        daemonController.stopOwnedDaemonIfNeeded()
         statusTimer?.invalidate()
     }
 
     @objc private func statusTimerFired() {
-        refreshStatus()
+        applyStatus(daemonController.refreshStatus())
     }
 
     private func configureStatusItem() {
@@ -49,7 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Screencap status")
             button.image?.isTemplate = false
-            button.contentTintColor = .systemRed
         }
 
         let menu = NSMenu()
@@ -78,22 +65,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func startCapture() {
-        guard hasScreencapCommand() else {
-            NSSound.beep()
-            refreshStatus()
-            return
-        }
-
-        let result = runScreencap(["start"])
-        if result?.exitCode != 0 {
+        let snapshot = daemonController.startCaptureIfNeeded()
+        if case .unavailable = snapshot {
             NSSound.beep()
         }
-        refreshStatus()
+        applyStatus(snapshot)
     }
 
     @objc private func stopCapture() {
-        stopIfPossible()
-        refreshStatus()
+        applyStatus(daemonController.stopCapture())
     }
 
     @objc private func openTimeline() {
@@ -102,122 +82,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openDataFolder() {
-        let folderPath = NSString(string: "~/.screencap").expandingTildeInPath
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folderPath)
+        let folderURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".screencap", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folderURL)
     }
 
     @objc private func quitApp() {
-        stopIfPossible()
+        daemonController.stopOwnedDaemonIfNeeded()
         NSApp.terminate(nil)
     }
 
-    private func refreshStatus() {
-        let state: CaptureState
-        if !hasScreencapCommand() {
-            state = .unavailable
-        } else {
-            let statusResult = runScreencap(["status"])
-            if statusResult?.exitCode == 0 {
-                state = .running
-            } else if statusResult?.exitCode == 127 {
-                state = .unavailable
-            } else {
-                state = .stopped
-            }
-        }
-
-        switch state {
+    private func applyStatus(_ snapshot: DaemonStatusSnapshot) {
+        switch snapshot {
         case .running:
             statusItem.button?.contentTintColor = .systemGreen
-            statusItem.button?.toolTip = nil
-            startItem.isEnabled = false
-            stopItem.isEnabled = true
+        case .starting:
+            statusItem.button?.contentTintColor = .systemYellow
         case .stopped:
             statusItem.button?.contentTintColor = .systemRed
-            statusItem.button?.toolTip = nil
-            startItem.isEnabled = true
-            stopItem.isEnabled = false
         case .unavailable:
             statusItem.button?.contentTintColor = .systemGray
-            startItem.isEnabled = false
-            stopItem.isEnabled = false
-            statusItem.button?.toolTip = "screencap binary not found in PATH or ~/.cargo/bin"
-        }
-    }
-
-    private func hasScreencapCommand() -> Bool {
-        refreshScreencapCommand()
-        return screencapCommand != nil
-    }
-
-    private func refreshScreencapCommand() {
-        if let command = screencapCommand, FileManager.default.isExecutableFile(atPath: command.executable) {
-            return
         }
 
-        screencapCommand = resolveScreencapCommand()
-    }
-
-
-    private func stopIfPossible() {
-        _ = runScreencap(["stop"])
-    }
-
-    private func runScreencap(_ arguments: [String]) -> CommandResult? {
-        guard hasScreencapCommand(), let command = screencapCommand else { return nil }
-
-        let result = runProcess(executable: command.executable, arguments: command.prefixArguments + arguments)
-        if result.exitCode == 127 {
-            screencapCommand = nil
-        }
-        return result
-    }
-
-    private func resolveScreencapCommand() -> Command? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let knownPaths = [
-            "\(home)/.cargo/bin/screencap",
-            "/opt/homebrew/bin/screencap",
-            "/usr/local/bin/screencap"
-        ]
-
-        for path in knownPaths where FileManager.default.isExecutableFile(atPath: path) {
-            return Command(executable: path, prefixArguments: [])
-        }
-
-        let whichResult = runProcess(executable: "/usr/bin/which", arguments: ["screencap"])
-        let resolvedPath = whichResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if whichResult.exitCode == 0, !resolvedPath.isEmpty, FileManager.default.isExecutableFile(atPath: resolvedPath) {
-            return Command(executable: resolvedPath, prefixArguments: [])
-        }
-
-        return nil
-    }
-
-    private func runProcess(executable: String, arguments: [String]) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return CommandResult(exitCode: 127, stdout: "", stderr: error.localizedDescription)
-        }
-
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        return CommandResult(
-            exitCode: process.terminationStatus,
-            stdout: String(decoding: stdoutData, as: UTF8.self),
-            stderr: String(decoding: stderrData, as: UTF8.self)
-        )
+        startItem.isEnabled = snapshot.startEnabled
+        stopItem.isEnabled = snapshot.stopEnabled
+        statusItem.button?.toolTip = snapshot.tooltip
     }
 }

@@ -11,6 +11,8 @@ Branch: ralph/v1-implementation
 - E2E daemon integration tests should manage spawned `Child` processes with a Drop guard that kills and waits, so failures and panics cannot leak background daemons between tests.
 - Menu bar API integrations should centralize `URLSession` polling in a SwiftUI `ObservableObject` refreshed by a `Timer`, so status/icon/menu state updates stay consistent across asynchronous health checks.
 - Menu bar scaffolding should run as an AppKit accessory app with an `NSStatusItem`, poll `screencap status` on a short timer, and derive icon tint/menu enablement from daemon liveness (`running` green, `stopped` red, `unavailable` gray).
+- Menu bar daemon controllers should parse the `state:` line from `screencap status` and track whether the current daemon was launched by the menu bar, so icon state stays truthful and quitting the app only tears down the child it started.
+
 - Prune flows should resolve stored screenshot paths against the configured storage root, remove on-disk JPEGs before deleting database rows, and tolerate already-missing files so retention jobs stay idempotent while still reporting reclaimed bytes.
 - MCP stdio servers should keep stdout strictly JSON-RPC protocol output and route diagnostics/logging to stderr so clients can parse responses deterministically.
 - MCP transport tests should spawn the real CLI child process and exercise initialize/tools/list/tool-call flows over stdio, because line framing behavior differs across clients.
@@ -507,4 +509,12 @@ Branch: ralph/v1-implementation
   - Patterns discovered: keep MCP transport and tool execution separate so tests can exercise JSON-RPC framing independently from storage-backed tool logic.
   - Gotchas encountered: cargo-based verification can churn tracked `web/.svelte-kit/` artifacts through `build.rs`; restore that generated drift before committing a Rust-only story.
   - Useful context: `get_screenshot` must treat stored screenshot paths as untrusted and reuse the same sanitized `openat(..., O_NOFOLLOW)` walker as the HTTP screenshot endpoint.
+---
+## [2026-04-11 14:53:40 UTC] - US-023
+- What was implemented: added a Swift daemon controller for the menu bar app that auto-starts Screencap as an owned foreground child, parses `screencap status` output for truthful running/stopped state, wires Start/Stop/Open Timeline/Open Data Folder/Quit actions, and only stops owned daemons on quit.
+- Files changed: AGENTS.md, menubar/Sources/ScreencapMenu/AppDelegate.swift, menubar/Sources/ScreencapMenu/ScreencapDaemonController.swift, menubar/Tests/ScreencapMenuTests/ScreencapMenuTests.swift, .ralph/prd.json, .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: menu bar daemon controllers should treat `screencap status` stdout as the source of truth for liveness instead of assuming exit-code semantics.
+  - Gotchas encountered: quitting the menu bar app must not stop a daemon it did not launch, or the UI can kill an externally managed session.
+  - Useful context: a small Foundation-only controller plus Swift Testing fakes keeps AppKit wiring thin while still verifying launch/stop ownership behavior.
 ---

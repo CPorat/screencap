@@ -574,8 +574,8 @@
         "Builds with swift build or xcodebuild"
       ],
       "priority": 24,
-      "passes": false,
-      "notes": "AUDIT: Bare minimum menu bar exists (camera icon + status text + Quit). Missing: Start/Stop Capture, Open Timeline, Open Data Folder, green/red status icon, daemon lifecycle management.",
+      "passes": true,
+      "notes": "Completed: the menu bar app now owns foreground daemon launches, parses `screencap status` output for truthful state, exposes Start/Stop/Open Timeline/Open Data Folder/Quit actions, and has focused Swift test coverage."
       "tool": "omp",
       "model": "gpt-5.4",
       "provider": "github-copilot",

@@ -37,6 +37,8 @@ Three-layer pipeline:
 
 - Search Svelte views should debounce query input, cancel stale requests, and pass app/project/from filters directly to `/api/search` so chips reflect server-ranked FTS results instead of client-side post-filtering.
 - Settings Svelte views should treat `/api/health` as the daemon liveness source, pair it with `/api/stats` telemetry for storage/capture metrics, and render an explicit disconnected state with actionable CLI recovery guidance when the backend is unavailable.
+- Menu bar daemon controls should parse `screencap status` stdout for the reported `state:` instead of inferring liveness from the command exit code, and they should only stop daemons the menu bar launched itself so quitting the app cannot kill an externally managed session.
+
 
 
 - AI provider code uses a trait (`LlmProvider`) with `complete(prompt, images?)` and `complete_text(prompt)`. The `openai_compat` module handles OpenAI, OpenRouter, and LM Studio since they share the same API format.

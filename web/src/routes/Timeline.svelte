@@ -3,7 +3,7 @@
 
   import {
     getCaptureDetail,
-    listCaptures,
+    getCaptures,
     type CaptureRecord,
     type ExtractionRecord,
   } from '$lib/api';
@@ -26,17 +26,21 @@
     minute: '2-digit',
   });
 
+  const LIMIT = 10;
+
   let selectedDate = formatLocalDate(new Date());
   let appFilter = '';
   let activityFilter = '';
 
   let loading = true;
+  let loadingMore = false;
+  let hasMore = true;
   let errorMessage: string | null = null;
   let timelineItems: TimelineItem[] = [];
   let selectedItem: TimelineItem | null = null;
+  let offset = 0;
 
   let requestVersion = 0;
-
   function formatLocalDate(value: Date): string {
     const year = value.getFullYear();
     const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -71,37 +75,86 @@
     };
   }
 
+  function sortByNewestFirst(left: TimelineItem, right: TimelineItem): number {
+    const leftTime = new Date(left.capture.timestamp).getTime();
+    const rightTime = new Date(right.capture.timestamp).getTime();
+    return rightTime - leftTime;
+  }
+
+  async function fetchTimelinePage(pageOffset: number): Promise<{ items: TimelineItem[]; count: number }> {
+    const { from, to } = buildDayBounds(selectedDate);
+    const captures = await getCaptures(LIMIT, pageOffset, { from, to });
+    const hydrated = await Promise.all(captures.map((capture) => hydrateCapture(capture)));
+
+    return {
+      items: hydrated,
+      count: captures.length,
+    };
+  }
+
   async function loadTimelineForDate(): Promise<void> {
     const currentRequest = ++requestVersion;
 
     loading = true;
+    loadingMore = false;
+    hasMore = true;
     errorMessage = null;
     selectedItem = null;
+    offset = 0;
 
     try {
-      const { from, to } = buildDayBounds(selectedDate);
-      const payload = await listCaptures(500, 0, { from, to });
-      const hydrated = await Promise.all(payload.captures.map((capture) => hydrateCapture(capture)));
+      const page = await fetchTimelinePage(offset);
 
       if (currentRequest !== requestVersion) {
         return;
       }
 
-      timelineItems = hydrated.sort((left, right) => {
-        const leftTime = new Date(left.capture.timestamp).getTime();
-        const rightTime = new Date(right.capture.timestamp).getTime();
-        return rightTime - leftTime;
-      });
+      timelineItems = page.items.sort(sortByNewestFirst);
+      offset += LIMIT;
+      hasMore = page.count === LIMIT;
     } catch (error) {
       if (currentRequest !== requestVersion) {
         return;
       }
 
       timelineItems = [];
+      hasMore = false;
       errorMessage = error instanceof Error ? error.message : 'Failed to load captures.';
     } finally {
       if (currentRequest === requestVersion) {
         loading = false;
+      }
+    }
+  }
+
+  async function loadMore(): Promise<void> {
+    if (loading || loadingMore || !hasMore) {
+      return;
+    }
+
+    const currentRequest = requestVersion;
+    loadingMore = true;
+    errorMessage = null;
+
+    try {
+      const page = await fetchTimelinePage(offset);
+
+      if (currentRequest !== requestVersion) {
+        return;
+      }
+
+      timelineItems = [...timelineItems, ...page.items].sort(sortByNewestFirst);
+      offset += LIMIT;
+      hasMore = page.count === LIMIT;
+    } catch (error) {
+      if (currentRequest !== requestVersion) {
+        return;
+      }
+
+      errorMessage = error instanceof Error ? error.message : 'Failed to load more captures.';
+    } finally {
+      if (currentRequest === requestVersion) {
+        loadingMore = false;
       }
     }
   }
@@ -255,6 +308,14 @@
         </section>
       {/each}
     </div>
+    {#if hasMore}
+      <div class="timeline__load-more">
+        <button type="button" on:click={() => void loadMore()} disabled={loadingMore}>
+          {loadingMore ? 'Loading...' : 'Load More'}
+        </button>
+      </div>
+    {/if}
+
   {/if}
 
   <CaptureDetailsModal
@@ -461,6 +522,42 @@
     50% {
       background-position: 100% 0;
     }
+  }
+
+  .timeline__load-more {
+    display: flex;
+    justify-content: center;
+  }
+
+  .timeline__load-more button {
+    border: 1px solid rgb(246 241 231 / 40%);
+    border-radius: 999px;
+    background: rgb(15 20 32 / 88%);
+    color: var(--paper-100);
+    font: inherit;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.36rem 0.78rem;
+    cursor: pointer;
+  }
+
+  .timeline__load-more button:hover,
+  .timeline__load-more button:focus-visible {
+    border-color: var(--pulse);
+    color: var(--pulse);
+    outline: none;
+  }
+
+  .timeline__load-more button:disabled {
+    opacity: 0.72;
+    cursor: wait;
+  }
+
+  .timeline__load-more button:disabled:hover,
+  .timeline__load-more button:disabled:focus-visible {
+    border-color: rgb(246 241 231 / 40%);
+    color: var(--paper-100);
   }
 
   @media (max-width: 900px) {

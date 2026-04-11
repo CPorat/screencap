@@ -455,3 +455,12 @@ Branch: ralph/v1-implementation
   - Gotchas encountered: partial-success paths can silently leave orphaned screenshots unless cleanup tracks exactly which files were created in the current cycle.
   - Useful context: keep rollback at the capture/storage boundary so callers cannot bypass filesystem↔SQLite consistency guarantees.
 ---
+
+## [2026-04-11 12:57:29 UTC] - US-029
+- What was implemented (Exclude windows from capture via regex bookkeeping): marked US-029 as passing in `.ralph/prd.json` and finalized delivery log for regex-based window-title exclusion behavior (compile patterns at daemon start, reject invalid patterns, skip matching titles).
+- Files changed: .ralph/progress.txt
+- **Learnings for future iterations:**
+  - Patterns discovered: compile exclusion regexes once during daemon startup and reuse compiled matchers in the capture loop to avoid per-cycle compile overhead.
+  - Gotchas encountered: invalid regex patterns should fail fast with explicit config errors instead of silently disabling exclusion behavior.
+  - Useful context: evaluate title exclusions before capture writes so matched windows never create screenshot files or capture rows.
+---

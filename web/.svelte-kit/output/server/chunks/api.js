@@ -113,6 +113,14 @@ async function listCaptures(limit = 60, offset = 0, options = {}) {
 	if (!isCaptureListResponse(payload)) throw new Error("Unexpected captures payload shape");
 	return payload;
 }
+async function getCaptures(limit = 60, offset = 0, options = {}) {
+	try {
+		return (await listCaptures(limit, offset, options)).captures;
+	} catch (error) {
+		console.error("Failed to load captures", error);
+		return [];
+	}
+}
 async function getCaptureDetail(id) {
 	try {
 		const response = await fetch(`/api/captures/${id}`, { headers: { Accept: "application/json" } });
@@ -338,4 +346,4 @@ async function getCosts(options = {}) {
 	}
 }
 //#endregion
-export { getDailyInsight as a, getHourlyInsights as c, getTopicFrequencies as d, listCaptures as f, getCurrentInsight as i, getProjectTimeAllocations as l, getCaptureDetail as n, getDailyInsightsRange as o, listCapturesInRange as p, getCosts as r, getHealth as s, getApps as t, getStats as u };
+export { getCurrentInsight as a, getHealth as c, getStats as d, getTopicFrequencies as f, getCosts as i, getHourlyInsights as l, getCaptureDetail as n, getDailyInsight as o, listCapturesInRange as p, getCaptures as r, getDailyInsightsRange as s, getApps as t, getProjectTimeAllocations as u };

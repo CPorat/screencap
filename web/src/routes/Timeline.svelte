@@ -26,6 +26,12 @@
     minute: '2-digit',
   });
 
+  const DATE_DISPLAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
+
   const LIMIT = 10;
 
   let selectedDate = formatLocalDate(new Date());
@@ -227,342 +233,138 @@
   });
 
   $: hourBuckets = buildHourBuckets(filteredItems);
+  $: displayDate = (() => {
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    return DATE_DISPLAY_FORMATTER.format(new Date(y, m - 1, d));
+  })();
 </script>
 
-<section class="timeline" aria-busy={loading}>
-  <header class="timeline__header">
-    <p class="timeline__eyebrow">Timeline</p>
-    <h2>Capture Chronicle</h2>
-    <p class="timeline__summary">Select a day, filter captures, and inspect each frame's extraction payload.</p>
-  </header>
-
-  <div class="timeline__controls" role="group" aria-label="Timeline filters">
-    <label>
-      <span>Date</span>
-      <input
-        type="date"
-        bind:value={selectedDate}
-        on:change={() => {
-          void loadTimelineForDate();
-        }}
-      />
-    </label>
-
-    <label>
-      <span>App name</span>
-      <input type="text" bind:value={appFilter} placeholder="Filter by app" autocomplete="off" />
-    </label>
-
-    <label>
-      <span>Activity type</span>
-      <input
-        type="text"
-        bind:value={activityFilter}
-        placeholder="coding, reading, meeting..."
-        autocomplete="off"
-      />
-    </label>
+<div class="space-y-8" aria-busy={loading}>
+  <!-- Page Header -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-[2.25rem] font-semibold tracking-tight text-on-surface">Timeline</h1>
+      <p class="text-secondary text-sm">{displayDate}</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 px-4 py-2 bg-surface-container-high rounded-lg text-on-surface cursor-pointer hover:bg-surface-container-highest transition-colors text-sm">
+        <span class="material-symbols-outlined text-sm">calendar_today</span>
+        <input
+          type="date"
+          class="bg-transparent border-none p-0 text-sm font-medium focus:ring-0 cursor-pointer"
+          bind:value={selectedDate}
+          on:change={() => { void loadTimelineForDate(); }}
+        />
+      </div>
+    </div>
   </div>
 
+  <!-- Filter Controls -->
+  <div class="flex items-center gap-3">
+    <div class="relative flex-1 max-w-xs">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">apps</span>
+      <input
+        type="text"
+        class="w-full bg-surface-container-lowest border-none rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-on-surface-variant"
+        bind:value={appFilter}
+        placeholder="Filter by app..."
+        autocomplete="off"
+      />
+    </div>
+    <div class="relative flex-1 max-w-xs">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">label</span>
+      <input
+        type="text"
+        class="w-full bg-surface-container-lowest border-none rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-on-surface-variant"
+        bind:value={activityFilter}
+        placeholder="Filter by activity..."
+        autocomplete="off"
+      />
+    </div>
+    <span class="text-xs text-on-surface-variant font-medium">
+      {filteredItems.length} capture{filteredItems.length === 1 ? '' : 's'}
+    </span>
+  </div>
+
+  <!-- Content Area -->
   {#if loading}
-    <div class="timeline__grid" aria-hidden="true">
-      {#each Array.from({ length: 6 }, (_, index) => index) as skeleton (skeleton)}
-        <article class="timeline__skeleton">
-          <div class="timeline__skeleton-image"></div>
-          <div class="timeline__skeleton-line timeline__skeleton-line--short"></div>
-          <div class="timeline__skeleton-line"></div>
-        </article>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+      {#each Array.from({ length: 8 }, (_, i) => i) as skeleton (skeleton)}
+        <div class="bg-surface-container-lowest rounded-2xl overflow-hidden animate-pulse">
+          <div class="aspect-video bg-surface-container-high"></div>
+          <div class="p-4 space-y-3">
+            <div class="h-3 bg-surface-container-high rounded w-1/3"></div>
+            <div class="h-4 bg-surface-container-high rounded w-3/4"></div>
+            <div class="h-3 bg-surface-container-high rounded w-1/2"></div>
+          </div>
+        </div>
       {/each}
     </div>
   {:else if errorMessage}
-    <div class="timeline__state" role="alert">
-      <h3>Timeline unavailable</h3>
-      <p>{errorMessage}</p>
-      <button type="button" on:click={() => void loadTimelineForDate()}>Retry</button>
+    <div class="bg-surface-container-lowest rounded-[24px] p-8 text-center" role="alert">
+      <span class="material-symbols-outlined text-4xl text-error mb-4">error_outline</span>
+      <h3 class="text-lg font-semibold text-on-surface mb-2">Timeline unavailable</h3>
+      <p class="text-sm text-secondary mb-6">{errorMessage}</p>
+      <button
+        type="button"
+        class="px-6 py-2.5 bg-primary text-white rounded-xl font-semibold text-sm hover:opacity-90 transition-opacity"
+        on:click={() => void loadTimelineForDate()}
+      >
+        Retry
+      </button>
     </div>
   {:else if hourBuckets.length === 0}
-    <div class="timeline__state" role="status">
-      <h3>No captures for this day</h3>
-      <p>Try a different date or clear filters to broaden results.</p>
+    <div class="bg-surface-container-lowest rounded-[24px] p-12 text-center" role="status">
+      <span class="material-symbols-outlined text-5xl text-on-surface-variant/40 mb-4">schedule</span>
+      <h3 class="text-lg font-semibold text-on-surface mb-2">No captures for this day</h3>
+      <p class="text-sm text-secondary">Try a different date or clear filters to broaden results.</p>
     </div>
   {:else}
-    <div class="timeline__groups">
+    <div class="space-y-8">
       {#each hourBuckets as bucket (bucket.key)}
-        <section class="timeline__hour" aria-label={`Captures for ${bucket.heading}`}>
-          <header class="timeline__hour-header">
-            <h3>{bucket.heading}</h3>
-            <p>{bucket.captures.length} capture{bucket.captures.length === 1 ? '' : 's'}</p>
-          </header>
+        <section aria-label={`Captures for ${bucket.heading}`}>
+          <div class="flex items-center gap-3 mb-4">
+            <div class="flex items-center gap-2 px-4 py-1.5 bg-surface-container-low rounded-full">
+              <span class="material-symbols-outlined text-primary text-[18px]">schedule</span>
+              <span class="text-sm font-bold text-on-surface">{bucket.heading}</span>
+            </div>
+            <span class="text-xs text-on-surface-variant font-medium">
+              {bucket.captures.length} capture{bucket.captures.length === 1 ? '' : 's'}
+            </span>
+            <div class="flex-1 h-px bg-surface-container-high"></div>
+          </div>
 
-          <div class="timeline__grid">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {#each bucket.captures as item (item.capture.id)}
               <CaptureCard
                 capture={item.capture}
                 extraction={item.extraction}
-                on:open={() => {
-                  selectedItem = item;
-                }}
+                on:open={() => { selectedItem = item; }}
               />
             {/each}
           </div>
         </section>
       {/each}
     </div>
+
     {#if hasMore}
-      <div class="timeline__load-more">
-        <button type="button" on:click={() => void loadMore()} disabled={loadingMore}>
+      <div class="flex justify-center pt-4">
+        <button
+          type="button"
+          class="px-8 py-3 bg-surface-container-highest text-on-surface rounded-xl font-semibold text-sm hover:bg-surface-container-high transition-colors disabled:opacity-50 disabled:cursor-wait"
+          on:click={() => void loadMore()}
+          disabled={loadingMore}
+        >
           {loadingMore ? 'Loading...' : 'Load More'}
         </button>
       </div>
     {/if}
-
   {/if}
 
   <CaptureDetailsModal
     open={selectedItem !== null}
     capture={selectedItem?.capture ?? null}
     extraction={selectedItem?.extraction ?? null}
-    on:close={() => {
-      selectedItem = null;
-    }}
+    on:close={() => { selectedItem = null; }}
   />
-</section>
-
-<style>
-  .timeline {
-    height: 100%;
-    overflow: auto;
-    padding: clamp(1.1rem, 2.5vw, 1.9rem);
-    display: grid;
-    align-content: start;
-    gap: 1rem;
-    background:
-      linear-gradient(160deg, rgb(25 31 47 / 95%), rgb(12 15 26 / 98%)),
-      radial-gradient(circle at 84% 8%, rgb(112 255 227 / 18%), transparent 34%);
-  }
-
-  .timeline__header {
-    display: grid;
-    gap: 0.5rem;
-  }
-
-  .timeline__eyebrow {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: var(--pulse);
-  }
-
-  h2 {
-    font-size: clamp(1.85rem, 4vw, 3rem);
-  }
-
-  .timeline__summary {
-    color: var(--paper-200);
-    font-size: 0.88rem;
-    max-width: 68ch;
-  }
-
-  .timeline__controls {
-    border: 1px solid rgb(246 241 231 / 32%);
-    border-radius: 0.95rem;
-    background: rgb(9 13 21 / 78%);
-    padding: 0.78rem;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.7rem;
-  }
-
-  .timeline__controls label {
-    display: grid;
-    gap: 0.32rem;
-  }
-
-  .timeline__controls span {
-    font-size: 0.66rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--paper-200);
-  }
-
-  .timeline__controls input {
-    width: 100%;
-    border: 1px solid rgb(246 241 231 / 35%);
-    border-radius: 0.65rem;
-    background: rgb(16 20 30 / 92%);
-    color: var(--paper-100);
-    font: inherit;
-    font-size: 0.82rem;
-    padding: 0.42rem 0.52rem;
-  }
-
-  .timeline__controls input:focus-visible {
-    outline: 2px solid var(--pulse);
-    outline-offset: 1px;
-    border-color: var(--pulse);
-  }
-
-  .timeline__groups {
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  .timeline__hour {
-    display: grid;
-    gap: 0.6rem;
-  }
-
-  .timeline__hour-header {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.7rem;
-    border: 1px solid rgb(246 241 231 / 26%);
-    border-radius: 0.8rem;
-    background: linear-gradient(92deg, rgb(12 19 31 / 96%), rgb(12 16 24 / 96%));
-    padding: 0.42rem 0.58rem;
-    backdrop-filter: blur(8px);
-  }
-
-  h3 {
-    font-size: 1rem;
-  }
-
-  .timeline__hour-header p {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .timeline__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 0.75rem;
-  }
-
-  .timeline__state {
-    border: 1px dashed rgb(246 241 231 / 32%);
-    border-radius: 0.9rem;
-    background: rgb(9 12 20 / 72%);
-    padding: 0.95rem;
-    display: grid;
-    gap: 0.44rem;
-  }
-
-  .timeline__state h3 {
-    font-size: clamp(1.1rem, 2.3vw, 1.4rem);
-  }
-
-  .timeline__state p {
-    color: var(--paper-200);
-    font-size: 0.84rem;
-  }
-
-  .timeline__state button {
-    justify-self: start;
-    border: 1px solid rgb(246 241 231 / 40%);
-    border-radius: 999px;
-    background: rgb(15 20 32 / 88%);
-    color: var(--paper-100);
-    font: inherit;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 0.32rem 0.7rem;
-    cursor: pointer;
-  }
-
-  .timeline__state button:hover,
-  .timeline__state button:focus-visible {
-    border-color: var(--pulse);
-    color: var(--pulse);
-    outline: none;
-  }
-
-  .timeline__skeleton {
-    border: 1px solid rgb(246 241 231 / 28%);
-    border-radius: 0.9rem;
-    padding: 0.72rem;
-    display: grid;
-    gap: 0.54rem;
-    background: rgb(13 16 24 / 88%);
-  }
-
-  .timeline__skeleton-image,
-  .timeline__skeleton-line {
-    border-radius: 0.62rem;
-    background: linear-gradient(90deg, rgb(49 55 72 / 72%), rgb(76 85 110 / 78%), rgb(49 55 72 / 72%));
-    background-size: 200% 100%;
-    animation: pulse 1.4s ease infinite;
-  }
-
-  .timeline__skeleton-image {
-    width: 100%;
-    aspect-ratio: 16 / 10;
-  }
-
-  .timeline__skeleton-line {
-    height: 0.72rem;
-  }
-
-  .timeline__skeleton-line--short {
-    width: 62%;
-  }
-
-  @keyframes pulse {
-    0%,
-    100% {
-      background-position: 0% 0;
-    }
-
-    50% {
-      background-position: 100% 0;
-    }
-  }
-
-  .timeline__load-more {
-    display: flex;
-    justify-content: center;
-  }
-
-  .timeline__load-more button {
-    border: 1px solid rgb(246 241 231 / 40%);
-    border-radius: 999px;
-    background: rgb(15 20 32 / 88%);
-    color: var(--paper-100);
-    font: inherit;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 0.36rem 0.78rem;
-    cursor: pointer;
-  }
-
-  .timeline__load-more button:hover,
-  .timeline__load-more button:focus-visible {
-    border-color: var(--pulse);
-    color: var(--pulse);
-    outline: none;
-  }
-
-  .timeline__load-more button:disabled {
-    opacity: 0.72;
-    cursor: wait;
-  }
-
-  .timeline__load-more button:disabled:hover,
-  .timeline__load-more button:disabled:focus-visible {
-    border-color: rgb(246 241 231 / 40%);
-    color: var(--paper-100);
-  }
-
-  @media (max-width: 900px) {
-    .timeline__controls {
-      grid-template-columns: 1fr;
-    }
-  }
-</style>
+</div>

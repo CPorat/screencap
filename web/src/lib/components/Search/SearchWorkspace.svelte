@@ -25,7 +25,6 @@
   interface SearchModeOption {
     id: SearchMode;
     label: string;
-    description: string;
   }
 
   const datePresetOptions: DatePresetOption[] = [
@@ -36,16 +35,8 @@
   ];
 
   const searchModeOptions: SearchModeOption[] = [
-    {
-      id: 'keyword',
-      label: 'Keyword',
-      description: 'FTS-ranked results with app/project/activity filters.',
-    },
-    {
-      id: 'semantic',
-      label: 'Semantic',
-      description: 'LLM-grounded answer plus capture references.',
-    },
+    { id: 'keyword', label: 'Keyword' },
+    { id: 'semantic', label: 'Semantic' },
   ];
 
   const quickPrompts = ['sprint planning', 'incident follow-up', 'debugging', 'PR review'];
@@ -226,12 +217,7 @@
 
   function startOfDayIso(dateInput: string): string | null {
     const parsed = parseInputDate(dateInput);
-    if (!parsed) {
-      return null;
-    }
-
-    parsed.setHours(0, 0, 0, 0);
-    return parsed.toISOString();
+    return parsed?.toISOString() ?? null;
   }
 
   function nextDayStartIso(dateInput: string): string | null {
@@ -461,16 +447,6 @@
     }
   }
 
-  function updateFromDate(value: string): void {
-    fromDate = value;
-    selectedPreset = 'custom';
-  }
-
-  function updateToDate(value: string): void {
-    toDate = value;
-    selectedPreset = 'custom';
-  }
-
   function loadMore(): void {
     visibleLimit += RESULTS_STEP;
   }
@@ -523,276 +499,180 @@
   }
 </script>
 
-<section class="panel" aria-busy={loading}>
-  <header class="panel__header">
-    <p class="panel__section">Search</p>
-    <h2>Memory retrieval deck</h2>
-    <p class="panel__summary">
-      Switch between ranked keyword search and semantic Q&A, then refine by date and keyword-mode facets.
-    </p>
-  </header>
-
-  <label class="search-input" for="search-query">
-    <span>Search captures</span>
-    <input
-      id="search-query"
-      name="q"
-      type="search"
-      bind:this={searchInput}
-      bind:value={query}
-      autocomplete="off"
-      placeholder="Find moments, tasks, topics, or people"
-      aria-label="Search captures"
-    />
-  </label>
-
-  <section class="chip-stack" aria-label="Search filters">
-    <article class="chip-group">
-      <header>
-        <h3>Mode</h3>
-        <p>Keyword search uses FTS ranking; semantic mode asks the model and returns grounded references.</p>
-      </header>
-      <div class="chips">
-        {#each searchModeOptions as option (option.id)}
-          <button
-            type="button"
-            class="chip"
-            class:chip--active={searchMode === option.id}
-            on:click={() => setSearchMode(option.id)}
-          >
-            {option.label}
-          </button>
-        {/each}
-      </div>
-      <p class="chip-note">
-        {searchModeOptions.find((option) => option.id === searchMode)?.description}
-      </p>
-    </article>
-
-    <article class="chip-group">
-      <header>
-        <h3>Date range</h3>
-        <p>Preset windows or custom from/to boundaries.</p>
-      </header>
-
-      <div class="chips">
-        {#each datePresetOptions as option (option.id)}
-          <button
-            type="button"
-            class="chip"
-            class:chip--active={selectedPreset === option.id}
-            on:click={() => applyDatePreset(option.id)}
-          >
-            {option.label}
-          </button>
-        {/each}
+<div class="h-full flex flex-col overflow-hidden" aria-busy={loading}>
+  <!-- Search Command Center -->
+  <div class="flex flex-col items-center justify-center pt-8 pb-6 px-8">
+    <div class="w-full max-w-2xl relative">
+      <div class="relative group">
+        <div class="absolute inset-y-0 left-5 flex items-center pointer-events-none">
+          <span class="material-symbols-outlined text-on-surface-variant group-focus-within:text-primary transition-colors">search</span>
+        </div>
+        <input
+          id="search-query"
+          name="q"
+          type="search"
+          bind:this={searchInput}
+          bind:value={query}
+          autocomplete="off"
+          placeholder="Search your captures (e.g., 'billing flow from last Tuesday')"
+          aria-label="Search captures"
+          class="w-full h-14 pl-14 pr-32 bg-surface-container-lowest shadow-2xl shadow-outline/10 rounded-2xl border-none text-lg font-medium focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-on-surface-variant"
+        />
+        <div class="absolute inset-y-0 right-4 flex items-center gap-2">
+          <kbd class="px-2 py-1 bg-surface-container-high text-on-surface-variant rounded text-[10px] font-bold">&#x2318;K</kbd>
+        </div>
       </div>
 
-      <div class="date-controls">
-        <label>
-          <span>From</span>
-          <input
-            type="date"
-            value={fromDate}
-            on:input={(event) => updateFromDate((event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-        <label>
-          <span>To</span>
-          <input
-            type="date"
-            value={toDate}
-            on:input={(event) => updateToDate((event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
-      </div>
-    </article>
-
-    <article class="chip-group">
-      <header>
-        <h3>Apps</h3>
-        <p>Refine keyword mode by frontmost application.</p>
-      </header>
-      <div class="chips">
-        <button
-          type="button"
-          class="chip"
-          class:chip--active={!selectedApp}
-          on:click={() => (selectedApp = null)}
-          disabled={!keywordMode}
-        >
-          All apps
-        </button>
-        {#if appChips.length === 0}
-          <span class="chip-empty">No app facets yet</span>
-        {:else}
-          {#each appChips as appName (appName)}
+      <!-- Mode Toggle -->
+      <div class="flex justify-center mt-5">
+        <div class="bg-surface-container-high p-1 rounded-xl flex items-center gap-1">
+          {#each searchModeOptions as option (option.id)}
             <button
               type="button"
-              class="chip"
-              class:chip--active={selectedApp === appName}
-              on:click={() => toggleApp(appName)}
-              disabled={!keywordMode}
+              class="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all {searchMode === option.id ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:text-on-surface'}"
+              on:click={() => setSearchMode(option.id)}
             >
-              {appName}
+              {option.label}
             </button>
           {/each}
-        {/if}
+        </div>
       </div>
-      {#if !keywordMode}
-        <p class="chip-note">App filters are available in keyword mode only.</p>
-      {/if}
-    </article>
-
-    <article class="chip-group">
-      <header>
-        <h3>Projects</h3>
-        <p>Limit keyword retrieval to project context.</p>
-      </header>
-      <div class="chips">
-        <button
-          type="button"
-          class="chip"
-          class:chip--active={!selectedProject}
-          on:click={() => (selectedProject = null)}
-          disabled={!keywordMode}
-        >
-          All projects
-        </button>
-        {#if projectChips.length === 0}
-          <span class="chip-empty">No project facets yet</span>
-        {:else}
-          {#each projectChips as projectName (projectName)}
-            <button
-              type="button"
-              class="chip"
-              class:chip--active={selectedProject === projectName}
-              on:click={() => toggleProject(projectName)}
-              disabled={!keywordMode}
-            >
-              {projectName}
-            </button>
-          {/each}
-        {/if}
-      </div>
-      {#if !keywordMode}
-        <p class="chip-note">Project filters are available in keyword mode only.</p>
-      {/if}
-    </article>
-
-    <article class="chip-group">
-      <header>
-        <h3>Activity</h3>
-        <p>Send activity type to the keyword API for server-side filtering.</p>
-      </header>
-      <div class="chips">
-        <button
-          type="button"
-          class="chip"
-          class:chip--active={!selectedActivity}
-          on:click={() => (selectedActivity = null)}
-          disabled={!keywordMode}
-        >
-          All activities
-        </button>
-        {#if activityChips.length === 0}
-          <span class="chip-empty">No activity types in results</span>
-        {:else}
-          {#each activityChips as activity (activity)}
-            <button
-              type="button"
-              class="chip"
-              class:chip--active={selectedActivity === activity}
-              on:click={() => toggleActivity(activity)}
-              disabled={!keywordMode}
-            >
-              {activity.replaceAll('_', ' ')}
-            </button>
-          {/each}
-        {/if}
-      </div>
-      {#if !keywordMode}
-        <p class="chip-note">Semantic mode does not apply activity chips.</p>
-      {/if}
-    </article>
-  </section>
-
-  {#if queryPreview}
-    <p class="result-summary">
-      {#if loading}
-        {searchMode === 'semantic' ? `Analyzing “${queryPreview}”…` : `Searching “${queryPreview}”…`}
-      {:else if searchMode === 'semantic'}
-        Showing {visibleResults.length} of {results.length} grounded reference{results.length === 1 ? '' : 's'} for “{queryPreview}”.
-      {:else}
-        Showing {visibleResults.length} of {results.length} result{results.length === 1 ? '' : 's'} for “{queryPreview}”.
-      {/if}
-    </p>
-  {/if}
-
-  {#if errorMessage}
-    <p class="panel__error" role="alert">{errorMessage}</p>
-  {/if}
-
-  {#if searchMode === 'semantic' && semanticAnswer && !loading}
-    <section class="semantic-answer" aria-label="Semantic answer">
-      <h3>Semantic answer</h3>
-      <p>{semanticAnswer}</p>
-      {#if semanticTokensUsed !== null || semanticCostLabel}
-        <p class="semantic-answer__meta">
-          {#if semanticTokensUsed !== null}
-            Tokens: {semanticTokensUsed}
-          {/if}
-          {#if semanticTokensUsed !== null && semanticCostLabel}
-            ·
-          {/if}
-          {#if semanticCostLabel}
-            Cost: {semanticCostLabel}
-          {/if}
-        </p>
-      {/if}
-    </section>
-  {/if}
-
-  {#if !queryPreview}
-    <section class="empty-state" aria-label="Search suggestions">
-      <h3>Start with a prompt</h3>
-      <p>Search debounces requests automatically. Try one of these prompts or type your own.</p>
-      <div class="chips">
-        {#each quickPrompts as prompt (prompt)}
-          <button type="button" class="chip" on:click={() => applyQuickPrompt(prompt)}>
-            {prompt}
-          </button>
-        {/each}
-      </div>
-    </section>
-  {:else if loading}
-    <p class="panel__state">{searchMode === 'semantic' ? 'Analyzing activity context…' : 'Searching indexed history…'}</p>
-  {:else if hasSearched && results.length === 0}
-    <section class="empty-state" aria-label="No search results">
-      <h3>No matches for this filter set</h3>
-      <p>
-        {searchMode === 'semantic'
-          ? 'Try broadening date bounds or switching to keyword mode.'
-          : 'Try broadening date bounds or clearing app/project/activity chips.'}
-      </p>
-    </section>
-  {:else}
-    <div class="results-grid" aria-live="polite">
-      {#each visibleResults as result, index (`${result.sourceType}-${result.capture?.id ?? result.insight?.id ?? index}`)}
-        <SearchResultCard {result} position={index + 1} on:open={(event) => void openResultDetails(event.detail.result)} />
-      {/each}
     </div>
+  </div>
 
-    {#if hasMoreResults}
-      <div class="load-more-wrap">
-        <button class="load-more" type="button" on:click={loadMore}>Load more</button>
+  <!-- Filter Bar -->
+  <div class="px-8 py-3 flex items-center gap-3 overflow-x-auto no-scrollbar border-b border-surface-container-high/50">
+    {#each datePresetOptions as option (option.id)}
+      <button
+        type="button"
+        class="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-colors {selectedPreset === option.id ? 'bg-primary-fixed text-primary' : 'bg-surface-container-lowest text-on-surface hover:bg-surface-container-low'}"
+        on:click={() => applyDatePreset(option.id)}
+      >
+        {#if option.id === 'all'}
+          <span class="material-symbols-outlined text-sm">calendar_today</span>
+        {/if}
+        {option.label}
+      </button>
+    {/each}
+
+    {#if keywordMode}
+      {#each appChips.slice(0, 4) as appName (appName)}
+        <button
+          type="button"
+          class="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-colors {selectedApp === appName ? 'bg-primary-fixed text-primary' : 'bg-surface-container-lowest text-on-surface hover:bg-surface-container-low'}"
+          on:click={() => toggleApp(appName)}
+        >
+          <span class="material-symbols-outlined text-sm">apps</span>
+          {appName}
+        </button>
+      {/each}
+
+      {#each activityChips.slice(0, 3) as activity (activity)}
+        <button
+          type="button"
+          class="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold transition-colors {selectedActivity === activity ? 'bg-primary-fixed text-primary' : 'bg-surface-container-lowest text-on-surface hover:bg-surface-container-low'}"
+          on:click={() => toggleActivity(activity)}
+        >
+          <span class="material-symbols-outlined text-sm">label</span>
+          {activity.replaceAll('_', ' ')}
+        </button>
+      {/each}
+    {/if}
+
+    {#if selectedApp || selectedProject || selectedActivity}
+      <div class="h-6 w-px bg-outline-variant mx-2"></div>
+      <button
+        type="button"
+        class="text-primary text-xs font-bold px-2 hover:underline"
+        on:click={() => { selectedApp = null; selectedProject = null; selectedActivity = null; }}
+      >
+        Clear Filters
+      </button>
+    {/if}
+  </div>
+
+  <!-- Results Area -->
+  <div class="flex-1 overflow-y-auto custom-scrollbar px-8 py-8">
+    {#if errorMessage}
+      <div class="bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 rounded-2xl px-6 py-4 text-sm mb-6" role="alert">{errorMessage}</div>
+    {/if}
+
+    {#if searchMode === 'semantic' && semanticAnswer && !loading}
+      <div class="bg-primary-fixed rounded-[24px] p-6 mb-6">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="material-symbols-outlined text-primary">auto_awesome</span>
+          <h3 class="text-sm font-bold text-primary uppercase tracking-widest">Semantic Answer</h3>
+        </div>
+        <p class="text-on-surface leading-relaxed">{semanticAnswer}</p>
+        {#if semanticTokensUsed !== null || semanticCostLabel}
+          <p class="mt-3 text-[10px] text-secondary font-bold uppercase tracking-wider">
+            {#if semanticTokensUsed !== null}Tokens: {semanticTokensUsed}{/if}
+            {#if semanticTokensUsed !== null && semanticCostLabel} · {/if}
+            {#if semanticCostLabel}Cost: {semanticCostLabel}{/if}
+          </p>
+        {/if}
       </div>
     {/if}
-  {/if}
 
-  {#if detailLoading && selectedCapture}
-    <p class="panel__state">Loading full extraction payload…</p>
-  {/if}
+    {#if !queryPreview}
+      <div class="flex flex-col items-center justify-center py-16 text-center">
+        <span class="material-symbols-outlined text-5xl text-on-surface-variant/40 mb-4">search</span>
+        <h3 class="text-lg font-semibold text-on-surface mb-2">Search your captures</h3>
+        <p class="text-sm text-secondary mb-6 max-w-md">Search debounces automatically. Try one of these prompts or type your own query.</p>
+        <div class="flex flex-wrap gap-2 justify-center">
+          {#each quickPrompts as prompt (prompt)}
+            <button
+              type="button"
+              class="px-4 py-2 bg-surface-container-lowest rounded-full text-xs font-semibold text-on-surface hover:bg-surface-container-high transition-colors"
+              on:click={() => applyQuickPrompt(prompt)}
+            >
+              {prompt}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {:else if loading}
+      <div class="flex items-center justify-center py-16">
+        <p class="text-sm text-secondary animate-pulse">
+          {searchMode === 'semantic' ? 'Analyzing activity context...' : 'Searching indexed history...'}
+        </p>
+      </div>
+    {:else if hasSearched && results.length === 0}
+      <div class="flex flex-col items-center justify-center py-16 text-center">
+        <span class="material-symbols-outlined text-5xl text-on-surface-variant/40 mb-4">search_off</span>
+        <h3 class="text-lg font-semibold text-on-surface mb-2">No matches found</h3>
+        <p class="text-sm text-secondary max-w-md">
+          {searchMode === 'semantic'
+            ? 'Try broadening date bounds or switching to keyword mode.'
+            : 'Try broadening date bounds or clearing filters.'}
+        </p>
+      </div>
+    {:else}
+      <div class="mb-4 flex items-center justify-between">
+        <h3 class="text-sm font-bold text-on-surface-variant uppercase tracking-widest">
+          {searchMode === 'semantic' ? 'References' : 'Results'} ({results.length})
+        </h3>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-20" aria-live="polite">
+        {#each visibleResults as result, index (`${result.sourceType}-${result.capture?.id ?? result.insight?.id ?? index}`)}
+          <SearchResultCard {result} position={index + 1} on:open={(event) => void openResultDetails(event.detail.result)} />
+        {/each}
+      </div>
+
+      {#if hasMoreResults}
+        <div class="flex justify-center pt-4 pb-8">
+          <button
+            type="button"
+            class="px-8 py-3 bg-surface-container-highest text-on-surface rounded-xl font-semibold text-sm hover:bg-surface-container-high transition-colors"
+            on:click={loadMore}
+          >
+            Load more
+          </button>
+        </div>
+      {/if}
+    {/if}
+  </div>
 
   <CaptureDetailsModal
     open={selectedCapture !== null}
@@ -800,328 +680,4 @@
     extraction={selectedExtraction}
     on:close={closeDetailsModal}
   />
-</section>
-
-<style>
-  .panel {
-    height: 100%;
-    padding: clamp(1.2rem, 2.6vw, 2rem);
-    display: grid;
-    align-content: start;
-    gap: 1rem;
-    overflow: auto;
-    background:
-      linear-gradient(156deg, rgb(31 39 57 / 94%), rgb(12 15 24 / 98%)),
-      radial-gradient(circle at 78% 12%, rgb(255 179 71 / 14%), transparent 34%);
-  }
-
-  .panel__header {
-    display: grid;
-    gap: 0.52rem;
-  }
-
-  .panel__section {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: var(--pulse);
-  }
-
-  h2 {
-    font-size: clamp(2.2rem, 5.8vw, 4rem);
-    text-wrap: balance;
-  }
-
-  .panel__summary,
-  .panel__state {
-    color: var(--paper-200);
-    font-size: 0.9rem;
-  }
-
-  .search-input {
-    display: grid;
-    gap: 0.52rem;
-    border: 1px solid rgb(246 241 231 / 34%);
-    border-radius: 1.05rem;
-    padding: 0.95rem;
-    background:
-      linear-gradient(130deg, rgb(6 9 16 / 90%), rgb(17 20 33 / 72%)),
-      radial-gradient(circle at 90% 10%, rgb(112 255 227 / 12%), transparent 48%);
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 3%);
-  }
-
-  .search-input span {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: var(--paper-200);
-  }
-
-  .search-input input {
-    width: 100%;
-    border: 2px solid rgb(112 255 227 / 42%);
-    border-radius: 0.86rem;
-    padding: clamp(0.9rem, 1.6vw, 1.05rem) clamp(0.9rem, 1.7vw, 1.1rem);
-    background: rgb(11 15 24 / 94%);
-    color: var(--paper-100);
-    font-family: var(--display-font);
-    letter-spacing: 0.04em;
-    font-size: clamp(1.24rem, 3.5vw, 2.2rem);
-    text-transform: uppercase;
-    transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
-  }
-
-  .search-input input::placeholder {
-    color: rgb(221 213 198 / 58%);
-  }
-
-  .search-input input:focus-visible {
-    outline: none;
-    border-color: var(--surge);
-    box-shadow:
-      0 0 0 1px rgb(255 78 166 / 45%),
-      0 0 0 5px rgb(255 78 166 / 12%);
-    transform: translateY(-1px);
-  }
-
-  .chip-stack {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.75rem;
-  }
-
-  .chip-group {
-    border: 1px solid rgb(246 241 231 / 22%);
-    border-radius: 0.86rem;
-    padding: 0.74rem;
-    background: rgb(8 11 19 / 62%);
-    display: grid;
-    gap: 0.54rem;
-    align-content: start;
-  }
-
-  .chip-group header {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.42rem;
-  }
-
-  .chip-group h3 {
-    font-size: 0.82rem;
-    letter-spacing: 0.1em;
-  }
-
-  .chip-group p {
-    font-size: 0.72rem;
-    color: var(--paper-200);
-  }
-
-  .chip-note {
-    font-size: 0.68rem;
-    color: var(--paper-200);
-    letter-spacing: 0.08em;
-  }
-
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.46rem;
-  }
-
-  .chip {
-    border: 1px solid rgb(246 241 231 / 34%);
-    border-radius: 999px;
-    padding: 0.35rem 0.68rem;
-    background: rgb(246 241 231 / 4%);
-    color: var(--paper-100);
-    font-size: 0.66rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: transform 130ms ease, border-color 130ms ease, background 130ms ease;
-  }
-
-  .chip:hover:not(:disabled) {
-    transform: translateY(-1px);
-    border-color: rgb(246 241 231 / 58%);
-  }
-
-  .chip--active {
-    border-color: rgb(112 255 227 / 74%);
-    background: rgb(112 255 227 / 14%);
-    color: var(--pulse);
-  }
-
-  .chip:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-    transform: none;
-  }
-
-  .chip-empty {
-    font-size: 0.68rem;
-    color: var(--paper-200);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    align-self: center;
-  }
-
-  .date-controls {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
-  }
-
-  .date-controls label {
-    display: grid;
-    gap: 0.28rem;
-  }
-
-  .date-controls span {
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .date-controls input {
-    width: 100%;
-    border: 1px solid rgb(246 241 231 / 36%);
-    border-radius: 0.6rem;
-    background: rgb(14 18 28 / 94%);
-    color: var(--paper-100);
-    padding: 0.36rem 0.45rem;
-    font: inherit;
-    font-size: 0.75rem;
-  }
-
-  .date-controls input:focus-visible {
-    outline: 2px solid var(--pulse);
-    outline-offset: 1px;
-  }
-
-  .result-summary {
-    font-family: var(--display-font);
-    letter-spacing: 0.04em;
-    font-size: clamp(1rem, 2.2vw, 1.28rem);
-    color: var(--paper-100);
-  }
-
-  .panel__error {
-    color: #ff8f8f;
-    border: 1px solid rgb(255 143 143 / 55%);
-    border-radius: 0.7rem;
-    padding: 0.55rem 0.8rem;
-    background: rgb(69 18 21 / 56%);
-    font-size: 0.85rem;
-  }
-
-  .semantic-answer {
-    border: 1px solid rgb(112 255 227 / 38%);
-    border-radius: 0.86rem;
-    padding: 0.8rem 0.9rem;
-    background: rgb(10 17 25 / 78%);
-    display: grid;
-    gap: 0.45rem;
-  }
-
-  .semantic-answer h3 {
-    font-size: 0.82rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    color: var(--pulse);
-  }
-
-  .semantic-answer p {
-    color: var(--paper-100);
-    font-size: 0.88rem;
-    line-height: 1.45;
-    margin: 0;
-  }
-
-  .semantic-answer__meta {
-    color: var(--paper-200);
-    font-size: 0.74rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .empty-state {
-    border: 1px dashed rgb(246 241 231 / 35%);
-    border-radius: 0.95rem;
-    background:
-      linear-gradient(145deg, rgb(9 13 20 / 74%), rgb(22 26 38 / 58%)),
-      radial-gradient(circle at 12% 22%, rgb(112 255 227 / 12%), transparent 40%);
-    padding: 1rem;
-    display: grid;
-    gap: 0.62rem;
-  }
-
-  .empty-state h3 {
-    font-size: 1rem;
-    letter-spacing: 0.08em;
-  }
-
-  .empty-state p {
-    color: var(--paper-200);
-    font-size: 0.84rem;
-    max-width: 60ch;
-  }
-
-  .results-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 0.9rem;
-    align-content: start;
-  }
-
-  .load-more-wrap {
-    display: flex;
-    justify-content: center;
-  }
-
-  .load-more {
-    border: 1px solid rgb(255 179 71 / 54%);
-    border-radius: 0.74rem;
-    background: rgb(255 179 71 / 11%);
-    color: var(--paper-100);
-    font: inherit;
-    font-size: 0.74rem;
-    text-transform: uppercase;
-    letter-spacing: 0.13em;
-    padding: 0.58rem 0.92rem;
-    cursor: pointer;
-    transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
-  }
-
-  .load-more:hover,
-  .load-more:focus-visible {
-    transform: translateY(-1px);
-    border-color: rgb(255 179 71 / 86%);
-    background: rgb(255 179 71 / 18%);
-    outline: none;
-  }
-
-  @media (width <= 960px) {
-    .chip-stack {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  @media (width <= 760px) {
-    .chip-group header {
-      display: grid;
-      justify-items: start;
-    }
-
-    .date-controls {
-      grid-template-columns: 1fr;
-    }
-
-    .results-grid {
-      grid-template-columns: 1fr;
-    }
-  }
-</style>
+</div>

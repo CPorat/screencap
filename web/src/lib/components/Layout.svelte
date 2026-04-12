@@ -1,105 +1,56 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-
   import SidebarNav from '$lib/components/SidebarNav.svelte';
-  import { formatConsoleTime } from '$lib/utils/time';
   import type { NavItem } from '$lib/utils/nav';
+  import { themePreference, setTheme } from '$lib/stores/theme';
 
   export let items: NavItem[] = [];
   export let pathname = '/';
 
-  let consoleTime = formatConsoleTime(new Date());
+  const THEME_META = {
+    light: { next: 'dark' as const, icon: 'light_mode', label: 'Light' },
+    dark:  { next: 'system' as const, icon: 'dark_mode', label: 'Dark' },
+    system: { next: 'light' as const, icon: 'routine', label: 'System' },
+  };
 
-  onMount(() => {
-    const timer = setInterval(() => {
-      consoleTime = formatConsoleTime(new Date());
-    }, 30_000);
+  function cycleTheme(): void {
+    setTheme(THEME_META[$themePreference].next);
+  }
 
-    return () => clearInterval(timer);
-  });
+  $: themeMeta = THEME_META[$themePreference];
 </script>
 
-<div class="atmosphere" aria-hidden="true"></div>
+<SidebarNav {items} {pathname} />
 
-<main class="shell">
-  <SidebarNav {items} {pathname} />
-
-  <section class="stage" aria-live="polite">
-    <header class="stage__header">
-      <p class="stage__eyebrow">Screencap UI Shell</p>
-      <p class="stage__clock" aria-label="Current local time">{consoleTime}</p>
-    </header>
-
-    <div class="stage__body">
-      <slot />
+<header class="fixed top-0 right-0 w-[calc(100%-16rem)] z-30 bg-surface-container-lowest/70 glass-header flex items-center justify-between px-8 h-16 shadow-sm shadow-outline/10">
+  <div class="flex items-center gap-4 flex-1">
+    <div class="relative w-full max-w-md">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
+      <input
+        type="text"
+        class="w-full bg-surface-container-low border-none rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-on-surface-variant"
+        placeholder="Search sessions, projects, or insights..."
+      />
     </div>
-  </section>
+  </div>
+  <div class="flex items-center gap-3 text-on-surface-variant">
+    <button
+      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-surface-container-high transition-colors text-xs font-medium"
+      on:click={cycleTheme}
+      title="Theme: {themeMeta.label}"
+      aria-label="Toggle theme (currently {themeMeta.label})"
+    >
+      <span class="material-symbols-outlined text-[18px]">{themeMeta.icon}</span>
+      <span class="hidden sm:inline">{themeMeta.label}</span>
+    </button>
+    <button class="hover:text-on-surface transition-colors p-1.5 rounded-lg hover:bg-surface-container-high" aria-label="Capture status">
+      <span class="material-symbols-outlined">sensors</span>
+    </button>
+    <a href="/settings" class="hover:text-on-surface transition-colors p-1.5 rounded-lg hover:bg-surface-container-high" aria-label="Settings">
+      <span class="material-symbols-outlined">settings</span>
+    </a>
+  </div>
+</header>
+
+<main class="ml-64 pt-20 pb-12 px-8 min-h-screen bg-background">
+  <slot />
 </main>
-
-<style>
-  .atmosphere {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    background:
-      conic-gradient(from 245deg at 94% 7%, rgb(255 78 166 / 8%), transparent 28%),
-      radial-gradient(circle at 5% 88%, rgb(255 179 71 / 10%), transparent 32%);
-  }
-
-  .shell {
-    min-height: 100vh;
-    width: min(1240px, 100% - 2rem);
-    margin: 0 auto;
-    padding: clamp(1rem, 1.8vw, 1.9rem) 0;
-    display: grid;
-    grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
-    gap: clamp(0.9rem, 1.8vw, 1.4rem);
-  }
-
-  .stage {
-    border: 2px solid var(--paper-100);
-    border-radius: var(--radius-card);
-    background: linear-gradient(160deg, rgb(25 28 42 / 96%), rgb(13 15 23 / 98%));
-    box-shadow: var(--shadow-hard);
-    min-height: min(84vh, 920px);
-    display: grid;
-    grid-template-rows: auto 1fr;
-    overflow: hidden;
-  }
-
-  .stage__header {
-    padding: 0.9rem 1.2rem;
-    border-bottom: 1px solid rgb(246 241 231 / 26%);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.75rem;
-    background: linear-gradient(90deg, rgb(112 255 227 / 10%), transparent 55%);
-  }
-
-  .stage__eyebrow,
-  .stage__clock {
-    font-size: 0.73rem;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: var(--paper-200);
-  }
-
-  .stage__clock {
-    color: var(--pulse);
-  }
-
-  .stage__body {
-    min-height: 0;
-  }
-
-  @media (max-width: 980px) {
-    .shell {
-      grid-template-columns: 1fr;
-    }
-
-    .stage {
-      min-height: min(76vh, 760px);
-    }
-  }
-</style>

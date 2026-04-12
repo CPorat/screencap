@@ -105,6 +105,16 @@
   let appChart: Chart<'doughnut'> | null = null;
   let activityChart: Chart<'bar'> | null = null;
 
+  function chartTextColor(): string {
+    if (typeof document === 'undefined') return '#64748b';
+    return document.documentElement.classList.contains('dark') ? '#94a3b8' : '#64748b';
+  }
+
+  function chartGridColor(): string {
+    if (typeof document === 'undefined') return 'rgba(0,0,0,0.06)';
+    return document.documentElement.classList.contains('dark') ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  }
+
   $: syncProjectChart(projectSeries, projectCanvas);
   $: syncAppChart(appSeries, appCanvas);
   $: syncActivityChart(activitySeries, activityCanvas);
@@ -220,6 +230,9 @@
       return;
     }
 
+    const txtColor = chartTextColor();
+    const gridColor = chartGridColor();
+
     const config: ChartConfiguration<'bar'> = {
       type: 'bar',
       data: {
@@ -228,8 +241,8 @@
           {
             label: 'Captures',
             data: series.map((entry) => entry.value),
-            backgroundColor: series.map(() => 'rgba(112, 255, 227, 0.72)'),
-            borderColor: series.map(() => '#70ffe3'),
+            backgroundColor: 'rgba(0, 88, 188, 0.65)',
+            borderColor: '#0058bc',
             borderWidth: 1.2,
             borderRadius: 7,
           },
@@ -257,23 +270,23 @@
         scales: {
           x: {
             ticks: {
-              color: '#f0e8db',
+              color: txtColor,
               maxRotation: 0,
               autoSkip: true,
               maxTicksLimit: 7,
             },
             grid: {
-              color: 'rgba(246, 241, 231, 0.08)',
+              color: gridColor,
             },
           },
           y: {
             beginAtZero: true,
             ticks: {
-              color: '#f0e8db',
+              color: txtColor,
               precision: 0,
             },
             grid: {
-              color: 'rgba(246, 241, 231, 0.08)',
+              color: gridColor,
             },
           },
         },
@@ -298,17 +311,19 @@
     }
 
     const palette = [
-      '#70ffe3',
-      '#ff4ea6',
-      '#ffb347',
-      '#7ea6ff',
-      '#be8bff',
-      '#7ff8a4',
-      '#ffd86a',
-      '#86d6ff',
-      '#f589ff',
-      '#ffa16c',
+      '#0058bc',
+      '#8a2bb9',
+      '#e67700',
+      '#0d9488',
+      '#6366f1',
+      '#059669',
+      '#d97706',
+      '#2563eb',
+      '#c026d3',
+      '#ea580c',
     ];
+
+    const txtColor = chartTextColor();
 
     const config: ChartConfiguration<'doughnut'> = {
       type: 'doughnut',
@@ -318,7 +333,7 @@
           {
             data: series.map((entry) => entry.value),
             backgroundColor: series.map((_, index) => palette[index % palette.length]),
-            borderColor: '#0b1018',
+            borderColor: 'transparent',
             borderWidth: 1.4,
           },
         ],
@@ -332,7 +347,7 @@
         plugins: {
           legend: {
             labels: {
-              color: '#f0e8db',
+              color: txtColor,
               boxWidth: 10,
             },
             position: 'bottom',
@@ -366,6 +381,9 @@
       return;
     }
 
+    const txtColor = chartTextColor();
+    const gridColor = chartGridColor();
+
     const config: ChartConfiguration<'bar'> = {
       type: 'bar',
       data: {
@@ -375,9 +393,9 @@
             label: 'Occurrences',
             data: series.map((entry) => entry.value),
             backgroundColor: series.map((_, index) =>
-              index % 2 === 0 ? 'rgba(255, 78, 166, 0.7)' : 'rgba(255, 179, 71, 0.7)'
+              index % 2 === 0 ? 'rgba(138, 43, 185, 0.65)' : 'rgba(230, 119, 0, 0.65)'
             ),
-            borderColor: series.map((_, index) => (index % 2 === 0 ? '#ff4ea6' : '#ffb347')),
+            borderColor: series.map((_, index) => (index % 2 === 0 ? '#8a2bb9' : '#e67700')),
             borderWidth: 1.2,
             borderRadius: 7,
           },
@@ -407,19 +425,19 @@
           x: {
             beginAtZero: true,
             ticks: {
-              color: '#f0e8db',
+              color: txtColor,
               precision: 0,
             },
             grid: {
-              color: 'rgba(246, 241, 231, 0.08)',
+              color: gridColor,
             },
           },
           y: {
             ticks: {
-              color: '#f0e8db',
+              color: txtColor,
             },
             grid: {
-              color: 'rgba(246, 241, 231, 0.04)',
+              color: gridColor,
             },
           },
         },
@@ -501,8 +519,8 @@
     if (counts.size === 0) {
       for (const capture of captures) {
         const activity =
-          normalizeLabel(capture.primary_activity) ??
-          normalizeLabel(capture.extraction_status) ??
+          asString(capture.primary_activity) ??
+          asString(capture.extraction_status) ??
           'captured';
         counts.set(activity, (counts.get(activity) ?? 0) + 1);
       }
@@ -510,7 +528,7 @@
 
     if (counts.size === 0) {
       for (const topic of topics) {
-        const label = normalizeLabel(topic.topic);
+        const label = asString(topic.topic);
         if (!label) {
           continue;
         }
@@ -539,7 +557,7 @@
         continue;
       }
 
-      const date = normalizeLabel(asString(data.date)) ?? normalizeIsoDate(insight.window_start) ?? null;
+      const date = asString(data.date) ?? normalizeIsoDate(insight.window_start) ?? null;
       const totalActiveHours = asNumber(data.total_active_hours);
 
       if (!date || totalActiveHours === null) {
@@ -626,7 +644,7 @@
     for (const insight of insights) {
       const data = asRecord(insight.data);
       const date =
-        normalizeLabel(asString(data?.date)) ??
+        asString(data?.date) ??
         normalizeIsoDate(insight.window_start) ??
         normalizeIsoDate(insight.window_end);
 
@@ -737,15 +755,6 @@
     return days;
   }
 
-  function normalizeLabel(value: unknown): string | null {
-    if (typeof value !== 'string') {
-      return null;
-    }
-
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }
-
   function normalizeIsoDate(value: unknown): string | null {
     if (typeof value !== 'string') {
       return null;
@@ -829,135 +838,226 @@
   <title>Screencap · Stats</title>
 </svelte:head>
 
-<section class="stats" aria-busy={loading}>
-  <header class="stats__header">
-    <p class="stats__eyebrow">Telemetry Deck</p>
-    <h2>Ops pulse matrix</h2>
-    <p class="stats__summary">
-      Project allocation, app usage, activity distribution, heatmap intensity, and cost telemetry in one
-      range-controlled board.
-    </p>
+<section class="min-h-full overflow-auto bg-background p-6 font-sans text-on-surface md:p-8 lg:p-10" aria-busy={loading}>
+  <header class="mb-8 space-y-6">
+    <div>
+      <p class="mb-1 text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-on-surface-variant">Workspace Performance</p>
+      <h1 class="text-[2.25rem] font-semibold leading-tight tracking-tight text-on-surface">Stats</h1>
+      <p class="mt-2 max-w-[64ch] text-sm text-on-surface-variant">
+        Project allocation, app usage, activity distribution, heatmap intensity, and cost telemetry in one range-controlled
+        board.
+      </p>
+    </div>
 
-    <form class="stats__range" on:submit|preventDefault={applyDateRange}>
-      <label>
-        <span>From</span>
-        <input type="date" bind:value={fromDate} />
-      </label>
-      <label>
-        <span>To</span>
-        <input type="date" bind:value={toDate} />
-      </label>
-      <button type="submit">Apply</button>
-    </form>
+    <div class="flex flex-col gap-4 lg:flex-row lg:flex-wrap lg:items-end lg:justify-between">
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="rounded-full border border-outline-variant bg-surface-container-low px-4 py-2 text-[0.68rem] font-medium uppercase tracking-[0.12em] text-on-surface-variant transition hover:border-primary/40 hover:bg-surface-container-high"
+          on:click={() => setQuickRange(7)}
+        >
+          7D
+        </button>
+        <button
+          type="button"
+          class="rounded-full border border-outline-variant bg-surface-container-low px-4 py-2 text-[0.68rem] font-medium uppercase tracking-[0.12em] text-on-surface-variant transition hover:border-primary/40 hover:bg-surface-container-high"
+          on:click={() => setQuickRange(30)}
+        >
+          30D
+        </button>
+        <button
+          type="button"
+          class="rounded-full border border-outline-variant bg-surface-container-low px-4 py-2 text-[0.68rem] font-medium uppercase tracking-[0.12em] text-on-surface-variant transition hover:border-primary/40 hover:bg-surface-container-high"
+          on:click={() => setQuickRange(10000)}
+        >
+          All time
+        </button>
+      </div>
 
-    <div class="stats__quick-range">
-      <button type="button" on:click={() => setQuickRange(7)}>7D</button>
-      <button type="button" on:click={() => setQuickRange(30)}>30D</button>
-      <button type="button" on:click={() => setQuickRange(90)}>90D</button>
+      <form class="flex flex-wrap items-end gap-3" on:submit|preventDefault={applyDateRange}>
+        <label class="grid gap-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-on-surface-variant">
+          <span class="inline-flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant/80">calendar_today</span>
+            From
+          </span>
+          <input
+            type="date"
+            bind:value={fromDate}
+            class="rounded-2xl border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface shadow-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+        </label>
+        <label class="grid gap-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-on-surface-variant">
+          <span class="inline-flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px] text-on-surface-variant/80">event</span>
+            To
+          </span>
+          <input
+            type="date"
+            bind:value={toDate}
+            class="rounded-2xl border border-outline-variant bg-surface-container-lowest px-3 py-2 text-sm text-on-surface shadow-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+        </label>
+        <button
+          type="submit"
+          class="rounded-full bg-primary px-5 py-2.5 text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-on-primary shadow-sm transition hover:bg-primary-container"
+        >
+          Apply
+        </button>
+      </form>
     </div>
   </header>
 
   {#if errorMessage}
-    <p class="stats__error" role="status">{errorMessage}</p>
+    <p class="mb-6 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 px-4 py-3 text-sm text-amber-900 dark:text-amber-200" role="status">{errorMessage}</p>
   {/if}
 
-  <section class="stats__summary-grid">
-    <article class="stat-card">
-      <p>Total captures</p>
-      <strong>{stats.capture_count.toLocaleString()}</strong>
-      <small>{rangeCaptureCount.toLocaleString()} in selected range</small>
+  <section class="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <article class="flex flex-col gap-2 rounded-[24px] border border-outline/10 bg-surface-container-lowest p-5 shadow-sm">
+      <div class="flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <span class="material-symbols-outlined text-[18px] text-primary">photo_library</span>
+        Total captures
+      </div>
+      <p class="font-sans text-2xl font-semibold tracking-tight text-on-surface md:text-3xl">{stats.capture_count.toLocaleString()}</p>
+      <p class="text-[0.7rem] uppercase tracking-[0.08em] text-on-surface-variant">{rangeCaptureCount.toLocaleString()} in selected range</p>
     </article>
-    <article class="stat-card">
-      <p>Captured today</p>
-      <strong>{stats.captures_today.toLocaleString()}</strong>
-      <small>daemon uptime: {formatUptime(stats.uptime_secs)}</small>
+    <article class="flex flex-col gap-2 rounded-[24px] border border-outline/10 bg-surface-container-lowest p-5 shadow-sm">
+      <div class="flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <span class="material-symbols-outlined text-[18px] text-primary">today</span>
+        Today
+      </div>
+      <p class="font-sans text-2xl font-semibold tracking-tight text-on-surface md:text-3xl">{stats.captures_today.toLocaleString()}</p>
+      <p class="text-[0.7rem] uppercase tracking-[0.08em] text-on-surface-variant">uptime {formatUptime(stats.uptime_secs)}</p>
     </article>
-    <article class="stat-card">
-      <p>Storage used</p>
-      <strong>{formatBytes(stats.storage_bytes)}</strong>
-      <small>local screenshot + metadata footprint</small>
+    <article class="flex flex-col gap-2 rounded-[24px] border border-outline/10 bg-surface-container-lowest p-5 shadow-sm">
+      <div class="flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <span class="material-symbols-outlined text-[18px] text-primary">hard_drive</span>
+        Storage
+      </div>
+      <p class="font-sans text-2xl font-semibold tracking-tight text-on-surface md:text-3xl">{formatBytes(stats.storage_bytes)}</p>
+      <p class="text-[0.7rem] uppercase tracking-[0.08em] text-on-surface-variant">local footprint</p>
     </article>
-    <article class="stat-card">
-      <p>Token volume</p>
-      <strong>{costView.totalTokens.toLocaleString()}</strong>
-      <small>{formatCost(costView.totalCents)} total reported spend</small>
+    <article class="flex flex-col gap-2 rounded-[24px] border border-outline/10 bg-surface-container-lowest p-5 shadow-sm">
+      <div class="flex items-center gap-2 text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">
+        <span class="material-symbols-outlined text-[18px] text-primary">token</span>
+        Tokens
+      </div>
+      <p class="font-sans text-2xl font-semibold tracking-tight text-on-surface md:text-3xl">{costView.totalTokens.toLocaleString()}</p>
+      <p class="text-[0.7rem] uppercase tracking-[0.08em] text-on-surface-variant">{formatCost(costView.totalCents)} total spend</p>
     </article>
   </section>
 
-  <section class="stats__chart-grid">
-    <article class="panel-card">
-      <header>
-        <h3>Time per project</h3>
-        <p>capture count proxy</p>
+  <section class="mb-8 grid grid-cols-1 gap-6 xl:grid-cols-2">
+    <article class="flex flex-col gap-4 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10">
+      <header class="flex flex-wrap items-baseline justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[22px] text-on-surface-variant">bar_chart</span>
+          <div>
+            <h3 class="text-lg font-semibold text-on-surface">Time per project</h3>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">capture count proxy</p>
+          </div>
+        </div>
       </header>
-      <div class="chart-shell">
+      <div class="relative min-h-[15.4rem] overflow-hidden rounded-2xl bg-surface-container-low p-4">
         {#if loading}
-          <p class="panel-card__state">Loading project allocation…</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Loading project allocation…</p>
         {:else if projectSeries.length === 0}
-          <p class="panel-card__state">No project activity for this range.</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">No project activity for this range.</p>
         {:else}
-          <canvas bind:this={projectCanvas}></canvas>
+          <canvas class="max-h-[15rem] w-full" bind:this={projectCanvas}></canvas>
         {/if}
       </div>
     </article>
 
-    <article class="panel-card">
-      <header>
-        <h3>Time per app</h3>
-        <p>capture distribution</p>
+    <article class="flex flex-col gap-4 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10">
+      <header class="flex flex-wrap items-baseline justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[22px] text-on-surface-variant">donut_large</span>
+          <div>
+            <h3 class="text-lg font-semibold text-on-surface">Time per app</h3>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">capture distribution</p>
+          </div>
+        </div>
       </header>
-      <div class="chart-shell">
+      <div class="relative min-h-[15.4rem] overflow-hidden rounded-2xl bg-surface-container-low p-4">
         {#if loading}
-          <p class="panel-card__state">Loading app usage…</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Loading app usage…</p>
         {:else if appSeries.length === 0}
-          <p class="panel-card__state">No app captures for this range.</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">No app captures for this range.</p>
         {:else}
-          <canvas bind:this={appCanvas}></canvas>
+          <canvas class="max-h-[15rem] w-full" bind:this={appCanvas}></canvas>
         {/if}
       </div>
     </article>
 
-    <article class="panel-card">
-      <header>
-        <h3>Activity breakdown</h3>
-        <p>daily activity signatures</p>
+    <article class="flex flex-col gap-4 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10 xl:col-span-2">
+      <header class="flex flex-wrap items-baseline justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[22px] text-on-surface-variant">analytics</span>
+          <div>
+            <h3 class="text-lg font-semibold text-on-surface">Activity breakdown</h3>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">daily activity signatures</p>
+          </div>
+        </div>
       </header>
-      <div class="chart-shell chart-shell--wide">
+      <div class="relative min-h-[16.6rem] overflow-hidden rounded-2xl bg-surface-container-low p-4">
         {#if loading}
-          <p class="panel-card__state">Loading activity categories…</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Loading activity categories…</p>
         {:else if activitySeries.length === 0}
-          <p class="panel-card__state">No activity labels available for this range.</p>
+          <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">No activity labels available for this range.</p>
         {:else}
-          <canvas bind:this={activityCanvas}></canvas>
+          <canvas class="max-h-[16rem] w-full" bind:this={activityCanvas}></canvas>
         {/if}
       </div>
     </article>
   </section>
 
-  <section class="panel-card panel-card--heatmap">
-    <header>
-      <h3>Daily active hours heatmap</h3>
-      <p>GitHub-style cadence map</p>
+  <section class="mb-8 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10">
+    <header class="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-[22px] text-on-surface-variant">grid_view</span>
+        <div>
+          <h3 class="text-lg font-semibold text-on-surface">Daily active hours heatmap</h3>
+          <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">cadence map</p>
+        </div>
+      </div>
     </header>
 
     {#if loading}
-      <p class="panel-card__state">Rendering active-hours field…</p>
+      <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Rendering active-hours field…</p>
     {:else if heatmapSeries.length === 0}
-      <p class="panel-card__state">No daily activity available for this range.</p>
+      <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">No daily activity available for this range.</p>
     {:else}
-      <div class="heatmap-wrap">
-        <div class="heatmap-days" aria-hidden="true">
-          <span>Sun</span>
-          <span>Tue</span>
-          <span>Thu</span>
-          <span>Sat</span>
+      <div class="grid grid-cols-[auto_1fr] items-start gap-3">
+        <div class="grid grid-rows-7 gap-1 pt-0.5 text-[0.65rem] font-medium uppercase tracking-wide text-on-surface-variant" aria-hidden="true">
+          <span>S</span>
+          <span>M</span>
+          <span>T</span>
+          <span>W</span>
+          <span>T</span>
+          <span>F</span>
+          <span>S</span>
         </div>
-        <div class="heatmap-grid" role="img" aria-label="Daily active hours heatmap">
+        <div
+          class="grid grid-flow-col grid-rows-7 gap-1 overflow-x-auto pb-1 [grid-auto-columns:0.75rem]"
+          role="img"
+          aria-label="Daily active hours heatmap"
+        >
           {#each heatmapSlots as slot, index (`${slot?.date ?? 'pad'}-${index}`)}
             {#if slot}
-              <div class={`heatmap-cell level-${slot.level}`} title={slot.tooltip}></div>
+              <div
+                class="h-3 w-3 shrink-0 rounded-sm border border-outline-variant/40 {slot.level === 0
+                  ? 'bg-surface-container-high'
+                  : slot.level === 1
+                    ? 'bg-emerald-200 dark:bg-emerald-900'
+                    : slot.level === 2
+                      ? 'bg-emerald-400 dark:bg-emerald-600'
+                      : slot.level === 3
+                        ? 'bg-amber-400 dark:bg-amber-600'
+                        : 'bg-rose-400 dark:bg-rose-600'}"
+                title={slot.tooltip}
+              ></div>
             {:else}
-              <div class="heatmap-cell heatmap-cell--blank" aria-hidden="true"></div>
+              <div class="h-3 w-3 shrink-0 rounded-sm border border-outline-variant/20 bg-surface-container-low/50" aria-hidden="true"></div>
             {/if}
           {/each}
         </div>
@@ -965,67 +1065,77 @@
     {/if}
   </section>
 
-  <section class="stats__cost-grid">
-    <article class="panel-card">
-      <header>
-        <h3>Cost tracking</h3>
-        <p>reported model cost</p>
+  <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    <article class="flex flex-col gap-4 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10">
+      <header class="flex flex-wrap items-baseline justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[22px] text-on-surface-variant">payments</span>
+          <div>
+            <h3 class="text-lg font-semibold text-on-surface">Cost tracking</h3>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">reported model cost</p>
+          </div>
+        </div>
       </header>
 
       {#if loading}
-        <p class="panel-card__state">Loading cost telemetry…</p>
+        <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Loading cost telemetry…</p>
       {:else}
-        <dl class="cost-metrics">
-          <div>
-            <dt>Total cost</dt>
-            <dd>{formatCost(costView.totalCents)}</dd>
+        <dl class="grid grid-cols-2 gap-3">
+          <div class="rounded-2xl border border-outline/10 bg-surface-container-low p-3">
+            <dt class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Total cost</dt>
+            <dd class="mt-1 font-sans text-lg font-semibold text-on-surface">{formatCost(costView.totalCents)}</dd>
           </div>
-          <div>
-            <dt>Avg / day</dt>
-            <dd>{formatCost(costView.perDayCents)}</dd>
+          <div class="rounded-2xl border border-outline/10 bg-surface-container-low p-3">
+            <dt class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Avg / day</dt>
+            <dd class="mt-1 font-sans text-lg font-semibold text-on-surface">{formatCost(costView.perDayCents)}</dd>
           </div>
-          <div>
-            <dt>Current month</dt>
-            <dd>{formatCost(costView.monthCents)}</dd>
+          <div class="rounded-2xl border border-outline/10 bg-surface-container-low p-3">
+            <dt class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Current month</dt>
+            <dd class="mt-1 font-sans text-lg font-semibold text-on-surface">{formatCost(costView.monthCents)}</dd>
           </div>
-          <div>
-            <dt>Tokens used</dt>
-            <dd>{costView.totalTokens.toLocaleString()}</dd>
+          <div class="rounded-2xl border border-outline/10 bg-surface-container-low p-3">
+            <dt class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Tokens used</dt>
+            <dd class="mt-1 font-sans text-lg font-semibold text-on-surface">{costView.totalTokens.toLocaleString()}</dd>
           </div>
         </dl>
 
-        <div class="cost-split">
-          <article>
-            <p>Extraction</p>
-            <strong>{formatCost(costView.extractionCents)}</strong>
-            <small>{costView.extractionTokens.toLocaleString()} tokens</small>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <article class="rounded-2xl border border-outline/10 bg-surface-container-low p-4">
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Extraction</p>
+            <p class="mt-1 font-sans text-lg font-semibold text-on-surface">{formatCost(costView.extractionCents)}</p>
+            <p class="mt-1 text-[0.65rem] uppercase tracking-[0.08em] text-on-surface-variant">{costView.extractionTokens.toLocaleString()} tokens</p>
           </article>
-          <article>
-            <p>Synthesis</p>
-            <strong>{formatCost(costView.synthesisCents)}</strong>
-            <small>{costView.synthesisTokens.toLocaleString()} tokens</small>
+          <article class="rounded-2xl border border-outline/10 bg-surface-container-low p-4">
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">Synthesis</p>
+            <p class="mt-1 font-sans text-lg font-semibold text-on-surface">{formatCost(costView.synthesisCents)}</p>
+            <p class="mt-1 text-[0.65rem] uppercase tracking-[0.08em] text-on-surface-variant">{costView.synthesisTokens.toLocaleString()} tokens</p>
           </article>
         </div>
       {/if}
     </article>
 
-    <article class="panel-card">
-      <header>
-        <h3>Cost by day</h3>
-        <p>rolling daily spend</p>
+    <article class="flex flex-col gap-4 rounded-[24px] bg-surface-container-lowest p-6 shadow-sm ring-1 ring-outline/10">
+      <header class="flex flex-wrap items-baseline justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-[22px] text-on-surface-variant">calendar_month</span>
+          <div>
+            <h3 class="text-lg font-semibold text-on-surface">Cost by day</h3>
+            <p class="text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-on-surface-variant">rolling daily spend</p>
+          </div>
+        </div>
       </header>
 
       {#if loading}
-        <p class="panel-card__state">Loading daily cost points…</p>
+        <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">Loading daily cost points…</p>
       {:else if costView.byDay.length === 0}
-        <p class="panel-card__state">No reported cost points in this range.</p>
+        <p class="rounded-xl border border-dashed border-outline/30 bg-surface-container px-4 py-3 text-sm text-on-surface-variant">No reported cost points in this range.</p>
       {:else}
-        <ul class="cost-day-list">
+        <ul class="divide-y divide-outline/15 rounded-2xl border border-outline/10 bg-surface-container-low overflow-hidden">
           {#each costView.byDay.slice(-8).reverse() as point (point.date)}
-            <li>
-              <span>{formatDateLabel(point.date)}</span>
-              <strong>{formatCost(point.cents)}</strong>
-              <small>{point.tokens.toLocaleString()} tokens</small>
+            <li class="flex flex-wrap items-baseline justify-between gap-3 px-4 py-3">
+              <span class="text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-on-surface-variant">{formatDateLabel(point.date)}</span>
+              <span class="font-sans text-base font-semibold text-on-surface">{formatCost(point.cents)}</span>
+              <span class="w-full text-right text-[0.65rem] uppercase tracking-[0.08em] text-on-surface-variant sm:w-auto sm:text-left">{point.tokens.toLocaleString()} tokens</span>
             </li>
           {/each}
         </ul>
@@ -1033,361 +1143,3 @@
     </article>
   </section>
 </section>
-
-<style>
-  .stats {
-    height: 100%;
-    overflow: auto;
-    padding: clamp(1.1rem, 2.5vw, 2rem);
-    display: grid;
-    align-content: start;
-    gap: 0.9rem;
-    background:
-      radial-gradient(circle at 10% 8%, rgb(112 255 227 / 18%), transparent 30%),
-      radial-gradient(circle at 90% 14%, rgb(255 78 166 / 14%), transparent 34%),
-      linear-gradient(150deg, rgb(23 28 42 / 96%), rgb(10 13 21 / 98%));
-  }
-
-  .stats__header {
-    display: grid;
-    gap: 0.55rem;
-  }
-
-  .stats__eyebrow {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.22em;
-    color: var(--pulse);
-  }
-
-  h2 {
-    font-size: clamp(1.95rem, 4.2vw, 3.3rem);
-  }
-
-  .stats__summary {
-    color: var(--paper-200);
-    font-size: 0.88rem;
-    max-width: 64ch;
-  }
-
-  .stats__range {
-    width: fit-content;
-    display: grid;
-    grid-template-columns: repeat(3, auto);
-    gap: 0.5rem;
-    align-items: end;
-  }
-
-  .stats__range label {
-    display: grid;
-    gap: 0.2rem;
-    font-size: 0.69rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .stats__range input,
-  .stats__range button,
-  .stats__quick-range button {
-    border: 1px solid rgb(246 241 231 / 32%);
-    border-radius: 0.62rem;
-    background: rgb(11 15 23 / 68%);
-    color: var(--paper-100);
-    font: inherit;
-    padding: 0.45rem 0.56rem;
-  }
-
-  .stats__range button,
-  .stats__quick-range button {
-    cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-size: 0.68rem;
-    transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
-  }
-
-  .stats__range button:hover,
-  .stats__range button:focus-visible,
-  .stats__quick-range button:hover,
-  .stats__quick-range button:focus-visible {
-    transform: translate(0.14rem, -0.14rem);
-    border-color: var(--pulse);
-    box-shadow: 0.28rem 0.28rem 0 rgb(112 255 227 / 26%);
-    outline: none;
-  }
-
-  .stats__quick-range {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.42rem;
-  }
-
-  .stats__error {
-    border: 1px solid rgb(255 179 71 / 34%);
-    border-radius: 0.8rem;
-    background: rgb(255 179 71 / 12%);
-    padding: 0.68rem 0.85rem;
-    color: var(--paper-200);
-    font-size: 0.84rem;
-  }
-
-  .stats__summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.64rem;
-  }
-
-  .stat-card {
-    border: 1px solid rgb(246 241 231 / 32%);
-    border-radius: 0.9rem;
-    background: linear-gradient(165deg, rgb(13 17 28 / 90%), rgb(10 13 20 / 64%));
-    padding: 0.82rem;
-    display: grid;
-    gap: 0.34rem;
-  }
-
-  .stat-card p,
-  .stat-card small {
-    color: var(--paper-200);
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.11em;
-  }
-
-  .stat-card strong {
-    font-family: var(--display-font);
-    font-size: clamp(1.2rem, 2.4vw, 2rem);
-    letter-spacing: 0.03em;
-  }
-
-  .stats__chart-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.68rem;
-  }
-
-  .panel-card {
-    border: 1px solid rgb(246 241 231 / 30%);
-    border-radius: 1rem;
-    background: rgb(9 12 20 / 72%);
-    padding: 0.86rem;
-    display: grid;
-    gap: 0.66rem;
-    align-content: start;
-  }
-
-  .panel-card header {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.6rem;
-    align-items: baseline;
-  }
-
-  h3 {
-    font-size: clamp(1rem, 2.1vw, 1.45rem);
-  }
-
-  .panel-card header p {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .chart-shell {
-    min-height: 15.4rem;
-    position: relative;
-  }
-
-  .chart-shell--wide {
-    min-height: 16.6rem;
-  }
-
-  .panel-card__state {
-    border: 1px dashed rgb(246 241 231 / 24%);
-    border-radius: 0.8rem;
-    background: rgb(8 11 18 / 62%);
-    color: var(--paper-200);
-    font-size: 0.84rem;
-    padding: 0.72rem 0.84rem;
-  }
-
-  .panel-card--heatmap {
-    gap: 0.78rem;
-  }
-
-  .heatmap-wrap {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.56rem;
-    align-items: start;
-  }
-
-  .heatmap-days {
-    display: grid;
-    grid-template-rows: repeat(4, 1fr);
-    gap: 0.26rem;
-    color: var(--paper-200);
-    font-size: 0.64rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding-top: 0.06rem;
-  }
-
-  .heatmap-grid {
-    display: grid;
-    grid-auto-flow: column;
-    grid-template-rows: repeat(7, 0.76rem);
-    grid-auto-columns: 0.76rem;
-    gap: 0.2rem;
-    overflow-x: auto;
-    padding-bottom: 0.15rem;
-  }
-
-  .heatmap-cell {
-    border-radius: 0.14rem;
-    border: 1px solid rgb(246 241 231 / 12%);
-    background: rgb(11 14 22 / 84%);
-  }
-
-  .heatmap-cell.level-1 {
-    background: rgb(112 255 227 / 28%);
-    border-color: rgb(112 255 227 / 40%);
-  }
-
-  .heatmap-cell.level-2 {
-    background: rgb(112 255 227 / 46%);
-    border-color: rgb(112 255 227 / 58%);
-  }
-
-  .heatmap-cell.level-3 {
-    background: rgb(255 179 71 / 52%);
-    border-color: rgb(255 179 71 / 66%);
-  }
-
-  .heatmap-cell.level-4 {
-    background: rgb(255 78 166 / 58%);
-    border-color: rgb(255 78 166 / 70%);
-  }
-
-  .heatmap-cell--blank {
-    opacity: 0.22;
-  }
-
-  .stats__cost-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-    gap: 0.68rem;
-  }
-
-  .cost-metrics {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem;
-    margin: 0;
-  }
-
-  .cost-metrics div {
-    border: 1px solid rgb(246 241 231 / 18%);
-    border-radius: 0.68rem;
-    background: rgb(13 16 27 / 58%);
-    padding: 0.55rem;
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .cost-metrics dt {
-    color: var(--paper-200);
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-
-  .cost-metrics dd {
-    margin: 0;
-    font-family: var(--display-font);
-    font-size: 1.08rem;
-  }
-
-  .cost-split {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem;
-  }
-
-  .cost-split article {
-    border: 1px solid rgb(246 241 231 / 18%);
-    border-radius: 0.68rem;
-    background: linear-gradient(160deg, rgb(112 255 227 / 12%), rgb(255 78 166 / 8%));
-    padding: 0.56rem;
-    display: grid;
-    gap: 0.2rem;
-  }
-
-  .cost-split p,
-  .cost-split small {
-    color: var(--paper-200);
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-
-  .cost-split strong {
-    font-family: var(--display-font);
-    font-size: 1.02rem;
-  }
-
-  .cost-day-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 0.38rem;
-  }
-
-  .cost-day-list li {
-    border: 1px solid rgb(246 241 231 / 18%);
-    border-radius: 0.68rem;
-    background: rgb(12 16 25 / 56%);
-    padding: 0.52rem 0.56rem;
-    display: grid;
-    grid-template-columns: auto auto 1fr;
-    gap: 0.56rem;
-    align-items: baseline;
-  }
-
-  .cost-day-list span,
-  .cost-day-list small {
-    color: var(--paper-200);
-    font-size: 0.69rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-
-  .cost-day-list strong {
-    font-family: var(--display-font);
-    font-size: 0.95rem;
-  }
-
-  @media (width <= 1080px) {
-    .stats__summary-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .stats__cost-grid {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  @media (width <= 880px) {
-    .stats__chart-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .stats__range {
-      grid-template-columns: 1fr;
-      width: 100%;
-    }
-  }
-</style>

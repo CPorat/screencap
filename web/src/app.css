@@ -1,88 +1,165 @@
-@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Chakra+Petch:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
 
-:root {
-  --ink-950: #06070c;
-  --ink-900: #0f111b;
-  --ink-800: #191c2a;
-  --paper-100: #f6f1e7;
-  --paper-200: #f0e8db;
-  --pulse: #70ffe3;
-  --surge: #ff4ea6;
-  --ember: #ffb347;
-  --shadow-hard: 0.8rem 0.8rem 0 #080a10;
-  --radius-card: 1.05rem;
-  --display-font: 'Archivo Black', sans-serif;
-  --body-font: 'Chakra Petch', sans-serif;
+@theme {
+  --font-family-sans: 'Inter', system-ui, -apple-system, sans-serif;
+
+  --color-background: #f9f9fb;
+  --color-surface: #f9f9fb;
+  --color-surface-bright: #f9f9fb;
+  --color-surface-dim: #d9dadc;
+  --color-surface-container: #eeeef0;
+  --color-surface-container-low: #f3f3f5;
+  --color-surface-container-high: #e8e8ea;
+  --color-surface-container-highest: #e2e2e4;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-variant: #e2e2e4;
+  --color-surface-tint: #005bc1;
+
+  --color-primary: #0058bc;
+  --color-primary-container: #0070eb;
+  --color-primary-fixed: #d8e2ff;
+  --color-primary-fixed-dim: #adc6ff;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #fefcff;
+  --color-on-primary-fixed: #001a41;
+  --color-on-primary-fixed-variant: #004493;
+  --color-inverse-primary: #adc6ff;
+
+  --color-secondary: #5d5e63;
+  --color-secondary-container: #e0dfe4;
+  --color-secondary-fixed: #e3e2e7;
+  --color-secondary-fixed-dim: #c6c6cb;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-container: #626267;
+  --color-on-secondary-fixed: #1a1b1f;
+  --color-on-secondary-fixed-variant: #46464b;
+
+  --color-tertiary: #8a2bb9;
+  --color-tertiary-container: #a649d5;
+  --color-tertiary-fixed: #f6d9ff;
+  --color-tertiary-fixed-dim: #e8b3ff;
+  --color-on-tertiary: #ffffff;
+  --color-on-tertiary-container: #fffbff;
+  --color-on-tertiary-fixed: #310048;
+  --color-on-tertiary-fixed-variant: #7201a2;
+
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-on-error: #ffffff;
+  --color-on-error-container: #93000a;
+
+  --color-on-background: #1a1c1d;
+  --color-on-surface: #1a1c1d;
+  --color-on-surface-variant: #414755;
+  --color-inverse-surface: #2f3132;
+  --color-inverse-on-surface: #f0f0f2;
+  --color-outline: #717786;
+  --color-outline-variant: #c1c6d7;
+
+  --radius-DEFAULT: 0.25rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
 }
 
-* {
-  box-sizing: border-box;
+@layer base {
+  html, body {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: var(--color-on-surface);
+    background: var(--color-background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::selection {
+    background: var(--color-primary-fixed);
+    color: var(--color-primary);
+  }
+
+  .dark {
+    --color-background: #020617;
+    --color-surface: #020617;
+    --color-surface-bright: #1e293b;
+    --color-surface-dim: #0f172a;
+    --color-surface-container: #0f172a;
+    --color-surface-container-low: #0f172a;
+    --color-surface-container-high: #1e293b;
+    --color-surface-container-highest: #334155;
+    --color-surface-container-lowest: #0f172a;
+    --color-surface-variant: #1e293b;
+    --color-surface-tint: #3b82f6;
+
+    --color-primary: #3b82f6;
+    --color-primary-container: #0070eb;
+    --color-primary-fixed: #1e293b;
+    --color-primary-fixed-dim: #adc6ff;
+    --color-on-primary: #ffffff;
+    --color-on-primary-container: #fefcff;
+
+    --color-secondary: #94a3b8;
+    --color-secondary-container: #334155;
+
+    --color-error: #ef4444;
+    --color-error-container: #7f1d1d;
+
+    --color-on-background: #f1f5f9;
+    --color-on-surface: #f1f5f9;
+    --color-on-surface-variant: #94a3b8;
+    --color-outline: #475569;
+    --color-outline-variant: #334155;
+
+    color-scheme: dark;
+  }
 }
 
-html,
-body {
-  margin: 0;
-  min-height: 100%;
-}
+@layer utilities {
+  .glass-sidebar {
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+  }
 
-body {
-  font-family: var(--body-font);
-  color: var(--paper-100);
-  line-height: 1.45;
-  letter-spacing: 0.02em;
-  background:
-    radial-gradient(circle at 15% 15%, rgb(112 255 227 / 14%), transparent 28%),
-    radial-gradient(circle at 85% 80%, rgb(255 78 166 / 12%), transparent 30%),
-    linear-gradient(140deg, var(--ink-950), var(--ink-900) 52%, #090a11);
-}
+  .glass-header {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
 
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  opacity: 0.22;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgb(255 255 255 / 8%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 8%) 1px, transparent 1px);
-  background-size: 52px 52px;
-  mask-image: radial-gradient(circle at center, black 35%, transparent 90%);
-}
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 
-h1,
-h2,
-h3,
-h4 {
-  margin: 0;
-  font-family: var(--display-font);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  line-height: 0.98;
-}
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--color-surface-container-highest);
+    border-radius: 10px;
+  }
 
-p {
-  margin: 0;
-}
-
-a {
-  color: inherit;
-}
-
-a:focus-visible {
-  outline: 2px solid var(--pulse);
-  outline-offset: 2px;
-}
-
-::selection {
-  background: var(--pulse);
-  color: #101218;
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;

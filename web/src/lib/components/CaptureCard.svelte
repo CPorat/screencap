@@ -42,121 +42,52 @@
     capture.narrative?.trim() ||
     capture.batch_narrative?.trim() ||
     'No extraction description available.';
-
+  $: activityType = extraction?.activity_type?.trim() || null;
   $: screenshotSrc = imageFailed ? null : buildScreenshotSrc();
 </script>
 
-<button class="capture-card" type="button" on:click={openDetails} aria-label={`Open capture from ${timeLabel}`}>
-  <div class="capture-card__thumb-wrap">
+<button
+  class="group bg-surface-container-lowest rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-outline/10 hover:-translate-y-1 text-left w-full cursor-pointer"
+  type="button"
+  on:click={openDetails}
+  aria-label={`Open capture from ${timeLabel}`}
+>
+  <div class="aspect-video relative overflow-hidden bg-surface-container-high">
     {#if screenshotSrc}
       <img
-        class="capture-card__thumb"
+        class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         src={screenshotSrc}
         alt={`Capture from ${appLabel} at ${timeLabel}`}
         loading="lazy"
-        on:error={() => {
-          imageFailed = true;
-        }}
+        on:error={() => { imageFailed = true; }}
       />
     {:else}
-      <div class="capture-card__thumb capture-card__thumb--fallback" role="img" aria-label="Screenshot unavailable">
-        Unavailable
+      <div class="w-full h-full flex items-center justify-center text-on-surface-variant text-xs uppercase tracking-widest font-bold">
+        No preview
       </div>
     {/if}
+    <div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
+      <span class="bg-surface-container-lowest/90 backdrop-blur text-on-surface rounded-lg px-3 py-1.5 text-xs font-bold flex items-center gap-1">
+        <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span> Preview
+      </span>
+    </div>
   </div>
 
-  <div class="capture-card__meta">
-    <p class="capture-card__app" title={appLabel}>{appLabel}</p>
-    <time class="capture-card__time" datetime={capture.timestamp}>{timeLabel}</time>
-  </div>
+  <div class="p-4">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[10px] font-bold text-on-surface-variant tracking-wider uppercase">{appLabel}</span>
+      {#if activityType}
+        <span class="px-2 py-0.5 bg-primary-fixed text-primary rounded text-[10px] font-bold">{activityType}</span>
+      {/if}
+    </div>
 
-  <p class="capture-card__description" title={description}>{description}</p>
+    <p class="text-sm font-semibold text-on-surface mb-1 truncate italic">"{description}"</p>
+
+    <div class="mt-3 flex items-center justify-between text-[10px] font-medium text-on-surface-variant">
+      <time datetime={capture.timestamp}>{timeLabel}</time>
+      {#if capture.window_title?.trim()}
+        <span class="truncate ml-2 max-w-[50%]">{capture.window_title}</span>
+      {/if}
+    </div>
+  </div>
 </button>
-
-<style>
-  .capture-card {
-    all: unset;
-    display: grid;
-    gap: 0.62rem;
-    padding: 0.72rem;
-    border-radius: 0.9rem;
-    border: 1px solid rgb(246 241 231 / 34%);
-    background:
-      linear-gradient(145deg, rgb(48 55 78 / 78%), rgb(14 17 26 / 96%)),
-      radial-gradient(circle at 20% 10%, rgb(255 179 71 / 18%), transparent 42%);
-    box-shadow: 0.3rem 0.3rem 0 rgb(8 10 16 / 90%);
-    cursor: pointer;
-    min-width: 0;
-    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
-  }
-
-  .capture-card:hover,
-  .capture-card:focus-visible {
-    transform: translate(-0.05rem, -0.05rem);
-    border-color: var(--pulse);
-    box-shadow: 0.4rem 0.4rem 0 rgb(8 10 16 / 94%);
-    outline: none;
-  }
-
-  .capture-card__thumb-wrap {
-    border-radius: 0.72rem;
-    overflow: hidden;
-    border: 1px solid rgb(246 241 231 / 24%);
-  }
-
-  .capture-card__thumb {
-    width: 100%;
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-    display: block;
-    background: rgb(7 9 14 / 92%);
-  }
-
-  .capture-card__thumb--fallback {
-    display: grid;
-    place-content: center;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: rgb(240 232 219 / 76%);
-  }
-
-  .capture-card__meta {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    align-items: baseline;
-    min-width: 0;
-  }
-
-  .capture-card__app {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-100);
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .capture-card__time {
-    font-family: var(--display-font);
-    font-size: 0.88rem;
-    color: var(--pulse);
-    flex-shrink: 0;
-  }
-
-  .capture-card__description {
-    margin: 0;
-    font-size: 0.82rem;
-    line-height: 1.34;
-    color: var(--paper-200);
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    text-overflow: ellipsis;
-    min-height: 2.2em;
-  }
-</style>

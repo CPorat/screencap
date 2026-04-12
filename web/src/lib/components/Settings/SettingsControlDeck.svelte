@@ -13,7 +13,7 @@
     {
       label: 'Export daily summary',
       command: 'screencap export --date $(date +%F)',
-      detail: 'Generates markdown output for today’s synthesis and prints to stdout.',
+      detail: 'Generates markdown output for today\'s synthesis and prints to stdout.',
     },
   ] as const;
 
@@ -151,413 +151,170 @@
   }
 </script>
 
-<section class="deck" aria-busy={loading || refreshing}>
-  <header class="deck__header">
+<div class="space-y-8" aria-busy={loading || refreshing}>
+  <!-- Page Header -->
+  <div class="flex items-end justify-between">
     <div>
-      <p class="deck__eyebrow">Operations</p>
-      <h2>Settings command deck</h2>
-      <p class="deck__summary">
-        Live daemon telemetry from <code>/api/health</code> and <code>/api/stats</code>, plus quick
-        maintenance commands.
-      </p>
+      <h1 class="text-[2.25rem] font-semibold tracking-tight text-on-surface">Settings</h1>
+      <p class="text-secondary text-sm">Daemon telemetry and maintenance</p>
     </div>
-
     <button
-      class="deck__refresh"
       type="button"
+      class="px-6 py-2.5 bg-primary text-white rounded-xl font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-wait flex items-center gap-2"
       disabled={refreshing}
       on:click={() => void refreshState(false)}
     >
-      {refreshing ? 'Refreshing…' : 'Refresh signal'}
+      <span class="material-symbols-outlined text-sm">refresh</span>
+      {refreshing ? 'Refreshing...' : 'Refresh'}
     </button>
-  </header>
-
-  {#if !loading && !daemonOnline}
-    <aside class="deck__offline" role="status" aria-live="polite">
-      <strong>Daemon disconnected</strong>
-      <p>
-        <code>/api/health</code> is unreachable. Start the daemon with <code>screencap start</code> and
-        refresh this view.
-      </p>
-    </aside>
-  {/if}
-
-  <div class="stats-grid">
-    <article class="metric">
-      <p>Status</p>
-      <strong class:offline={!daemonOnline}>{daemonOnline ? 'Online' : 'Offline'}</strong>
-      <small>Health: {health.status}</small>
-    </article>
-
-    <article class="metric">
-      <p>Total storage</p>
-      <strong>{storageUsed}</strong>
-      <small>{stats.storage_bytes.toLocaleString()} bytes on disk</small>
-    </article>
-
-    <article class="metric">
-      <p>Active time today</p>
-      <strong>{activeToday}</strong>
-      <small>Daemon online window since local midnight</small>
-    </article>
-
-    <article class="metric">
-      <p>Daemon uptime</p>
-      <strong>{daemonUptime}</strong>
-      <small>Last updated {formatLastUpdated(lastUpdated)}</small>
-    </article>
   </div>
 
-  <div class="detail-grid">
-    <article class="detail-card">
-      <header>
-        <h3>Edit config.toml</h3>
-        <p>Applied at daemon start</p>
-      </header>
+  <!-- Daemon Offline Banner -->
+  {#if !loading && !daemonOnline}
+    <div class="bg-red-50 dark:bg-red-950/50 rounded-[24px] p-6 flex items-start gap-4" role="status" aria-live="polite">
+      <div class="bg-red-100 dark:bg-red-900/50 p-2 rounded-xl">
+        <span class="material-symbols-outlined text-red-600 dark:text-red-400">warning</span>
+      </div>
+      <div>
+        <h3 class="text-sm font-bold text-red-900 dark:text-red-200">Daemon disconnected</h3>
+        <p class="text-sm text-red-700 dark:text-red-300 mt-1">
+          <code class="bg-red-100 dark:bg-red-900/50 px-1.5 py-0.5 rounded text-xs font-mono">/api/health</code> is unreachable.
+          Start the daemon with <code class="bg-red-100 dark:bg-red-900/50 px-1.5 py-0.5 rounded text-xs font-mono">screencap start</code> and refresh this view.
+        </p>
+      </div>
+    </div>
+  {/if}
 
-      <ol>
-        <li>Open <code>{CONFIG_PATH}</code> in your editor.</li>
-        <li>Adjust capture cadence, exclusions, provider keys, or retention limits.</li>
-        <li>Restart daemon so new values are loaded.</li>
+  <!-- Status Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 rounded-xl {daemonOnline ? 'bg-emerald-50 dark:bg-emerald-950' : 'bg-red-50 dark:bg-red-950'}">
+          <span class="material-symbols-outlined text-lg {daemonOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}" style="font-variation-settings: 'FILL' 1;">
+            {daemonOnline ? 'check_circle' : 'cancel'}
+          </span>
+        </div>
+        <span class="text-[10px] font-bold text-secondary uppercase tracking-widest">Status</span>
+      </div>
+      <div class="text-2xl font-bold {daemonOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">{daemonOnline ? 'Online' : 'Offline'}</div>
+      <p class="text-[11px] text-on-surface-variant mt-1">Health: {health.status}</p>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 rounded-xl bg-blue-50 dark:bg-blue-950">
+          <span class="material-symbols-outlined text-lg text-blue-600 dark:text-blue-400">hard_drive</span>
+        </div>
+        <span class="text-[10px] font-bold text-secondary uppercase tracking-widest">Storage</span>
+      </div>
+      <div class="text-2xl font-bold text-on-surface">{storageUsed}</div>
+      <p class="text-[11px] text-on-surface-variant mt-1">{stats.storage_bytes.toLocaleString()} bytes on disk</p>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 rounded-xl bg-amber-50 dark:bg-amber-950">
+          <span class="material-symbols-outlined text-lg text-amber-600 dark:text-amber-400">schedule</span>
+        </div>
+        <span class="text-[10px] font-bold text-secondary uppercase tracking-widest">Active Today</span>
+      </div>
+      <div class="text-2xl font-bold text-on-surface">{activeToday}</div>
+      <p class="text-[11px] text-on-surface-variant mt-1">Since local midnight</p>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 rounded-xl bg-purple-50 dark:bg-purple-950">
+          <span class="material-symbols-outlined text-lg text-purple-600 dark:text-purple-400">timer</span>
+        </div>
+        <span class="text-[10px] font-bold text-secondary uppercase tracking-widest">Uptime</span>
+      </div>
+      <div class="text-2xl font-bold text-on-surface">{daemonUptime}</div>
+      <p class="text-[11px] text-on-surface-variant mt-1">Last updated {formatLastUpdated(lastUpdated)}</p>
+    </div>
+  </div>
+
+  <!-- Config & CLI -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Config -->
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center justify-between mb-6">
+        <div class="flex items-center gap-3">
+          <span class="material-symbols-outlined text-primary">settings</span>
+          <h2 class="text-sm font-bold uppercase tracking-widest text-on-surface">Configuration</h2>
+        </div>
+        <span class="text-[10px] text-secondary font-bold">Applied at daemon start</span>
+      </div>
+
+      <ol class="space-y-4 text-sm text-on-surface-variant">
+        <li class="flex items-start gap-3">
+          <span class="bg-primary text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full shrink-0 mt-0.5">1</span>
+          <span>Open <code class="bg-surface-container-low px-1.5 py-0.5 rounded text-xs font-mono text-primary">{CONFIG_PATH}</code> in your editor.</span>
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="bg-primary text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full shrink-0 mt-0.5">2</span>
+          <span>Adjust capture cadence, exclusions, provider keys, or retention limits.</span>
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="bg-primary text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full shrink-0 mt-0.5">3</span>
+          <span>Restart daemon so new values are loaded.</span>
+        </li>
       </ol>
 
-      <div class="detail-card__commands">
-        <code>open -e {CONFIG_PATH}</code>
-        <code>screencap stop && screencap start</code>
+      <div class="mt-6 space-y-2">
+        <code class="block bg-surface-container-low px-4 py-3 rounded-xl text-xs font-mono text-on-surface-variant">open -e {CONFIG_PATH}</code>
+        <code class="block bg-surface-container-low px-4 py-3 rounded-xl text-xs font-mono text-on-surface-variant">screencap stop && screencap start</code>
       </div>
-    </article>
+    </div>
 
-    <article class="detail-card detail-card--commands">
-      <header>
-        <h3>CLI maintenance</h3>
-        <p>Operational shortcuts</p>
-      </header>
+    <!-- CLI Maintenance -->
+    <div class="bg-surface-container-lowest rounded-[24px] p-6">
+      <div class="flex items-center gap-3 mb-6">
+        <span class="material-symbols-outlined text-primary">terminal</span>
+        <h2 class="text-sm font-bold uppercase tracking-widest text-on-surface">CLI Maintenance</h2>
+      </div>
 
-      <ul>
+      <div class="space-y-4">
         {#each CLI_COMMANDS as item}
-          <li>
-            <div>
-              <strong>{item.label}</strong>
-              <p>{item.detail}</p>
-              <code>{item.command}</code>
+          <div class="bg-surface-container-low rounded-2xl p-4">
+            <div class="flex items-start justify-between mb-2">
+              <div>
+                <h3 class="text-sm font-bold text-on-surface">{item.label}</h3>
+                <p class="text-xs text-on-surface-variant mt-1">{item.detail}</p>
+              </div>
+              <button
+                type="button"
+                class="px-3 py-1.5 bg-surface-container-lowest text-primary rounded-lg text-xs font-bold hover:bg-primary hover:text-white transition-colors shrink-0 ml-4"
+                on:click={() => void copyCommand(item.command)}
+              >
+                Copy
+              </button>
             </div>
-            <button type="button" on:click={() => void copyCommand(item.command)}>Copy</button>
-          </li>
+            <code class="block bg-surface-container-lowest px-3 py-2 rounded-lg text-xs font-mono text-on-surface-variant mt-3">{item.command}</code>
+          </div>
         {/each}
-      </ul>
-    </article>
+      </div>
+    </div>
   </div>
 
-  <footer class="deck__footer">
-    <p>
-      Captures today <strong>{stats.captures_today.toLocaleString()}</strong>
-    </p>
-    <p>
-      Lifetime captures <strong>{stats.capture_count.toLocaleString()}</strong>
-    </p>
-  </footer>
+  <!-- Footer Stats -->
+  <div class="bg-surface-container-low rounded-[24px] px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-primary text-[18px]">photo_camera</span>
+      <span class="text-xs font-bold text-secondary uppercase tracking-wider">Captures today</span>
+      <span class="text-sm font-bold text-on-surface ml-1">{stats.captures_today.toLocaleString()}</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined text-primary text-[18px]">database</span>
+      <span class="text-xs font-bold text-secondary uppercase tracking-wider">Lifetime captures</span>
+      <span class="text-sm font-bold text-on-surface ml-1">{stats.capture_count.toLocaleString()}</span>
+    </div>
+  </div>
 
+  <!-- Copy Notice -->
   {#if copyNotice}
-    <p class="copy-notice" role="status" aria-live="polite">{copyNotice}</p>
+    <div class="fixed bottom-6 right-6 bg-primary text-white px-4 py-2 rounded-xl text-xs font-bold shadow-xl z-50" role="status" aria-live="polite">
+      {copyNotice}
+    </div>
   {/if}
-</section>
-
-<style>
-  .deck {
-    height: 100%;
-    padding: clamp(1.15rem, 2.5vw, 2rem);
-    display: grid;
-    align-content: start;
-    gap: 0.92rem;
-    overflow: auto;
-    background:
-      radial-gradient(circle at 8% 16%, rgb(255 179 71 / 14%), transparent 34%),
-      radial-gradient(circle at 90% 10%, rgb(112 255 227 / 18%), transparent 36%),
-      linear-gradient(152deg, rgb(25 30 45 / 96%), rgb(10 13 22 / 97%));
-  }
-
-  .deck__header {
-    display: flex;
-    justify-content: space-between;
-    align-items: start;
-    gap: 1rem;
-  }
-
-  .deck__eyebrow {
-    font-size: 0.69rem;
-    letter-spacing: 0.24em;
-    text-transform: uppercase;
-    color: var(--ember);
-  }
-
-  h2 {
-    font-size: clamp(1.9rem, 4vw, 3rem);
-    margin-top: 0.28rem;
-  }
-
-  .deck__summary {
-    margin-top: 0.44rem;
-    color: var(--paper-200);
-    font-size: 0.86rem;
-    max-width: 58ch;
-  }
-
-  .deck__summary code {
-    font-size: 0.74rem;
-  }
-
-  .deck__refresh {
-    border: 1px solid rgb(246 241 231 / 44%);
-    border-radius: 999px;
-    background: linear-gradient(130deg, rgb(112 255 227 / 26%), rgb(255 179 71 / 28%));
-    color: #0e1421;
-    font-family: var(--body-font);
-    font-size: 0.74rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    font-weight: 700;
-    padding: 0.56rem 1rem;
-    cursor: pointer;
-    transition: transform 180ms ease, box-shadow 180ms ease;
-  }
-
-  .deck__refresh:hover,
-  .deck__refresh:focus-visible {
-    transform: translate(0.14rem, -0.14rem);
-    box-shadow: 0.3rem 0.3rem 0 rgb(17 21 33 / 72%);
-    outline: none;
-  }
-
-  .deck__refresh:disabled {
-    cursor: wait;
-    opacity: 0.7;
-    transform: none;
-    box-shadow: none;
-  }
-
-  .deck__offline {
-    border: 1px solid rgb(255 78 166 / 62%);
-    border-radius: 0.95rem;
-    background: linear-gradient(140deg, rgb(82 18 46 / 62%), rgb(46 13 27 / 55%));
-    padding: 0.75rem 0.9rem;
-    display: grid;
-    gap: 0.25rem;
-  }
-
-  .deck__offline strong {
-    display: block;
-    font-size: 0.9rem;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-  }
-
-  .deck__offline p {
-    color: var(--paper-200);
-    font-size: 0.84rem;
-  }
-
-  .stats-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.72rem;
-  }
-
-  .metric {
-    border: 1px solid rgb(246 241 231 / 34%);
-    border-radius: 0.95rem;
-    background: linear-gradient(154deg, rgb(10 14 24 / 84%), rgb(14 19 31 / 70%));
-    padding: 0.84rem;
-    display: grid;
-    gap: 0.42rem;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 4%);
-  }
-
-  .metric p,
-  .metric small {
-    margin: 0;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .metric strong {
-    font-family: var(--display-font);
-    font-size: clamp(1.28rem, 2.7vw, 2rem);
-    letter-spacing: 0.03em;
-  }
-
-  .metric strong.offline {
-    color: var(--surge);
-  }
-
-  .detail-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr);
-    gap: 0.72rem;
-  }
-
-  .detail-card {
-    border: 1px solid rgb(246 241 231 / 32%);
-    border-radius: 0.95rem;
-    background: rgb(6 9 17 / 65%);
-    padding: 0.95rem;
-    display: grid;
-    gap: 0.78rem;
-  }
-
-  .detail-card header {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    align-items: baseline;
-  }
-
-  h3 {
-    font-size: clamp(1rem, 2.2vw, 1.45rem);
-  }
-
-  .detail-card header p {
-    color: var(--paper-200);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.11em;
-  }
-
-  .detail-card ol {
-    margin: 0;
-    padding-left: 1.1rem;
-    display: grid;
-    gap: 0.45rem;
-    color: var(--paper-200);
-    font-size: 0.86rem;
-  }
-
-  .detail-card__commands {
-    display: grid;
-    gap: 0.42rem;
-  }
-
-  code {
-    border: 1px solid rgb(246 241 231 / 24%);
-    border-radius: 0.52rem;
-    background: rgb(9 13 22 / 82%);
-    color: var(--pulse);
-    padding: 0.36rem 0.48rem;
-    font-size: 0.73rem;
-    font-family: 'SFMono-Regular', Consolas, monospace;
-    overflow-x: auto;
-  }
-
-  .detail-card--commands ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 0.62rem;
-  }
-
-  .detail-card--commands li {
-    border: 1px solid rgb(246 241 231 / 20%);
-    border-radius: 0.82rem;
-    padding: 0.7rem;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.72rem;
-    align-items: start;
-    background: rgb(11 16 27 / 58%);
-  }
-
-  .detail-card--commands strong {
-    display: block;
-    font-size: 0.77rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-  }
-
-  .detail-card--commands p {
-    margin: 0.35rem 0;
-    color: var(--paper-200);
-    font-size: 0.82rem;
-  }
-
-  .detail-card--commands button {
-    align-self: center;
-    border: 1px solid rgb(246 241 231 / 46%);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--paper-100);
-    padding: 0.38rem 0.8rem;
-    font-family: var(--body-font);
-    font-size: 0.68rem;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: border-color 160ms ease, color 160ms ease, transform 160ms ease;
-  }
-
-  .detail-card--commands button:hover,
-  .detail-card--commands button:focus-visible {
-    border-color: var(--pulse);
-    color: var(--pulse);
-    transform: translateY(-1px);
-    outline: none;
-  }
-
-  .deck__footer {
-    border: 1px solid rgb(246 241 231 / 24%);
-    border-radius: 0.85rem;
-    background: rgb(8 11 19 / 62%);
-    padding: 0.68rem 0.82rem;
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
-    color: var(--paper-200);
-  }
-
-  .deck__footer strong {
-    font-size: 0.92rem;
-    color: var(--paper-100);
-  }
-
-  .copy-notice {
-    position: sticky;
-    bottom: 0.4rem;
-    justify-self: end;
-    border: 1px solid rgb(112 255 227 / 58%);
-    border-radius: 999px;
-    padding: 0.34rem 0.75rem;
-    background: rgb(11 19 25 / 88%);
-    color: var(--pulse);
-    font-size: 0.72rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  @media (max-width: 1080px) {
-    .stats-grid,
-    .detail-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  @media (max-width: 760px) {
-    .deck__header {
-      flex-direction: column;
-    }
-
-    .stats-grid,
-    .detail-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .detail-card--commands li,
-    .deck__footer {
-      grid-template-columns: 1fr;
-      display: grid;
-    }
-  }
-</style>
+</div>

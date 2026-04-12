@@ -71,228 +71,54 @@
 </script>
 
 <button
-  class="search-result"
-  class:search-result--static={!interactive}
+  class="group bg-surface-container-lowest rounded-2xl overflow-hidden transition-all duration-300 hover:shadow-2xl hover:shadow-outline/10 hover:-translate-y-1 text-left w-full {interactive ? 'cursor-pointer' : 'cursor-default'}"
   type="button"
   disabled={!interactive}
   on:click={openDetails}
   aria-label={interactive ? `Open search result ${position}` : `Search result ${position}`}
 >
-  <div class="search-result__thumb-wrap">
+  <div class="aspect-video relative overflow-hidden bg-surface-container-high">
     {#if screenshotSrc}
       <img
-        class="search-result__thumb"
+        class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         src={screenshotSrc}
-        alt={`Screenshot from ${appLabel} at ${timestampLabel}` }
+        alt={`Screenshot from ${appLabel} at ${timestampLabel}`}
         loading="lazy"
-        on:error={() => {
-          imageFailed = true;
-        }}
+        on:error={() => { imageFailed = true; }}
       />
     {:else}
-      <div class="search-result__thumb search-result__thumb--fallback" role="img" aria-label="Screenshot unavailable">
+      <div class="w-full h-full flex items-center justify-center text-on-surface-variant text-xs uppercase tracking-widest font-bold">
         {sourceLabel}
+      </div>
+    {/if}
+    {#if interactive}
+      <div class="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
+        <span class="bg-surface-container-lowest/90 backdrop-blur text-on-surface rounded-lg px-3 py-1.5 text-xs font-bold flex items-center gap-1">
+          <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span> Preview
+        </span>
       </div>
     {/if}
   </div>
 
-  <div class="search-result__meta">
-    <p class="search-result__rank">#{position}</p>
-    <p class="search-result__time">{timestampLabel}</p>
+  <div class="p-4">
+    <div class="flex items-start justify-between mb-2">
+      <span class="text-[10px] font-bold text-on-surface-variant tracking-wider uppercase">{appLabel}</span>
+      <span class="px-2 py-0.5 bg-primary-fixed text-primary rounded text-[10px] font-bold">{activityLabel}</span>
+    </div>
+
+    <p class="text-sm font-semibold text-on-surface mb-1 line-clamp-2 italic">"{descriptionLabel}"</p>
+
+    {#if topics.length > 0}
+      <div class="flex flex-wrap gap-1.5 mt-2 mb-2">
+        {#each topics.slice(0, 4) as topic (topic)}
+          <span class="px-2 py-0.5 bg-surface-container-low text-on-surface-variant rounded-full text-[10px] font-medium">{topic}</span>
+        {/each}
+      </div>
+    {/if}
+
+    <div class="mt-3 flex items-center justify-between text-[10px] font-medium text-on-surface-variant">
+      <time datetime={result.timestamp}>{timestampLabel}</time>
+      <span>{projectLabel}</span>
+    </div>
   </div>
-
-  <div class="search-result__headline">
-    <p class="search-result__source">{sourceLabel}</p>
-    <h3 class="search-result__summary" title={descriptionLabel}>{descriptionLabel}</h3>
-  </div>
-
-  <dl class="search-result__facts">
-    <div>
-      <dt>App</dt>
-      <dd>{appLabel}</dd>
-    </div>
-    <div>
-      <dt>Project</dt>
-      <dd>{projectLabel}</dd>
-    </div>
-    <div>
-      <dt>Activity</dt>
-      <dd>{activityLabel}</dd>
-    </div>
-  </dl>
-
-  {#if topics.length > 0}
-    <div class="search-result__topics" aria-label="Topics">
-      {#each topics.slice(0, 6) as topic (topic)}
-        <span>{topic}</span>
-      {/each}
-    </div>
-  {/if}
 </button>
-
-<style>
-  .search-result {
-    all: unset;
-    display: grid;
-    gap: 0.68rem;
-    border: 1px solid rgb(246 241 231 / 30%);
-    border-radius: 0.95rem;
-    background:
-      linear-gradient(162deg, rgb(72 84 120 / 38%), rgb(17 21 31 / 94%)),
-      radial-gradient(circle at 12% 8%, rgb(112 255 227 / 12%), transparent 46%);
-    padding: 0.9rem;
-    box-shadow: 0.34rem 0.34rem 0 rgb(8 10 16 / 88%);
-    min-width: 0;
-    cursor: pointer;
-    transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
-  }
-
-  .search-result:hover,
-  .search-result:focus-visible {
-    transform: translate(-0.08rem, -0.08rem);
-    box-shadow: 0.42rem 0.42rem 0 rgb(8 10 16 / 92%);
-    border-color: rgb(246 241 231 / 48%);
-    outline: none;
-  }
-
-  .search-result--static {
-    cursor: default;
-  }
-
-  .search-result--static:hover,
-  .search-result--static:focus-visible {
-    transform: none;
-    box-shadow: 0.34rem 0.34rem 0 rgb(8 10 16 / 88%);
-    border-color: rgb(246 241 231 / 30%);
-  }
-
-  .search-result__thumb-wrap {
-    border-radius: 0.72rem;
-    overflow: hidden;
-    border: 1px solid rgb(246 241 231 / 28%);
-  }
-
-  .search-result__thumb {
-    width: 100%;
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-    background: rgb(8 9 14 / 86%);
-    display: block;
-  }
-
-  .search-result__thumb--fallback {
-    display: grid;
-    place-content: center;
-    min-height: 7.8rem;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-    background: rgb(8 9 14 / 54%);
-    text-align: center;
-    padding: 0.8rem;
-  }
-
-  .search-result__meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.5rem;
-  }
-
-  .search-result__rank {
-    font-size: 0.68rem;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--pulse);
-  }
-
-  .search-result__time {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--paper-200);
-  }
-
-  .search-result__headline {
-    display: grid;
-    gap: 0.32rem;
-  }
-
-  .search-result__source {
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: var(--surge);
-  }
-
-  .search-result__summary {
-    margin: 0;
-    font-size: 1rem;
-    letter-spacing: 0.03em;
-    line-height: 1.2;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    line-clamp: 3;
-    text-overflow: ellipsis;
-  }
-
-  .search-result__facts {
-    margin: 0;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.45rem;
-  }
-
-  .search-result__facts div {
-    min-width: 0;
-    display: grid;
-    gap: 0.14rem;
-  }
-
-  .search-result__facts dt {
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    color: var(--paper-200);
-  }
-
-  .search-result__facts dd {
-    margin: 0;
-    font-size: 0.74rem;
-    line-height: 1.32;
-    color: var(--paper-100);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .search-result__topics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.36rem;
-  }
-
-  .search-result__topics span {
-    padding: 0.28rem 0.52rem;
-    border-radius: 999px;
-    border: 1px solid rgb(112 255 227 / 42%);
-    background: rgb(112 255 227 / 8%);
-    font-size: 0.64rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--paper-100);
-  }
-
-  @media (width <= 760px) {
-    .search-result__facts {
-      grid-template-columns: 1fr;
-    }
-
-    .search-result__facts dd {
-      white-space: normal;
-    }
-  }
-</style>

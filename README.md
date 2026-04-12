@@ -23,12 +23,25 @@ The capture layer is offline-only: it writes screenshots plus window metadata to
 - Xcode Command Line Tools / Swift toolchain
 - Node.js and npm for building the embedded web UI
 
-## Build instructions
-
-### Debug build
+## Quick start
 
 ```bash
-cargo build
+make help          # list all available commands
+make run           # build everything and start the daemon
+make web-dev       # start the Svelte dev server (hot-reload)
+```
+
+Typical development uses two terminals:
+
+1. `make dev` — runs the Rust daemon (API on `localhost:7878`)
+2. `make web-dev` — runs the Svelte dev server (`localhost:5173`, proxies `/api` to the daemon)
+
+## Build instructions
+
+### Full build (web + Rust)
+
+```bash
+make build
 ```
 
 `build.rs` compiles the Swift bridge and builds the embedded web UI from `web/`.
@@ -39,20 +52,14 @@ cargo build
 cargo build --release
 ```
 
-### Web-only checks
+### Checks and tests
 
 ```bash
-cd web
-npm run check
-npm run build
-```
-
-### Rust quality checks
-
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --features mock-capture
-cd web && npm run check
+make test          # Rust tests (mock-capture, no screen recording needed)
+make lint          # clippy
+make web-check     # Svelte/TypeScript type-check
+make check         # all of the above
+make ci            # CI pipeline (lint + test + web-check)
 ```
 
 Use `--features mock-capture` as the default CI path when Screen Recording or Accessibility permissions are unavailable. The mock path generates synthetic JPEGs and fake window metadata so the integration tests still exercise the real pipeline shape.
@@ -141,7 +148,8 @@ Notes:
 ### Foreground daemon
 
 ```bash
-cargo run
+make run           # build + run
+make dev           # run without rebuilding web
 ```
 
 Running without a subcommand starts the daemon in the foreground.
@@ -149,43 +157,42 @@ Running without a subcommand starts the daemon in the foreground.
 ### Background daemon
 
 ```bash
-cargo run -- start
-cargo run -- status
-cargo run -- stop
+screencap start
+screencap status
+screencap stop
 ```
+
+(Or use `cargo run --` in place of `screencap` if you haven't installed the binary.)
 
 ### LaunchAgent install/uninstall
 
 ```bash
-cargo run -- start --install
-cargo run -- stop --uninstall
+screencap start --install
+screencap stop --uninstall
 ```
 
 ## CLI usage examples
 
-These commands are implemented by the current CLI surface:
-
 ```bash
-cargo run -- now
-cargo run -- today
-cargo run -- yesterday
-cargo run -- week
-cargo run -- search "jwt refresh" --project screencap --last 7d
-cargo run -- projects --last 7d
-cargo run -- ask "What was I working on this afternoon?" --last 4h
-cargo run -- costs
-cargo run -- prune --older-than 30d
-cargo run -- export --date 2026-04-11 --output ~/Desktop/2026-04-11.md
-cargo run -- export --last 7d --output ~/Desktop/screencap-exports/
-cargo run -- pause
-cargo run -- resume
-cargo run -- mcp
+screencap now
+screencap today
+screencap yesterday
+screencap week
+screencap search "jwt refresh" --project screencap --last 7d
+screencap projects --last 7d
+screencap ask "What was I working on this afternoon?" --last 4h
+screencap costs
+screencap prune --older-than 30d
+screencap export --date 2026-04-11 --output ~/Desktop/2026-04-11.md
+screencap export --last 7d --output ~/Desktop/screencap-exports/
+screencap pause
+screencap resume
+screencap config
+screencap mcp
 ```
 
-To see the installed CLI help text:
-
 ```bash
-cargo run -- --help
+screencap --help
 ```
 
 ## Web UI

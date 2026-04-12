@@ -284,6 +284,11 @@ fn swift_runtime_dirs(swiftc_path: &Path) -> Vec<PathBuf> {
         }
     }
 
+    let system_swift = Path::new("/usr/lib/swift");
+    if system_swift.is_dir() {
+        return vec![system_swift.to_path_buf()];
+    }
+
     let mut runtime_dirs = command_line_tools_runtime_dirs();
     runtime_dirs.retain(|path| path.join("libswift_Concurrency.dylib").exists());
     runtime_dirs.sort();

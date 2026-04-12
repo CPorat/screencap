@@ -1868,6 +1868,36 @@ fn initialize_connection(conn: &Connection) -> Result<()> {
         .context("failed to enable sqlite WAL mode")?;
     conn.execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
+    migrate_insights_fts_schema(conn)?;
+    Ok(())
+}
+
+fn migrate_insights_fts_schema(conn: &Connection) -> Result<()> {
+    let has_insight_id: bool = conn
+        .prepare("SELECT insight_id FROM insights_fts LIMIT 0")
+        .is_ok();
+    if has_insight_id {
+        return Ok(());
+    }
+
+    tracing::info!("migrating insights_fts to standalone schema with insight_id column");
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS insights_fts;
+         CREATE VIRTUAL TABLE insights_fts USING fts5(insight_id UNINDEXED, narrative);",
+    )
+    .context("failed to recreate insights_fts with insight_id column")?;
+
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM insights", [], |row| row.get(0))
+        .unwrap_or(0);
+    if count > 0 {
+        conn.execute(
+            "INSERT INTO insights_fts (insight_id, narrative) SELECT id, narrative FROM insights",
+            [],
+        )
+        .context("failed to backfill insights_fts after migration")?;
+    }
+
     Ok(())
 }
 

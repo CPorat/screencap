@@ -838,14 +838,15 @@ fn normalize_analysis_query(
     let query = trim_to_option(query);
     let prompt = trim_to_option(prompt);
 
-    match (query, prompt) {
-        (Some(query), Some(prompt)) if query != prompt => Err(ApiError::bad_request(
-            "provide either `query` or `prompt`, not both",
-        )),
-        (Some(query), Some(_)) | (Some(query), None) => Ok(Some(query)),
-        (None, Some(prompt)) => Ok(Some(prompt)),
-        (None, None) => Ok(None),
+    if let (Some(query_value), Some(prompt_value)) = (&query, &prompt) {
+        if query_value != prompt_value {
+            return Err(ApiError::bad_request(
+                "provide either `query` or `prompt`, not both",
+            ));
+        }
     }
+
+    Ok(query.or(prompt))
 }
 
 fn map_analysis_error(error: anyhow::Error) -> ApiError {
@@ -929,12 +930,12 @@ fn parse_query_params<T>(raw: Option<&str>, invalid_message: &'static str) -> Re
 where
     T: DeserializeOwned + Default,
 {
-    match raw {
-        None | Some("") => Ok(T::default()),
-        Some(raw) => {
+    raw.filter(|raw| !raw.is_empty())
+        .map(|raw| {
             serde_urlencoded::from_str(raw).map_err(|_| ApiError::bad_request(invalid_message))
-        }
-    }
+        })
+        .transpose()
+        .map(|parsed| parsed.unwrap_or_default())
 }
 
 fn parse_optional_timestamp(
@@ -991,12 +992,10 @@ fn validate_timestamp_range(
     from: Option<&DateTime<Utc>>,
     to: Option<&DateTime<Utc>>,
 ) -> Result<(), ApiError> {
-    if let (Some(from), Some(to)) = (from, to) {
-        if from > to {
-            return Err(ApiError::bad_request(
-                "`from` must be less than or equal to `to`",
-            ));
-        }
+    if from.zip(to).is_some_and(|(from, to)| from > to) {
+        return Err(ApiError::bad_request(
+            "`from` must be less than or equal to `to`",
+        ));
     }
 
     Ok(())
@@ -1004,12 +1003,8 @@ fn validate_timestamp_range(
 
 fn trim_to_option(raw: Option<String>) -> Option<String> {
     raw.and_then(|value| {
-        let value = value.trim();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value.to_owned())
-        }
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
 }
 
@@ -1101,15 +1096,14 @@ fn screenshot_url_from_path(state: &ApiState, screenshot_path: &str) -> Option<S
 }
 
 fn map_screenshot_io_error(path: &str, error: std::io::Error) -> ApiError {
-    match error.kind() {
-        std::io::ErrorKind::NotFound => {
-            ApiError::not_found(format!("screenshot `{path}` was not found"))
-        }
-        _ => match error.raw_os_error() {
-            Some(code) if code == libc::ELOOP || code == libc::ENOTDIR => {
-                ApiError::not_found(format!("screenshot `{path}` was not found"))
-            }
-            _ => ApiError::internal(error.into()),
-        },
+    if matches!(error.kind(), std::io::ErrorKind::NotFound)
+        || matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ELOOP || code == libc::ENOTDIR
+        )
+    {
+        ApiError::not_found(format!("screenshot `{path}` was not found"))
+    } else {
+        ApiError::internal(error.into())
     }
 }

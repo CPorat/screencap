@@ -649,12 +649,8 @@ fn parse_lookback_window(raw: &str) -> Result<ChronoDuration> {
 
 fn trim_to_option(raw: Option<String>) -> Option<String> {
     raw.and_then(|value| {
-        let value = value.trim();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value.to_owned())
-        }
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
 }
 
@@ -821,11 +817,9 @@ fn print_search_results(query: &str, search_query: &SearchQuery, results: &[Sear
                         .as_deref()
                         .unwrap_or("no description available")
                 );
+                println!("   source: extraction");
                 if let Some(app_name) = capture.app_name.as_deref() {
-                    println!("   source: extraction");
                     println!("   app: {app_name}");
-                } else {
-                    println!("   source: extraction");
                 }
                 if let Some(window_title) = capture.window_title.as_deref() {
                     println!("   window: {window_title}");

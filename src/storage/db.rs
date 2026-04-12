@@ -181,7 +181,7 @@ impl StorageDb {
         let path = path.as_ref().to_path_buf();
         match fs::symlink_metadata(&path) {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if is_not_found_error(&error) => return Ok(None),
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!("failed to stat sqlite database at {}", path.display())
@@ -1402,33 +1402,21 @@ impl StorageDb {
         for stored_path in screenshot_paths {
             let full_path = resolve_screenshot_path(&stored_path, storage_root);
 
-            match fs::metadata(&full_path) {
-                Ok(metadata) => {
-                    bytes_reclaimed = bytes_reclaimed.saturating_add(metadata.len());
-                }
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to read metadata for pruned screenshot file {}",
-                            full_path.display()
-                        )
-                    })
-                }
+            if let Some(file_size) = file_len_if_exists(&full_path).with_context(|| {
+                format!(
+                    "failed to read metadata for pruned screenshot file {}",
+                    full_path.display()
+                )
+            })? {
+                bytes_reclaimed = bytes_reclaimed.saturating_add(file_size);
             }
 
-            match fs::remove_file(&full_path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to delete pruned screenshot file {}",
-                            full_path.display()
-                        )
-                    })
-                }
-            }
+            remove_file_if_exists(&full_path).with_context(|| {
+                format!(
+                    "failed to delete pruned screenshot file {}",
+                    full_path.display()
+                )
+            })?;
         }
 
         let tx = self
@@ -1782,35 +1770,39 @@ fn fuse_search_hits(
         .into_iter()
         .take(limit)
         .enumerate()
-        .map(|(rank, candidate)| match candidate.hit {
-            SearchHit::Extraction {
-                timestamp,
-                capture,
-                extraction,
-                batch_narrative,
-                ..
-            } => SearchHit::Extraction {
-                timestamp,
-                rank: rank as f64,
-                capture,
-                extraction,
-                batch_narrative,
-            },
-            SearchHit::Insight {
-                timestamp,
-                primary_project,
-                primary_activity_type,
-                insight,
-                ..
-            } => SearchHit::Insight {
-                timestamp,
-                rank: rank as f64,
-                primary_project,
-                primary_activity_type,
-                insight,
-            },
-        })
+        .map(|(rank, candidate)| with_search_rank(candidate.hit, rank as f64))
         .collect()
+}
+
+fn with_search_rank(hit: SearchHit, rank: f64) -> SearchHit {
+    match hit {
+        SearchHit::Extraction {
+            timestamp,
+            capture,
+            extraction,
+            batch_narrative,
+            ..
+        } => SearchHit::Extraction {
+            timestamp,
+            rank,
+            capture,
+            extraction,
+            batch_narrative,
+        },
+        SearchHit::Insight {
+            timestamp,
+            primary_project,
+            primary_activity_type,
+            insight,
+            ..
+        } => SearchHit::Insight {
+            timestamp,
+            rank,
+            primary_project,
+            primary_activity_type,
+            insight,
+        },
+    }
 }
 
 fn resolve_screenshot_path(raw_path: &str, storage_root: Option<&Path>) -> PathBuf {
@@ -1840,6 +1832,26 @@ fn resolve_screenshot_path(raw_path: &str, storage_root: Option<&Path>) -> PathB
     }
 
     candidate
+}
+
+fn is_not_found_error(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::NotFound
+}
+
+fn file_len_if_exists(path: &Path) -> std::io::Result<Option<u64>> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata.len())),
+        Err(error) if is_not_found_error(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if is_not_found_error(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn configure_connection(conn: &Connection) -> Result<()> {

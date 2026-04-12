@@ -27,14 +27,7 @@ fn is_api_path(path: &str) -> bool {
 }
 
 fn serve_asset_path(path: &str) -> Response {
-    let normalized_path = path.trim_start_matches('/');
-    let requested_path = if normalized_path.is_empty() {
-        "index.html"
-    } else {
-        normalized_path
-    };
-
-    embedded_asset(requested_path)
+    embedded_asset(normalized_asset_path(path))
         .or_else(|| embedded_asset("index.html"))
         .unwrap_or_else(|| {
             (
@@ -43,6 +36,15 @@ fn serve_asset_path(path: &str) -> Response {
             )
                 .into_response()
         })
+}
+
+fn normalized_asset_path(path: &str) -> &str {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        "index.html"
+    } else {
+        path
+    }
 }
 
 fn embedded_asset(path: &str) -> Option<Response> {

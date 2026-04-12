@@ -271,7 +271,7 @@ fn uninstall_launch_agent_at_home(home: &Path) -> Result<bool> {
     let launch_agent_path = AppConfig::launch_agent_path(home);
     match fs::remove_file(&launch_agent_path) {
         Ok(()) => Ok(true),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) if is_not_found_error(&err) => Ok(false),
         Err(err) => Err(err).with_context(|| {
             format!(
                 "failed to remove launch agent plist at {}",
@@ -285,7 +285,7 @@ fn launch_agent_installed_at_home(home: &Path) -> Result<bool> {
     let launch_agent_path = AppConfig::launch_agent_path(home);
     match fs::metadata(&launch_agent_path) {
         Ok(metadata) => Ok(metadata.is_file()),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) if is_not_found_error(&err) => Ok(false),
         Err(err) => Err(err).with_context(|| {
             format!(
                 "failed to inspect launch agent plist at {}",
@@ -786,11 +786,10 @@ fn status_at_home(config: &AppConfig, home: &Path) -> Result<DaemonStatus> {
         .unwrap_or(0);
 
     Ok(DaemonStatus {
-        state: if active.is_some() {
-            DaemonState::Running
-        } else {
-            DaemonState::Stopped
-        },
+        state: active
+            .as_ref()
+            .map(|_| DaemonState::Running)
+            .unwrap_or(DaemonState::Stopped),
         pid: active.as_ref().map(|record| record.pid),
         uptime_secs,
         captures_today: status_metrics.captures_today,
@@ -912,10 +911,14 @@ fn runtime_home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME environment variable is not set"))
 }
 
+fn is_not_found_error(error: &std::io::Error) -> bool {
+    error.kind() == ErrorKind::NotFound
+}
+
 fn read_pid_record(path: &Path) -> Result<Option<PidRecord>> {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) if is_not_found_error(&err) => return Ok(None),
         Err(err) => {
             return Err(err)
                 .with_context(|| format!("failed to read pid file at {}", path.display()))
@@ -951,7 +954,7 @@ fn remove_pid_file_if_matches(path: &Path, record: &PidRecord) -> Result<()> {
 
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) if is_not_found_error(&err) => Ok(()),
         Err(err) => {
             Err(err).with_context(|| format!("failed to remove pid file at {}", path.display()))
         }
@@ -1250,7 +1253,7 @@ fn cleanup_files(paths: &[PathBuf]) {
     for path in paths {
         match fs::remove_file(path) {
             Ok(()) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) if is_not_found_error(&err) => {}
             Err(err) => {
                 debug!(path = %path.display(), error = %err, "failed to clean up screenshot")
             }

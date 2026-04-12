@@ -207,7 +207,7 @@ function isSearchApiResponse(value: unknown): value is SearchApiResponse {
     return false;
   }
 
-  return Array.isArray(value.results) && value.results.every((result) => isSearchApiHit(result));
+  return Array.isArray(value.results) && value.results.every(isSearchApiHit);
 }
 
 function isSemanticSearchReference(value: unknown): value is SemanticSearchReference {
@@ -233,15 +233,22 @@ function isSemanticSearchApiResponse(value: unknown): value is SemanticSearchApi
 }
 
 function normalizeLimit(limit: number | undefined): number {
-  if (limit === undefined) {
-    return DEFAULT_LIMIT;
-  }
-
-  if (!Number.isFinite(limit)) {
+  if (limit === undefined || !Number.isFinite(limit)) {
     return DEFAULT_LIMIT;
   }
 
   return Math.max(1, Math.min(MAX_LIMIT, Math.trunc(limit)));
+}
+
+function setTrimmedParam(
+  params: URLSearchParams,
+  key: string,
+  value: string | null | undefined
+): void {
+  const trimmed = value?.trim();
+  if (trimmed) {
+    params.set(key, trimmed);
+  }
 }
 
 function normalizeHit(hit: SearchApiHit): SearchResultBase {
@@ -325,25 +332,11 @@ export async function searchCaptures(
     limit: String(normalizeLimit(request.limit)),
   });
 
-  if (request.app?.trim()) {
-    params.set('app', request.app.trim());
-  }
-
-  if (request.project?.trim()) {
-    params.set('project', request.project.trim());
-  }
-
-  if (request.activityType?.trim()) {
-    params.set('activity_type', request.activityType.trim());
-  }
-
-  if (request.from?.trim()) {
-    params.set('from', request.from.trim());
-  }
-
-  if (request.to?.trim()) {
-    params.set('to', request.to.trim());
-  }
+  setTrimmedParam(params, 'app', request.app);
+  setTrimmedParam(params, 'project', request.project);
+  setTrimmedParam(params, 'activity_type', request.activityType);
+  setTrimmedParam(params, 'from', request.from);
+  setTrimmedParam(params, 'to', request.to);
 
   const response = await fetch(`/api/search?${params.toString()}`, {
     headers: {
@@ -395,13 +388,8 @@ export async function searchSemanticCaptures(
     limit: String(normalizeLimit(request.limit)),
   });
 
-  if (request.from?.trim()) {
-    params.set('from', request.from.trim());
-  }
-
-  if (request.to?.trim()) {
-    params.set('to', request.to.trim());
-  }
+  setTrimmedParam(params, 'from', request.from);
+  setTrimmedParam(params, 'to', request.to);
 
   const response = await fetch(`/api/search/semantic?${params.toString()}`, {
     headers: {
@@ -472,9 +460,7 @@ function isProjectsResponse(value: unknown): value is ProjectsResponse {
 
 export async function listProjectFilters(from: string | null): Promise<string[]> {
   const params = new URLSearchParams();
-  if (from) {
-    params.set('from', from);
-  }
+  setTrimmedParam(params, 'from', from);
 
   const response = await fetch(`/api/insights/projects?${params.toString()}`, {
     headers: {

@@ -14,14 +14,7 @@ pub async fn serve(uri: Uri) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let requested_path = uri.path().trim_start_matches('/');
-    let asset_path = if requested_path.is_empty() {
-        "index.html"
-    } else {
-        requested_path
-    };
-
-    embedded_asset(asset_path)
+    embedded_asset(normalized_asset_path(uri.path()))
         .or_else(|| embedded_asset("index.html"))
         .unwrap_or_else(|| {
             (
@@ -30,6 +23,15 @@ pub async fn serve(uri: Uri) -> Response {
             )
                 .into_response()
         })
+}
+
+fn normalized_asset_path(path: &str) -> &str {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        "index.html"
+    } else {
+        path
+    }
 }
 
 fn embedded_asset(path: &str) -> Option<Response> {

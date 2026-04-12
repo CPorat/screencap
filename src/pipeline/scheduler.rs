@@ -191,7 +191,10 @@ impl ExtractionScheduler {
             }
         };
 
-        let parsed = match parse_and_validate_response(captures, &response.content) {
+        let parsed = match parse_extraction_response(&response.content).and_then(|parsed| {
+            validate_response_matches_requested(captures, &parsed)?;
+            Ok(parsed)
+        }) {
             Ok(parsed) => parsed,
             Err(error) => {
                 let failed_batch = self.failed_batch_record(captures, &response)?;
@@ -298,15 +301,6 @@ fn build_batch_record(
     })
 }
 
-fn parse_and_validate_response(
-    captures: &[Capture],
-    raw_response: &str,
-) -> Result<ExtractionResult> {
-    let parsed = parse_extraction_response(raw_response)?;
-    validate_response_matches_requested(captures, &parsed)?;
-    Ok(parsed)
-}
-
 fn validate_response_matches_requested(
     captures: &[Capture],
     parsed: &ExtractionResult,
@@ -374,12 +368,9 @@ fn load_capture_images(captures: &[Capture]) -> Result<Vec<ImageInput>> {
 }
 
 fn capture_window(captures: &[Capture]) -> Result<(chrono::DateTime<Utc>, chrono::DateTime<Utc>)> {
-    let first = captures
-        .first()
-        .context("cannot build extraction batch from an empty capture list")?;
-    let last = captures
-        .last()
-        .context("cannot build extraction batch from an empty capture list")?;
+    let Some((first, last)) = captures.first().zip(captures.last()) else {
+        bail!("cannot build extraction batch from an empty capture list");
+    };
     Ok((first.timestamp, last.timestamp))
 }
 

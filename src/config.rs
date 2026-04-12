@@ -256,7 +256,7 @@ impl Default for ExtractionConfig {
             enabled: true,
             interval_secs: 600,
             provider: AiProvider::Openrouter,
-            model: "google/gemini-2.0-flash".into(),
+            model: "google/gemini-2.5-flash".into(),
             api_key_env: "OPENROUTER_API_KEY".into(),
             base_url: String::new(),
             max_images_per_batch: 8,

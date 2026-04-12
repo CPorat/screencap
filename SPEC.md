@@ -529,7 +529,7 @@ All providers implement a single `LlmProvider` trait with two methods: `complete
 
 - **`openai_compat`** — A single HTTP client that speaks the OpenAI chat completions API format. This covers **three providers** with just a different `base_url`:
   - **OpenAI**: `https://api.openai.com/v1`
-  - **OpenRouter**: `https://openrouter.ai/api/v1` — the recommended default. One API key gives access to every major model (Gemini, Claude, GPT, Llama, Mistral). Model IDs use the `provider/model` format (e.g., `google/gemini-2.0-flash`). OpenRouter handles rate limits, fallback, and cost tracking on their end.
+  - **OpenRouter**: `https://openrouter.ai/api/v1` — the recommended default. One API key gives access to every major model (Gemini, Claude, GPT, Llama, Mistral). Model IDs use the `provider/model` format (e.g., `google/gemini-2.5-flash`). OpenRouter handles rate limits, fallback, and cost tracking on their end.
   - **LM Studio**: `http://localhost:1234/v1` — local models, same API format. User runs LM Studio separately and loads whatever model they want. Vision support depends on the loaded model.
 - **`anthropic`** — Native Anthropic Messages API. Used when talking directly to Anthropic rather than through OpenRouter (some users prefer direct API access for lower latency or to avoid the OpenRouter markup).
 - **`google`** — Native Gemini API. Same reasoning as Anthropic — direct access option.
@@ -561,7 +561,7 @@ excluded_window_titles = ["Private Browsing", "Incognito"]
 enabled = true
 interval_secs = 600                   # 10 min between extraction runs
 provider = "openrouter"               # "openrouter", "openai", "anthropic", "google", "lmstudio", "ollama"
-model = "google/gemini-2.0-flash"     # fast + cheap vision model (OpenRouter model ID format)
+model = "google/gemini-2.5-flash"     # fast + cheap vision model (OpenRouter model ID format)
 api_key_env = "OPENROUTER_API_KEY"
 base_url = ""                         # auto-set per provider; override for custom endpoints
 max_images_per_batch = 8

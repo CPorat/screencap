@@ -273,7 +273,7 @@ mod tests {
         let _guard = EnvGuard::set(env_var, "token");
         let config = LlmProviderConfig::new(
             AiProvider::Openrouter,
-            "google/gemini-2.0-flash",
+            "google/gemini-2.5-flash",
             env_var,
             "",
         );

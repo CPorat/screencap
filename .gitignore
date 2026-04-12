@@ -8,6 +8,11 @@ web/.svelte-kit/
 # Environment / secrets
 .env
 .env.*
+.envrc
+
+# Editor
+.vscode/
+.cursor/
 
 # Node
 node_modules/

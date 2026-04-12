@@ -554,6 +554,7 @@ async fn run_managed_pipeline_task(
     shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     if kind.is_disabled(&config) {
+        info!(task = kind.task_name(), "pipeline task is disabled in config");
         return wait_for_shutdown(shutdown).await;
     }
 

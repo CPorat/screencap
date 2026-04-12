@@ -7,7 +7,7 @@ use tokio::{
     sync::watch,
     time::{self, MissedTickBehavior},
 };
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{
@@ -101,11 +101,19 @@ impl ExtractionScheduler {
             time::interval(Duration::from_secs(self.config.extraction.interval_secs));
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+        info!(
+            interval_secs = self.config.extraction.interval_secs,
+            model = %self.config.extraction.model,
+            "extraction scheduler started"
+        );
+
         loop {
             tokio::select! {
                 _ = interval.tick() => {
                     let report = self.run_once().await?;
-                    if !report.is_idle() {
+                    if report.is_idle() {
+                        debug!("extraction tick: no pending captures");
+                    } else {
                         info!(
                             processed_batches = report.processed_batches,
                             processed_captures = report.processed_captures,

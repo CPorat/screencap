@@ -311,7 +311,10 @@ function computeRelevance(sortedByRank: SearchResultBase[]): SearchResult[] {
   });
 }
 
-export async function searchCaptures(request: SearchRequest): Promise<SearchResult[]> {
+export async function searchCaptures(
+  request: SearchRequest,
+  signal?: AbortSignal
+): Promise<SearchResult[]> {
   const query = request.query.trim();
   if (!query) {
     return [];
@@ -346,6 +349,7 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
     headers: {
       Accept: 'application/json',
     },
+    signal,
   });
 
   if (!response.ok) {
@@ -373,7 +377,8 @@ export async function searchCaptures(request: SearchRequest): Promise<SearchResu
 }
 
 export async function searchSemanticCaptures(
-  request: SemanticSearchRequest
+  request: SemanticSearchRequest,
+  signal?: AbortSignal
 ): Promise<SemanticSearchResult> {
   const query = request.query.trim();
   if (!query) {
@@ -402,6 +407,7 @@ export async function searchSemanticCaptures(
     headers: {
       Accept: 'application/json',
     },
+    signal,
   });
 
   if (!response.ok) {

@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
+use chrono::{Duration as ChronoDuration, Utc};
 use screencap::{
     config::AppConfig,
     storage::{
@@ -204,49 +204,45 @@ fn wait_for_exit(child: &mut Child) -> Result<()> {
     }
 }
 
-fn seed_hourly_insights(db_path: &Path, date: NaiveDate) -> Result<()> {
+fn seed_hourly_insights(db_path: &Path, now: chrono::DateTime<Utc>) -> Result<()> {
     let mut db = StorageDb::open_at_path(db_path)?;
-    for hour in [9_u32, 10, 14] {
-        let hour_start = date.and_hms_opt(hour, 0, 0).unwrap().and_utc();
-        let hour_end = hour_start + chrono::Duration::hours(1);
-        db.insert_insight(&NewInsight {
-            insight_type: InsightType::Hourly,
-            window_start: hour_start,
-            window_end: hour_end,
-            data: InsightData::Hourly {
-                hour_start,
-                hour_end,
-                dominant_activity: if hour < 12 {
-                    "coding".into()
-                } else {
-                    "communication".into()
+    let date = now.date_naive();
+    let day_start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let hour_end = (now - ChronoDuration::seconds(1)).max(day_start);
+    let hour_start = day_start;
+    db.insert_insight(&NewInsight {
+        insight_type: InsightType::Hourly,
+        window_start: hour_start,
+        window_end: hour_end,
+        data: InsightData::Hourly {
+            hour_start,
+            hour_end,
+            dominant_activity: "coding".into(),
+            projects: vec![
+                HourlyProjectSummary {
+                    name: Some("screencap".into()),
+                    minutes: 42,
+                    activities: vec!["debugging auth".into(), "writing tests".into()],
                 },
-                projects: vec![
-                    HourlyProjectSummary {
-                        name: Some("screencap".into()),
-                        minutes: 42,
-                        activities: vec!["debugging auth".into(), "writing tests".into()],
-                    },
-                    HourlyProjectSummary {
-                        name: None,
-                        minutes: 18,
-                        activities: vec!["Slack conversations".into()],
-                    },
-                ],
-                topics: vec!["JWT".into(), "authentication".into(), "testing".into()],
-                people_interacted: vec!["@alice".into()],
-                key_moments: vec![
-                    "Found the JWT refresh bug and validated the fix".into(),
-                    "Shared the outcome with Alice in Slack".into(),
-                ],
-                focus_score: 0.72,
-                narrative: "Productive coding hour. The user traced the JWT refresh path, checked documentation, ran targeted tests, and shared the result in Slack.".into(),
-            },
-            model_used: Some("mock-synthesis-model".into()),
-            tokens_used: Some(300),
-            cost_cents: Some(0.42),
-        })?;
-    }
+                HourlyProjectSummary {
+                    name: None,
+                    minutes: 18,
+                    activities: vec!["Slack conversations".into()],
+                },
+            ],
+            topics: vec!["JWT".into(), "authentication".into(), "testing".into()],
+            people_interacted: vec!["@alice".into()],
+            key_moments: vec![
+                "Found the JWT refresh bug and validated the fix".into(),
+                "Shared the outcome with Alice in Slack".into(),
+            ],
+            focus_score: 0.72,
+            narrative: "Productive coding hour. The user traced the JWT refresh path, checked documentation, ran targeted tests, and shared the result in Slack.".into(),
+        },
+        model_used: Some("mock-synthesis-model".into()),
+        tokens_used: Some(300),
+        cost_cents: Some(0.42),
+    })?;
 
     Ok(())
 }
@@ -577,6 +573,37 @@ fn status_reports_pipeline_health_and_cost_for_today() -> Result<()> {
     let output = run_cli(home.path(), &["status"])?;
     assert_success(&output, "status pipeline telemetry");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let today = now.date_naive();
+    let expected_extraction_tokens = if batch_end.date_naive() == today {
+        90
+    } else {
+        0
+    };
+    let expected_extraction_cost = if expected_extraction_tokens > 0 {
+        0.30
+    } else {
+        0.0
+    };
+    let expected_synthesis_tokens = if rolling_end.date_naive() == today {
+        210
+    } else {
+        0
+    };
+    let expected_synthesis_cost = if expected_synthesis_tokens > 0 {
+        0.21
+    } else {
+        0.0
+    };
+    let expected_total_tokens = expected_extraction_tokens + expected_synthesis_tokens;
+    let expected_total_cost = expected_extraction_cost + expected_synthesis_cost;
+    let expected_cost_line = |label: &str, cost: f64, tokens: i32| {
+        format!(
+            "{label}: {:.2}¢ (${:.4}) across {} tokens",
+            cost,
+            cost / 100.0,
+            tokens
+        )
+    };
     assert!(
         stdout.contains("state: stopped"),
         "unexpected status output: {stdout}"
@@ -600,15 +627,27 @@ fn status_reports_pipeline_health_and_cost_for_today() -> Result<()> {
         "unexpected status output: {stdout}"
     );
     assert!(
-        stdout.contains("cost_today: 0.51¢ ($0.0051) across 300 tokens"),
+        stdout.contains(&expected_cost_line(
+            "cost_today",
+            expected_total_cost,
+            expected_total_tokens
+        )),
         "unexpected status output: {stdout}"
     );
     assert!(
-        stdout.contains("cost_today_extraction: 0.30¢ ($0.0030) across 90 tokens"),
+        stdout.contains(&expected_cost_line(
+            "cost_today_extraction",
+            expected_extraction_cost,
+            expected_extraction_tokens
+        )),
         "unexpected status output: {stdout}"
     );
     assert!(
-        stdout.contains("cost_today_synthesis: 0.21¢ ($0.0021) across 210 tokens"),
+        stdout.contains(&expected_cost_line(
+            "cost_today_synthesis",
+            expected_synthesis_cost,
+            expected_synthesis_tokens
+        )),
         "unexpected status output: {stdout}"
     );
 
@@ -846,8 +885,9 @@ fn config_reports_launch_failures_helpfully() -> Result<()> {
 fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let home = TestHome::new("today")?;
-    let today = Utc::now().date_naive();
-    seed_hourly_insights(&home.db_path(), today)?;
+    let now = Utc::now();
+    let today = now.date_naive();
+    seed_hourly_insights(&home.db_path(), now)?;
 
     let env_var = "SCREENCAP_TEST_TODAY_API_KEY";
     let server = TestServer::spawn(
@@ -887,7 +927,7 @@ fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> 
     let first = run_cli_with_env(home.path(), &["today"], &[(env_var, "token")])?;
     assert_success(&first, "today first run");
     let first_stdout = String::from_utf8_lossy(&first.stdout);
-    assert!(first_stdout.contains(&format!("Today ({today})")));
+    assert!(first_stdout.contains(&today.to_string()));
     assert!(first_stdout.contains("summary: Productive day focused on screencap."));
     assert!(first_stdout.contains("active time: 7h 30m"));
 
@@ -896,7 +936,7 @@ fn today_generates_summary_once_and_reuses_stored_daily_insight() -> Result<()> 
     let second = run_cli(home.path(), &["today"])?;
     assert_success(&second, "today second run");
     let second_stdout = String::from_utf8_lossy(&second.stdout);
-    assert!(second_stdout.contains(&format!("Today ({today})")));
+    assert!(second_stdout.contains(&today.to_string()));
     assert!(second_stdout.contains("summary: Productive day focused on screencap."));
 
     Ok(())

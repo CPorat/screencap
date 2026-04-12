@@ -300,6 +300,7 @@ async fn wait_for_processed_capture(
 }
 
 #[tokio::test]
+#[ignore = "requires macOS Screen Recording permission; run with cargo test --ignored on a permissioned machine"]
 async fn capture_loop_populates_api_captures() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let temp = TempDir::new().context("failed to allocate temporary home directory")?;
@@ -331,6 +332,7 @@ async fn capture_loop_populates_api_captures() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires macOS Screen Recording permission; run with cargo test --ignored on a permissioned machine"]
 async fn daemon_processes_pending_captures_with_extraction_scheduler() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let temp = TempDir::new().context("failed to allocate temporary home directory")?;

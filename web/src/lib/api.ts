@@ -47,6 +47,8 @@ export interface CaptureListOptions {
   from?: string;
   to?: string;
   app?: string;
+  project?: string;
+  activityType?: string;
 }
 interface SearchHitResponse {
   capture: CaptureRecord;
@@ -432,6 +434,16 @@ export async function listCaptures(
   const app = options.app?.trim();
   if (app) {
     params.set('app', app);
+  }
+
+  const project = options.project?.trim();
+  if (project) {
+    params.set('project', project);
+  }
+
+  const activityType = options.activityType?.trim();
+  if (activityType) {
+    params.set('activity_type', activityType);
   }
 
   const response = await fetch(`/api/captures?${params.toString()}`, {

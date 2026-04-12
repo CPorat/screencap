@@ -275,13 +275,16 @@ fn run_command(mut command: Command, label: &str) -> Result<(), String> {
 }
 
 fn swift_runtime_dirs(swiftc_path: &Path) -> Vec<PathBuf> {
-    let mut runtime_dirs = Vec::new();
-
     if let Some(toolchain_runtime_dir) = swift_runtime_dir_from_toolchain(swiftc_path) {
-        runtime_dirs.push(toolchain_runtime_dir);
+        if toolchain_runtime_dir
+            .join("libswift_Concurrency.dylib")
+            .exists()
+        {
+            return vec![toolchain_runtime_dir];
+        }
     }
 
-    runtime_dirs.extend(command_line_tools_runtime_dirs());
+    let mut runtime_dirs = command_line_tools_runtime_dirs();
     runtime_dirs.retain(|path| path.join("libswift_Concurrency.dylib").exists());
     runtime_dirs.sort();
     runtime_dirs.dedup();

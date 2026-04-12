@@ -50,12 +50,18 @@ npm run build
 ### Rust quality checks
 
 ```bash
-cargo check
-cargo clippy -- -D warnings
-cargo test --features mock-capture
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --features mock-capture
+cd web && npm run check
 ```
 
-Use `--features mock-capture` for tests when Screen Recording or Accessibility permissions are unavailable. The mock path generates synthetic JPEGs and fake window metadata so the integration tests still exercise the real pipeline shape.
+Use `--features mock-capture` as the default CI path when Screen Recording or Accessibility permissions are unavailable. The mock path generates synthetic JPEGs and fake window metadata so the integration tests still exercise the real pipeline shape.
+
+The native-permission capture e2e tests in `tests/e2e_capture_api.rs` are marked ignored by default and can be run on a permissioned machine with:
+
+```bash
+cargo test --ignored
+```
 
 ### Skipping web rebuilds during local Rust iteration
 

@@ -21,6 +21,7 @@ node_modules/
 
 # Swift build artifacts (menubar)
 .build/
+swift/Menubar/.build/
 DerivedData/
 xcuserdata/
 .swiftpm/

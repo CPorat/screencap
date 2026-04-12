@@ -2,9 +2,12 @@
   import { onMount } from 'svelte';
 
   import {
+    getApps,
     getCaptureDetail,
+    getProjectTimeAllocations,
     listCaptures,
     type CaptureRecord,
+    type CaptureListOptions,
     type CaptureListResponse,
     type ExtractionRecord,
   } from '$lib/api';
@@ -26,6 +29,18 @@
     month: 'short',
     day: 'numeric',
   });
+  const activityFilterOptions = [
+    { value: 'coding', label: 'Coding' },
+    { value: 'browsing', label: 'Browsing' },
+    { value: 'communication', label: 'Communication' },
+    { value: 'reading', label: 'Reading' },
+    { value: 'writing', label: 'Writing' },
+    { value: 'design', label: 'Design' },
+    { value: 'terminal', label: 'Terminal' },
+    { value: 'meeting', label: 'Meeting' },
+    { value: 'media', label: 'Media' },
+    { value: 'other', label: 'Other' },
+  ] as const;
 
   const hourClockFormatter = new Intl.DateTimeFormat(undefined, {
     hour: 'numeric',
@@ -38,6 +53,21 @@
   let hasMore = true;
   let loadError: string | null = null;
   let nextOffset = 0;
+  let requestVersion = 0;
+  let mounted = false;
+
+  let selectedDate = '';
+  let selectedApp = '';
+  let selectedProject = '';
+  let selectedActivity = '';
+
+  let appOptions: string[] = [];
+  let projectOptions: string[] = [];
+  let filterFingerprint = '';
+
+  function buildFilterFingerprint(): string {
+    return [selectedDate, selectedApp, selectedProject, selectedActivity].join('::');
+  }
 
   function isSameLocalDay(a: Date, b: Date): boolean {
     return (
@@ -100,7 +130,69 @@
     }));
   }
 
-  async function loadNextPage(): Promise<void> {
+  function parseInputDate(value: string): Date | null {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return null;
+    }
+
+    const [yearRaw, monthRaw, dayRaw] = value.split('-').map((part) => Number(part));
+    const parsed = new Date(yearRaw, monthRaw - 1, dayRaw, 0, 0, 0, 0);
+
+    if (!Number.isFinite(parsed.getTime())) {
+      return null;
+    }
+
+    return parsed;
+  }
+
+  function dayBoundsIso(value: string): { from: string; to: string } | null {
+    const parsed = parseInputDate(value);
+    if (!parsed) {
+      return null;
+    }
+
+    const from = new Date(parsed);
+    from.setHours(0, 0, 0, 0);
+
+    const to = new Date(parsed);
+    to.setHours(23, 59, 59, 999);
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+    };
+  }
+
+  function listCaptureOptions(): CaptureListOptions {
+    const options: CaptureListOptions = {};
+
+    if (selectedDate) {
+      const bounds = dayBoundsIso(selectedDate);
+      if (bounds) {
+        options.from = bounds.from;
+        options.to = bounds.to;
+      }
+    }
+
+    const app = selectedApp.trim();
+    if (app) {
+      options.app = app;
+    }
+
+    const project = selectedProject.trim();
+    if (project) {
+      options.project = project;
+    }
+
+    const activity = selectedActivity.trim();
+    if (activity) {
+      options.activityType = activity;
+    }
+
+    return options;
+  }
+
+  async function loadNextPage(expectedVersion = requestVersion): Promise<void> {
     if (loadingMore || !hasMore) {
       return;
     }
@@ -109,19 +201,40 @@
     loadError = null;
 
     try {
-      const page: CaptureListResponse = await listCaptures(PAGE_SIZE, nextOffset);
+      const page: CaptureListResponse = await listCaptures(PAGE_SIZE, nextOffset, listCaptureOptions());
       const hydrated = await hydrateCaptures(page.captures);
+
+      if (expectedVersion !== requestVersion) {
+        return;
+      }
 
       timeline = [...timeline, ...hydrated];
       nextOffset += page.captures.length;
       hasMore = page.captures.length === PAGE_SIZE;
     } catch (error) {
+      if (expectedVersion !== requestVersion) {
+        return;
+      }
+
       hasMore = false;
       loadError = error instanceof Error ? error.message : 'Failed to load timeline data.';
     } finally {
-      loadingMore = false;
-      loadingInitial = false;
+      if (expectedVersion === requestVersion) {
+        loadingMore = false;
+        loadingInitial = false;
+      }
     }
+  }
+
+  async function reloadTimeline(): Promise<void> {
+    requestVersion += 1;
+    timeline = [];
+    loadingInitial = true;
+    loadingMore = false;
+    hasMore = true;
+    loadError = null;
+    nextOffset = 0;
+    await loadNextPage(requestVersion);
   }
 
   function infiniteSentinel(node: HTMLElement) {
@@ -149,9 +262,31 @@
     };
   }
 
-  onMount(() => {
-    void loadNextPage();
+  onMount(async () => {
+    filterFingerprint = buildFilterFingerprint();
+    mounted = true;
+    try {
+      const [apps, projects] = await Promise.all([getApps(), getProjectTimeAllocations()]);
+      appOptions = apps
+        .map((entry) => entry.app_name.trim())
+        .filter((value) => value.length > 0);
+      projectOptions = projects
+        .map((entry) => entry.project?.trim() ?? '')
+        .filter((value) => value.length > 0);
+    } catch (error) {
+      console.warn('Failed to load timeline filter options', error);
+    }
+
+    await reloadTimeline();
   });
+
+  $: {
+    const nextFingerprint = buildFilterFingerprint();
+    if (mounted && nextFingerprint !== filterFingerprint) {
+      filterFingerprint = nextFingerprint;
+      void reloadTimeline();
+    }
+  }
 
   function groupByHour(items: TimelineCapture[]): TimelineHourBucket[] {
     const grouped = new Map<string, TimelineHourBucket>();
@@ -198,6 +333,39 @@
     <p class="panel__summary">
       Captures are grouped by hour with extraction overlays for activity, projects, and summaries.
     </p>
+    <div class="panel__filters" aria-label="Timeline filters">
+      <label>
+        <span>Date jump</span>
+        <input type="date" bind:value={selectedDate} />
+      </label>
+      <label>
+        <span>App</span>
+        <select bind:value={selectedApp}>
+          <option value="">All apps</option>
+          {#each appOptions as appName}
+            <option value={appName}>{appName}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        <span>Project</span>
+        <select bind:value={selectedProject}>
+          <option value="">All projects</option>
+          {#each projectOptions as projectName}
+            <option value={projectName}>{projectName}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        <span>Activity</span>
+        <select bind:value={selectedActivity}>
+          <option value="">All activity</option>
+          {#each activityFilterOptions as option}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+      </label>
+    </div>
   </header>
 
   {#if loadingInitial}
@@ -253,6 +421,37 @@
   .panel__header {
     display: grid;
     gap: 0.52rem;
+  }
+
+  .panel__filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.45rem;
+  }
+
+  .panel__filters label {
+    display: grid;
+    gap: 0.28rem;
+  }
+
+  .panel__filters span {
+    font-size: 0.67rem;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: rgb(246 241 231 / 72%);
+  }
+
+  .panel__filters input,
+  .panel__filters select {
+    border: 1px solid rgb(246 241 231 / 24%);
+    border-radius: 0.62rem;
+    background: rgb(10 13 20 / 64%);
+    color: var(--paper-100);
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 0.42rem 0.52rem;
+    min-height: 2rem;
   }
 
   .panel__section {

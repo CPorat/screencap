@@ -366,6 +366,8 @@ pub struct CaptureQuery {
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
     pub app_name: Option<String>,
+    pub project: Option<String>,
+    pub activity_type: Option<ActivityType>,
     pub limit: usize,
     pub offset: usize,
 }

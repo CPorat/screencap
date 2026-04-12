@@ -15,6 +15,7 @@ use crate::{
     storage::{
         db::StorageDb,
         models::{Capture, CaptureQuery, DailyProjectSummary, Insight, InsightData},
+        screenshots::{read_screenshot_file, relative_screenshot_path},
     },
 };
 
@@ -229,6 +230,12 @@ fn runtime_home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME environment variable is not set"))
 }
 
+fn runtime_screenshots_root() -> Result<PathBuf> {
+    let home = runtime_home_dir()?;
+    let config = AppConfig::load()?;
+    Ok(config.screenshots_root(&home))
+}
+
 pub fn export_daily_markdown(
     db: &StorageDb,
     date: NaiveDate,
@@ -245,7 +252,8 @@ pub fn export_daily_markdown(
         .with_context(|| format!("failed to create export directory {}", out_dir.display()))?;
 
     let (screenshot_links, screenshots_dir, screenshots_copied) = if include_screenshots {
-        let (links, dir) = copy_screenshots(&captures, out_dir)?;
+        let screenshots_root = runtime_screenshots_root()?;
+        let (links, dir) = copy_screenshots(&captures, out_dir, &screenshots_root)?;
         let copied = links.len();
         (links, Some(dir), copied)
     } else {
@@ -292,7 +300,7 @@ pub fn generate_markdown_with_captures(
 
     let mut markdown = String::with_capacity(4096);
 
-    writeln!(&mut markdown, "# Screencap: {}", date)?;
+    writeln!(&mut markdown, "# {} ({})", date, date.format("%A"))?;
     writeln!(&mut markdown)?;
 
     writeln!(&mut markdown, "## Summary")?;
@@ -442,6 +450,8 @@ fn list_captures_for_day(db: &StorageDb, date: NaiveDate) -> Result<Vec<Capture>
             from: Some(start),
             to: Some(end),
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: CAPTURE_QUERY_PAGE_SIZE,
             offset,
         })?;
@@ -465,6 +475,7 @@ fn list_captures_for_day(db: &StorageDb, date: NaiveDate) -> Result<Vec<Capture>
 fn copy_screenshots(
     captures: &[Capture],
     out_dir: &Path,
+    screenshots_root: &Path,
 ) -> Result<(BTreeMap<i64, String>, PathBuf)> {
     let screenshots_dir = out_dir.join("screenshots");
     fs::create_dir_all(&screenshots_dir).with_context(|| {
@@ -476,22 +487,30 @@ fn copy_screenshots(
 
     let mut links = BTreeMap::new();
     for capture in captures {
-        let source = Path::new(&capture.screenshot_path);
-        if !source.exists() {
-            bail!(
-                "screenshot for capture {} does not exist at {}",
-                capture.id,
-                source.display()
-            );
-        }
+        let relative_path = relative_screenshot_path(screenshots_root, &capture.screenshot_path)
+            .ok_or_else(|| {
+                anyhow!(
+                    "screenshot for capture {} is outside screenshots root: {}",
+                    capture.id,
+                    capture.screenshot_path
+                )
+            })?;
 
         let file_name = format!("capture-{}.jpg", capture.id);
         let destination = screenshots_dir.join(&file_name);
-        fs::copy(source, &destination).with_context(|| {
+        let screenshot_bytes = read_screenshot_file(screenshots_root, &relative_path)
+            .with_context(|| {
+                format!(
+                    "failed to read screenshot for capture {} at {}/{}",
+                    capture.id,
+                    screenshots_root.display(),
+                    relative_path.display()
+                )
+            })?;
+        fs::write(&destination, screenshot_bytes).with_context(|| {
             format!(
-                "failed to copy screenshot for capture {} from {} to {}",
+                "failed to write copied screenshot for capture {} to {}",
                 capture.id,
-                source.display(),
                 destination.display()
             )
         })?;
@@ -612,7 +631,7 @@ mod tests {
         let insight = sample_daily_insight();
         let markdown = generate_markdown(&insight).expect("generate markdown");
 
-        assert!(markdown.contains("# Screencap: 2026-04-10"));
+        assert!(markdown.contains("# 2026-04-10 (Friday)"));
         assert!(markdown.contains("## Summary"));
         assert!(markdown.contains("## Time: 7h 30m active"));
         assert!(markdown.contains("### By Project"));

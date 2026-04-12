@@ -413,6 +413,30 @@ impl StorageDb {
             params.push(Value::Text(app_name.clone()));
         }
 
+        if let Some(project) = query.project.as_ref() {
+            filters.push(
+                "EXISTS (
+                    SELECT 1
+                    FROM extractions
+                    WHERE extractions.capture_id = captures.id
+                      AND extractions.project = ?
+                )",
+            );
+            params.push(Value::Text(project.clone()));
+        }
+
+        if let Some(activity_type) = query.activity_type {
+            filters.push(
+                "EXISTS (
+                    SELECT 1
+                    FROM extractions
+                    WHERE extractions.capture_id = captures.id
+                      AND extractions.activity_type = ?
+                )",
+            );
+            params.push(Value::Text(activity_type.as_str().to_owned()));
+        }
+
         if !filters.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&filters.join(" AND "));
@@ -2995,6 +3019,8 @@ mod tests {
                 from: Some(first_time),
                 to: Some(third_time),
                 app_name: Some("Safari".into()),
+                project: None,
+                activity_type: None,
                 limit: 1,
                 offset: 1,
             })
@@ -3069,6 +3095,34 @@ mod tests {
                 .and_then(|value| value.project.as_deref()),
             Some("screencap")
         );
+
+        let captures_for_project = db
+            .list_captures(&CaptureQuery {
+                from: Some(first_time),
+                to: Some(third_time),
+                app_name: None,
+                project: Some("screencap".into()),
+                activity_type: None,
+                limit: 10,
+                offset: 0,
+            })
+            .expect("project-filtered captures should query");
+        assert_eq!(captures_for_project.len(), 1);
+        assert_eq!(captures_for_project[0].id, second.id);
+
+        let captures_for_activity = db
+            .list_captures(&CaptureQuery {
+                from: Some(first_time),
+                to: Some(third_time),
+                app_name: None,
+                project: None,
+                activity_type: Some(ActivityType::Browsing),
+                limit: 10,
+                offset: 0,
+            })
+            .expect("activity-filtered captures should query");
+        assert_eq!(captures_for_activity.len(), 1);
+        assert_eq!(captures_for_activity[0].id, second.id);
 
         let apps = db
             .list_app_capture_counts()

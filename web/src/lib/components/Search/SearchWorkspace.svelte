@@ -77,6 +77,7 @@
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
   let currentFingerprint = '';
   let requestCounter = 0;
+  let activeSearchController: AbortController | null = null;
   let mounted = false;
 
   let visibleLimit = RESULTS_STEP;
@@ -152,7 +153,17 @@
     if (debounceHandle) {
       clearTimeout(debounceHandle);
     }
+    activeSearchController?.abort();
+    activeSearchController = null;
   });
+
+  function isAbortError(error: unknown): boolean {
+    if (error instanceof DOMException) {
+      return error.name === 'AbortError';
+    }
+
+    return error instanceof Error && error.name === 'AbortError';
+  }
 
   function mergeFacetSuggestions(primary: string[], secondary: string[], selected: string | null): string[] {
     const merged = new Set<string>();
@@ -292,6 +303,8 @@
     }
 
     if (!queryPreview) {
+      activeSearchController?.abort();
+      activeSearchController = null;
       loading = false;
       hasSearched = false;
       errorMessage = '';
@@ -330,6 +343,9 @@
     hasSearched = true;
 
     const requestId = ++requestCounter;
+    activeSearchController?.abort();
+    const controller = new AbortController();
+    activeSearchController = controller;
 
     try {
       if (searchMode === 'semantic') {
@@ -338,7 +354,7 @@
           from: dateRange.from,
           to: dateRange.to,
           limit: 120,
-        });
+        }, controller.signal);
 
         if (requestId !== requestCounter) {
           return;
@@ -360,7 +376,7 @@
         from: dateRange.from,
         to: dateRange.to,
         limit: 120,
-      });
+      }, controller.signal);
 
       if (requestId !== requestCounter) {
         return;
@@ -371,6 +387,10 @@
       semanticTokensUsed = null;
       semanticCostCents = null;
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
+
       if (requestId !== requestCounter) {
         return;
       }
@@ -382,6 +402,9 @@
       semanticCostCents = null;
       errorMessage = 'Could not load search results. Please try again.';
     } finally {
+      if (activeSearchController === controller) {
+        activeSearchController = null;
+      }
       if (requestId === requestCounter) {
         loading = false;
       }

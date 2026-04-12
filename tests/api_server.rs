@@ -761,12 +761,22 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
                 .and_utc()
         )
     );
-    assert_eq!(stats.cost_today.total.tokens_used, 410);
+    let expected_cost_tokens = if insight_date == Utc::now().date_naive() {
+        410
+    } else {
+        0
+    };
+    let expected_cost_cents = if expected_cost_tokens > 0 { 0.58 } else { 0.0 };
+    assert_eq!(stats.cost_today.total.tokens_used, expected_cost_tokens);
     assert_eq!(stats.cost_today.extraction.tokens_used, 0);
-    assert_eq!(stats.cost_today.synthesis.tokens_used, 410);
-    assert!((stats.cost_today.total.reported_cost_cents - 0.58).abs() < f64::EPSILON);
+    assert_eq!(stats.cost_today.synthesis.tokens_used, expected_cost_tokens);
+    assert!(
+        (stats.cost_today.total.reported_cost_cents - expected_cost_cents).abs() < f64::EPSILON
+    );
     assert!((stats.cost_today.extraction.reported_cost_cents - 0.0).abs() < f64::EPSILON);
-    assert!((stats.cost_today.synthesis.reported_cost_cents - 0.58).abs() < f64::EPSILON);
+    assert!(
+        (stats.cost_today.synthesis.reported_cost_cents - expected_cost_cents).abs() < f64::EPSILON
+    );
 
     let from = (timestamp - ChronoDuration::minutes(1)).to_rfc3339();
     let to = (timestamp + ChronoDuration::minutes(1)).to_rfc3339();
@@ -832,6 +842,14 @@ async fn api_server_serves_rest_endpoints() -> Result<()> {
         .error_for_status()?
         .json()
         .await?;
+    let rolling_alias: Insight = client
+        .get(format!("{base_url}/api/insights/rolling"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(rolling_alias.id, current.id);
     match current.data {
         InsightData::Rolling {
             current_focus,

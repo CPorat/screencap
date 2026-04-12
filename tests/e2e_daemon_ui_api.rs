@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, Timelike, Utc};
 use reqwest::{header::CONTENT_TYPE, Client};
 use screencap::storage::{
     db::StorageDb,
@@ -375,12 +375,10 @@ fn seed_recent_extractions(db_path: &Path, window_end: DateTime<Utc>) -> Result<
     Ok(())
 }
 
-fn sample_hourly_new_insight(date: NaiveDate, start_hour: u32) -> NewInsight {
-    let hour_start = date
-        .and_hms_opt(start_hour, 0, 0)
-        .expect("valid hourly insight start")
-        .and_utc();
-    let hour_end = hour_start + ChronoDuration::hours(1);
+fn sample_hourly_new_insight(
+    hour_start: chrono::DateTime<Utc>,
+    hour_end: chrono::DateTime<Utc>,
+) -> NewInsight {
     NewInsight {
         insight_type: InsightType::Hourly,
         window_start: hour_start,
@@ -406,11 +404,20 @@ fn sample_hourly_new_insight(date: NaiveDate, start_hour: u32) -> NewInsight {
     }
 }
 
-fn seed_hourly_insights(db_path: &Path, date: NaiveDate) -> Result<()> {
+fn seed_hourly_insights(db_path: &Path, now: chrono::DateTime<Utc>) -> Result<()> {
     let mut db = StorageDb::open_at_path(db_path)?;
-    db.insert_insight(&sample_hourly_new_insight(date, 9))?;
-    db.insert_insight(&sample_hourly_new_insight(date, 10))?;
-    db.insert_insight(&sample_hourly_new_insight(date, 14))?;
+    let day_start = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .expect("valid start of day")
+        .and_utc();
+    let minute_boundary = now
+        .with_second(0)
+        .expect("valid second")
+        .with_nanosecond(0)
+        .expect("valid nanosecond");
+    let hour_end = (minute_boundary - ChronoDuration::seconds(1)).max(day_start);
+    db.insert_insight(&sample_hourly_new_insight(day_start, hour_end))?;
     Ok(())
 }
 
@@ -619,7 +626,7 @@ async fn daemon_runs_rolling_and_daily_synthesis_schedulers() -> Result<()> {
     );
 
     seed_recent_extractions(&db_path, window_end)?;
-    seed_hourly_insights(&db_path, today)?;
+    seed_hourly_insights(&db_path, window_end)?;
 
     let _daemon = ForegroundDaemon::spawn(home)?;
     let base_url = format!("http://127.0.0.1:{port}");

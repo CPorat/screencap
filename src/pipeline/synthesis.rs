@@ -1947,7 +1947,7 @@ mod tests {
         let exported_markdown_path = home.join(".screencap/daily/2026-04-10.md");
         assert!(exported_markdown_path.exists());
         let exported_markdown = fs::read_to_string(&exported_markdown_path)?;
-        assert!(exported_markdown.contains("# Screencap: 2026-04-10"));
+        assert!(exported_markdown.contains("# 2026-04-10 (Friday)"));
         assert!(exported_markdown.contains("## Open Threads"));
 
         fs::remove_dir_all(&home)?;

@@ -112,7 +112,7 @@ fn export_command_writes_markdown_to_output_file() -> Result<()> {
 
     let markdown = fs::read_to_string(&output_path)
         .with_context(|| format!("failed to read markdown at {}", output_path.display()))?;
-    assert!(markdown.contains("# Screencap: 2026-04-10"));
+    assert!(markdown.contains("# 2026-04-10 (Friday)"));
     assert!(markdown.contains("## Summary"));
     assert!(markdown.contains("### By Project"));
     assert!(markdown.contains("### By Activity"));
@@ -146,6 +146,34 @@ fn export_last_range_writes_one_file_per_day_when_output_is_directory() -> Resul
     let today_file = output_dir.join(format!("{today}.md"));
     assert!(yesterday_file.exists());
     assert!(today_file.exists());
+
+    fs::remove_dir_all(&home)?;
+    Ok(())
+}
+
+#[test]
+fn export_command_rejects_unknown_format() -> Result<()> {
+    let _lock = IntegrationTestLock::acquire()?;
+    let home = temp_home("format");
+    let date = NaiveDate::from_ymd_opt(2026, 4, 10).unwrap();
+    let db_path = home.join(".screencap/screencap.db");
+    seed_daily_insight(&db_path, date)?;
+
+    let cli_output = run_cli(
+        &home,
+        &["export", "--date", "2026-04-10", "--format", "json"],
+    )?;
+    assert!(
+        !cli_output.status.success(),
+        "expected export with unsupported format to fail, stdout={}, stderr={}",
+        String::from_utf8_lossy(&cli_output.stdout),
+        String::from_utf8_lossy(&cli_output.stderr),
+    );
+    assert!(
+        String::from_utf8_lossy(&cli_output.stderr).contains("unsupported export format"),
+        "stderr did not contain unsupported format message: {}",
+        String::from_utf8_lossy(&cli_output.stderr),
+    );
 
     fs::remove_dir_all(&home)?;
     Ok(())

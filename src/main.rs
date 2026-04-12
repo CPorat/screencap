@@ -106,6 +106,8 @@ struct ExportArgs {
     last: Option<String>,
     #[arg(long)]
     output: Option<String>,
+    #[arg(long, default_value = "md")]
+    format: String,
 }
 #[derive(Debug, Deserialize)]
 struct CapturePausedResponse {
@@ -139,6 +141,12 @@ async fn main() -> Result<()> {
         Some(Command::Projects(args)) => handle_projects(args)?,
         Some(Command::Ask(args)) => handle_ask(args).await?,
         Some(Command::Export(args)) => {
+            if !args.format.eq_ignore_ascii_case("md") {
+                bail!(
+                    "unsupported export format `{}`; only `md` is currently supported",
+                    args.format
+                );
+            }
             markdown::run_export(args.date, args.last, args.output).await?
         }
         Some(Command::Costs) => handle_costs()?,

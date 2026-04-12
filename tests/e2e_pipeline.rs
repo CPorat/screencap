@@ -126,6 +126,7 @@ async fn wait_for_server(client: &Client, base_url: &str) -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires macOS Screen Recording permission; run with cargo test --ignored on a permissioned machine"]
 async fn full_pipeline_persists_and_serves_processed_results() -> Result<()> {
     let _lock = support::IntegrationTestLock::acquire()?;
     let temp = TempDir::new().context("failed to allocate temporary home directory")?;

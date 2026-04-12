@@ -449,6 +449,8 @@ mod tests {
             from: None,
             to: None,
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: 10,
             offset: 0,
         })?;
@@ -539,6 +541,8 @@ mod tests {
             from: None,
             to: None,
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: 10,
             offset: 0,
         })?;
@@ -611,6 +615,8 @@ mod tests {
             from: None,
             to: None,
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: 10,
             offset: 0,
         })?;
@@ -719,6 +725,8 @@ mod tests {
             from: None,
             to: None,
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: 10,
             offset: 0,
         })?;
@@ -769,6 +777,8 @@ mod tests {
             from: None,
             to: None,
             app_name: None,
+            project: None,
+            activity_type: None,
             limit: 10,
             offset: 0,
         })?;

@@ -231,6 +231,8 @@ struct CaptureListParams {
     from: Option<String>,
     to: Option<String>,
     app: Option<String>,
+    project: Option<String>,
+    activity_type: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -333,6 +335,7 @@ pub fn router(config: &AppConfig, home: &Path) -> Router {
         .route("/api/captures/{id}", get(get_capture))
         .route("/api/screenshots/{*path}", get(get_screenshot))
         .route("/api/apps", get(list_apps))
+        .route("/api/insights/rolling", get(get_current_insight))
         .route("/api/insights/current", get(get_current_insight))
         .route("/api/insights/hourly", get(list_hourly_insights))
         .route("/api/insights/daily", get(get_daily_insights))
@@ -400,6 +403,10 @@ async fn list_captures(
     let params = parse_capture_list_params(raw_query.0.as_deref())?;
     let from = parse_optional_timestamp("from", params.from.as_deref())?;
     let to = parse_optional_timestamp("to", params.to.as_deref())?;
+    let activity_type = parse_optional_activity_type(
+        "activity_type",
+        trim_to_option(params.activity_type).as_deref(),
+    )?;
     if let (Some(from), Some(to)) = (from, to) {
         if from > to {
             return Err(ApiError::bad_request(
@@ -418,6 +425,11 @@ async fn list_captures(
             .app
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+        project: params
+            .project
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        activity_type,
         limit: params
             .limit
             .unwrap_or(DEFAULT_CAPTURE_LIMIT)

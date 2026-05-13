@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.chrisporat.screencap-capture</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/chrisporat/.local/bin/uv</string>
+    <string>run</string>
+    <string>/Users/chrisporat/Development/personal/screencap/capture.py</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/chrisporat/Development/personal/screencap</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/chrisporat/Library/Logs/screencap-lite/capture.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/chrisporat/Library/Logs/screencap-lite/capture.stderr.log</string>
+</dict>
+</plist>

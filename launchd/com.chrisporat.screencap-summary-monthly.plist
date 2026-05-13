@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.chrisporat.screencap-summary-monthly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/chrisporat/.local/bin/uv</string>
+    <string>run</string>
+    <string>/Users/chrisporat/Development/personal/screencap/summarize.py</string>
+    <string>--period</string>
+    <string>month</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Day</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>0</integer>
+    <key>Minute</key>
+    <integer>35</integer>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/chrisporat/Development/personal/screencap</string>
+  <key>StandardOutPath</key>
+  <string>/Users/chrisporat/Library/Logs/screencap-lite/summary-monthly.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/chrisporat/Library/Logs/screencap-lite/summary-monthly.stderr.log</string>
+</dict>
+</plist>

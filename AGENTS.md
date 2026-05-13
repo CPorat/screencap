@@ -1,58 +1,66 @@
-# Screencap — Agent Guidelines
+# Screencap Lite - Agent Guidelines
 
-## Project Overview
+This branch is a radical simplicity prototype.
 
-Screencap is a lightweight, macOS-only screen memory tool written in Rust with Swift bridges for native macOS APIs. It captures screenshots, extracts structured context via vision LLMs, and synthesizes rolling/hourly/daily insights. See `SPEC.md` for the full architecture.
+## Project Shape
 
-## Architecture
+- macOS-only.
+- Four uv single-file Python scripts:
+  - `capture.py` captures screenshots.
+  - `process.py` optionally processes screenshots with OpenRouter.
+  - `summarize.py` rolls processed moments into daily, weekly, and monthly summaries.
+  - `check.py` sends lightweight health notifications.
+- Images are normal files on disk.
+- SQLite stores metadata and extraction text only.
+- launchd plists live in `launchd/` and are templates for this checkout path.
 
-Three-layer pipeline:
+## Hard Boundaries
 
-1. **Capture** (Rust + Swift bridge) — continuous, offline, no network. ScreenCaptureKit for screenshots, NSWorkspace for window metadata. No OCR.
-2. **Extraction** (vision LLM) — batches unprocessed screenshots every 10 min, sends to a vision model, returns structured JSON (activity type, project, topics, people, key content).
-3. **Synthesis** (text LLM) — reads extractions and produces rolling context (30 min), hourly digests, and daily summaries.
+- Do not add Rust.
+- Do not add Swift.
+- Do not add a menu bar app.
+- Do not add a web server, REST API, MCP server, plugin system, daemon framework, or agent framework.
+- Do not store screenshot images as SQLite blobs.
+- Do not add OCR at capture time.
+- Do not hardcode API keys.
+- Do not commit `.env` or any local runtime database/screenshots.
 
-## Tech Stack
+## Implementation Style
 
-- **Language**: Rust (daemon, API, CLI, MCP server)
-- **Swift**: thin C-callable bridge for ScreenCaptureKit, NSWorkspace, and any other macOS-only APIs
-- **Database**: SQLite with FTS5 full-text search
-- **HTTP**: axum for the REST API on localhost:7878
-- **CLI**: clap
-- **Web UI**: Svelte or Preact, compiled to static files embedded in the Rust binary
-- **Menu bar**: standalone Swift app (~200 lines)
-- **AI providers**: OpenRouter (default), OpenAI, Anthropic, Google, LM Studio, Ollama — all behind a unified `LlmProvider` trait
+- Keep scripts readable and boring.
+- Prefer Python standard library unless a dependency removes real complexity.
+- `capture.py` must remain independent from AI processing.
+- `process.py` and `summarize.py` may depend on the `openai` package through uv inline script metadata.
+- All timestamps are UTC ISO 8601.
+- The capture engine is macOS `/usr/sbin/screencapture`.
+- Keep capture and network processing separate; capture must work without OpenRouter credentials.
+- Missing OpenRouter credentials should be a logged no-op, not a capture blocker.
 
-## Key Conventions
+## Storage
 
-- macOS only. Lean into Apple APIs aggressively. No cross-platform abstractions.
-- The capture layer must never touch the network. All network calls happen in the extraction and synthesis pipelines.
-- AI provider code uses a trait (`LlmProvider`) with `complete(prompt, images?)` and `complete_text(prompt)`. The `openai_compat` module handles OpenAI, OpenRouter, and LM Studio since they share the same API format.
-- Config lives in `~/.screencap/config.toml`. Use TOML, not YAML or JSON.
-- Screenshots stored as JPEGs in `~/.screencap/screenshots/YYYY/MM/DD/`.
-- All timestamps are ISO 8601 in UTC.
-- Structured data from LLMs is parsed into typed Rust structs, never stored as untyped blobs (except `raw_response` for debugging).
+Default root:
 
-## Code Style
+```text
+~/Pictures/Screencap/
+```
 
-- Rust: follow standard `rustfmt` and `clippy` conventions. Prefer `anyhow` for error handling in the binary, `thiserror` for library-style error types.
-- Swift bridge code should be minimal — just the native API calls exposed as C-callable functions. Keep logic in Rust.
-- No comments that merely narrate what code does. Comments explain *why*, not *what*.
-- Prefer small, focused modules. The project structure in `SPEC.md` reflects the intended module boundaries.
+Screenshots:
 
-## Testing
+```text
+~/Pictures/Screencap/YYYY/MM/DD/YYYYMMDD-HHMMSSZ/display-N.jpg
+```
 
-- Unit tests for storage layer (SQLite operations, FTS queries).
-- Unit tests for extraction/synthesis prompt construction and response parsing.
-- Integration tests for the API endpoints.
-- The capture layer is hard to unit test (requires screen recording permission); test it manually or with integration tests that mock the Swift bridge.
+Database:
 
-## What NOT to Do
+```text
+~/Pictures/Screencap/screencap.db
+```
 
-- Do not add audio capture, keylogging, or continuous video recording.
-- Do not add a plugin/pipe system or agent framework.
-- Do not use Electron, Tauri, or any bundled browser runtime.
-- Do not add cross-platform support. This is macOS only.
-- Do not run OCR at capture time — the vision LLM in Layer 2 replaces OCR entirely.
-- Do not send data to the network in the capture layer, ever.
-- Do not hardcode API keys. Always read from environment variables referenced in config.
+## Runtime Cadence
+
+- Capture: every 5 minutes.
+- Processing: every 10 minutes, up to 10 pending moments.
+- Health check: every 5 minutes, alerts if latest capture is older than 15 minutes.
+- Daily summary: 00:15 local time.
+- Weekly summary: Monday 00:25 local time.
+- Monthly summary: day 1 at 00:35 local time.
